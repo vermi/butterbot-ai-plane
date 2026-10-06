@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ButterBot Live</title>
+<style>
+:root {
+  --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a66; --line: #e3e1dc;
+  --accent: #d9a400; --accent-ink: #1d1d1b; --ok: #2f8f4e; --bad: #c0392b; --pad: #efede8;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #151514; --panel: #1f1f1d; --ink: #ecebe7; --muted: #9b9a95; --line: #33322f;
+          --accent: #f0c419; --accent-ink: #151514; --pad: #2a2927; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, -apple-system, Segoe UI, sans-serif; }
+header { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+header h1 { font-size: 16px; margin: 0; font-weight: 650; }
+.pill { padding: 2px 10px; border-radius: 99px; font-size: 12px; border: 1px solid var(--line); color: var(--muted); }
+.pill.on { color: var(--ok); border-color: var(--ok); }
+.pill.off { color: var(--bad); border-color: var(--bad); }
+main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; padding: 16px; max-width: 1280px; margin: 0 auto; }
+@media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+.card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+.video { aspect-ratio: 4 / 3; background: #000; border-radius: 8px; overflow: hidden; display: grid; place-items: center; }
+.video img { width: 100%; height: 100%; object-fit: contain; }
+.video .none { color: #888; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.stack { display: grid; gap: 12px; align-content: start; }
+button, select, input[type=text] { font: inherit; color: var(--ink); background: var(--pad); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
+button { cursor: pointer; user-select: none; -webkit-user-select: none; touch-action: none; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
+button.active { outline: 2px solid var(--accent); }
+input[type=text] { flex: 1; min-width: 0; }
+.pad { display: grid; grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(3, 52px); gap: 6px; justify-content: center; }
+.pad button { font-size: 18px; }
+.pad .stop { color: var(--bad); font-size: 13px; font-weight: 600; }
+.muted { color: var(--muted); font-size: 12px; }
+#log { font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+#meter { height: 6px; background: var(--pad); border-radius: 3px; overflow: hidden; flex: 1; min-width: 80px; }
+#meter div { height: 100%; width: 0; background: var(--ok); transition: width 80ms linear; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ButterBot Live</h1>
+  <span id="link" class="pill off">offline</span>
+  <span id="mode" class="pill">mode: ?</span>
+  <span id="batt" class="pill">battery: ?</span>
+</header>
+<main>
+  <section class="stack">
+    <div class="card">
+      <div class="video"><img id="video" alt="Robot camera"><span class="none" id="novideo">No video yet</span></div>
+      <div class="row" style="margin-top:10px">
+        <select id="res" aria-label="Resolution">
+          <option value="r128">128×128</option><option value="qvga" selected>320×240</option>
+          <option value="vga">640×480</option><option value="svga">800×600</option>
+        </select>
+        <select id="fps" aria-label="Frame rate"><option>5</option><option selected>10</option><option>15</option><option>20</option></select>
+        <button id="camOn">Apply</button>
+        <button id="camOff">Camera off</button>
+        <span class="muted" id="fpsinfo"></span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Events</h2>
+      <div id="log"></div>
+    </div>
+  </section>
+  <aside class="stack">
+    <div class="card">
+      <h2>Mode</h2>
+      <div class="row">
+        <button class="primary" id="enter">Enter AI mode</button>
+        <button id="exit">Exit</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Drive <span class="muted">(hold, or W A S D)</span></h2>
+      <div class="pad">
+        <span></span><button data-d="f" aria-label="Forward">▲</button><span></span>
+        <button data-d="l" aria-label="Left">◀</button><button class="stop" id="stop">STOP</button><button data-d="r" aria-label="Right">▶</button>
+        <span></span><button data-d="b" aria-label="Backward">▼</button><span></span>
+      </div>
+      <div class="row" style="margin-top:10px"><label class="muted" for="speed">Speed</label><input id="speed" type="range" min="20" max="100" value="60" style="flex:1"></div>
+    </div>
+    <div class="card">
+      <h2>Speak</h2>
+      <form class="row" id="sayform">
+        <input type="text" id="saytext" placeholder="Make the robot say…" autocomplete="off">
+        <select id="engine" aria-label="Voice"><option value="robot">robot</option><option value="command">laptop</option></select>
+        <button class="primary">Say</button>
+      </form>
+      <div class="row" style="margin-top:10px">
+        <button id="listen">Listen live</button>
+        <button id="ptt">Hold to talk</button>
+        <div id="meter"><div></div></div>
+      </div>
+      <p class="muted" style="margin:8px 0 0">Mic is muted on the robot while it speaks (no echo cancellation).</p>
+    </div>
+  </aside>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const log = (s) => { const l = $('log'); l.textContent += s + '\n'; if (l.textContent.length > 20000) l.textContent = l.textContent.slice(-15000); l.scrollTop = l.scrollHeight; };
+const api = async (path, body) => {
+  const r = await fetch(path, body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) log('! ' + (j.error || r.status));
+  return j;
+};
+
+// ---- status + events ----
+let since = 0, frames = 0, lastFrames = 0;
+async function refresh() {
+  const s = await api('/api/status');
+  const rb = s.robot || {};
+  $('link').textContent = rb.connected ? 'connected' : 'offline';
+  $('link').className = 'pill ' + (rb.connected ? 'on' : 'off');
+  $('mode').textContent = 'mode: ' + (rb.mode || '?');
+  $('batt').textContent = 'battery: ' + (rb.battery ? Math.round(rb.battery.pct) + '%' + (rb.battery.charging !== 'unplugged' ? ' ⚡' : '') : '?');
+  frames = rb.video_frames || 0;
+  $('fpsinfo').textContent = rb.camera_streaming ? `${Math.max(0, frames - lastFrames) / 2} fps` : '';
+  lastFrames = frames;
+}
+setInterval(refresh, 2000); refresh();
+(async function poll() {
+  for (;;) {
+    try {
+      const j = await api(`/api/events?since=${since}&wait_ms=20000`);
+      for (const e of j.events || []) {
+        since = e.seq;
+        const t = new Date(e.ts).toLocaleTimeString();
+        log(`${t} ${e.kind} ${JSON.stringify(e.data)}`);
+        if (e.kind === 'mode' || e.kind === 'link' || e.kind === 'battery') refresh();
+      }
+    } catch { await new Promise(r => setTimeout(r, 2000)); }
+  }
+})();
+
+// ---- video ----
+const img = $('video');
+img.onload = () => { $('novideo').style.display = 'none'; };
+img.onerror = () => setTimeout(() => { img.src = '/video.mjpeg?' + Date.now(); }, 2000);
+img.src = '/video.mjpeg';
+$('camOn').onclick = () => api('/api/camera', { on: true, res: $('res').value, fps: +$('fps').value });
+$('camOff').onclick = () => api('/api/camera', { on: false });
+
+// ---- mode ----
+$('enter').onclick = () => api('/api/mode', { remote: true }).then(refresh);
+$('exit').onclick = () => api('/api/mode', { remote: false }).then(refresh);
+
+// ---- drive: resend while held so the robot watchdog keeps it moving ----
+const held = new Set();
+let driveTimer = null;
+function vector() {
+  const s = +$('speed').value;
+  let l = 0, r = 0;
+  if (held.has('f')) { l += s; r += s; }
+  if (held.has('b')) { l -= s; r -= s; }
+  if (held.has('l')) { l -= s * 0.7; r += s * 0.7; }
+  if (held.has('r')) { l += s * 0.7; r -= s * 0.7; }
+  const c = (v) => Math.max(-100, Math.min(100, Math.round(v)));
+  return { l: c(l), r: c(r) };
+}
+function updateDrive() {
+  if (held.size === 0) { clearInterval(driveTimer); driveTimer = null; api('/api/stop', {}); return; }
+  const send = () => api('/api/drive', { ...vector(), ms: 1000 });
+  send();
+  if (!driveTimer) driveTimer = setInterval(send, 200);
+}
+document.querySelectorAll('.pad [data-d]').forEach(b => {
+  const d = b.dataset.d;
+  b.addEventListener('pointerdown', (e) => { b.setPointerCapture(e.pointerId); held.add(d); b.classList.add('active'); updateDrive(); });
+  const up = () => { if (held.delete(d)) { b.classList.remove('active'); updateDrive(); } };
+  b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up);
+});
+$('stop').onclick = () => { held.clear(); updateDrive(); };
+const keys = { w: 'f', s: 'b', a: 'l', d: 'r', ArrowUp: 'f', ArrowDown: 'b', ArrowLeft: 'l', ArrowRight: 'r' };
+addEventListener('keydown', (e) => { if (e.target.tagName === 'INPUT' || e.repeat) return; const d = keys[e.key]; if (d) { held.add(d); updateDrive(); e.preventDefault(); } if (e.key === ' ') { held.clear(); updateDrive(); } });
+addEventListener('keyup', (e) => { const d = keys[e.key]; if (d && held.delete(d)) updateDrive(); });
+addEventListener('blur', () => { if (held.size) { held.clear(); updateDrive(); } });
+
+// ---- speak ----
+$('sayform').onsubmit = (e) => { e.preventDefault(); const t = $('saytext').value.trim(); if (t) api('/api/say', { text: t, engine: $('engine').value }); $('saytext').value = ''; };
+
+// ---- audio: live mic playback and push-to-talk over one websocket ----
+let ctx = null, ws = null, playHead = 0, listening = false;
+function ensureAudio() {
+  if (!ctx) ctx = new AudioContext({ sampleRate: 16000 });
+  if (ctx.state === 'suspended') ctx.resume();
+  if (!ws || ws.readyState > 1) {
+    ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/audio`);
+    ws.binaryType = 'arraybuffer';
+    ws.onmessage = (m) => {
+      if (!(m.data instanceof ArrayBuffer)) return;
+      const pcm = new Int16Array(m.data);
+      let peak = 0; for (const v of pcm) peak = Math.max(peak, Math.abs(v));
+      $('meter').firstElementChild.style.width = Math.min(100, peak / 327.67) + '%';
+      if (!listening) return;
+      const buf = ctx.createBuffer(1, pcm.length, 16000);
+      const ch = buf.getChannelData(0);
+      for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
+      const src = ctx.createBufferSource(); src.buffer = buf; src.connect(ctx.destination);
+      const now = ctx.currentTime;
+      if (playHead < now || playHead > now + 0.5) playHead = now + 0.08;
+      src.start(playHead); playHead += buf.duration;
+    };
+  }
+}
+$('listen').onclick = () => { ensureAudio(); listening = !listening; $('listen').classList.toggle('active', listening); $('listen').textContent = listening ? 'Stop listening' : 'Listen live'; };
+
+let micStream = null, micNode = null;
+async function pttStart() {
+  ensureAudio();
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+  } catch (e) { log('! microphone: ' + e.message); return; }
+  const src = ctx.createMediaStreamSource(micStream);
+  micNode = ctx.createScriptProcessor(1024, 1, 1);
+  micNode.onaudioprocess = (ev) => {
+    const f = ev.inputBuffer.getChannelData(0);
+    const out = new Int16Array(f.length);
+    for (let i = 0; i < f.length; i++) out[i] = Math.max(-1, Math.min(1, f[i])) * 32767;
+    if (ws.readyState === 1) ws.send(out.buffer);
+  };
+  src.connect(micNode); micNode.connect(ctx.destination);
+  const send = () => ws.send(JSON.stringify({ ptt: true }));
+  ws.readyState === 1 ? send() : ws.addEventListener('open', send, { once: true });
+  $('ptt').classList.add('active');
+}
+function pttStop() {
+  if (!micStream) return;
+  micNode.disconnect(); micStream.getTracks().forEach(t => t.stop()); micStream = null;
+  ws.send(JSON.stringify({ ptt: false }));
+  $('ptt').classList.remove('active');
+}
+$('ptt').addEventListener('pointerdown', (e) => { $('ptt').setPointerCapture(e.pointerId); pttStart(); });
+$('ptt').addEventListener('pointerup', pttStop);
+$('ptt').addEventListener('pointercancel', pttStop);
+</script>
+</body>
+</html>
