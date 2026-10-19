@@ -52,7 +52,7 @@ like stock.
 
 | Path | What |
 |---|---|
-| [`firmware/`](firmware) | ESP-IDF 5.5.3 firmware for the robot (ESP32-S3). It starts from CircuitMess's [open-source firmware](https://github.com/CircuitMess/ButterBot-Firmware-Public) v1.0.1; the history shows every change on top of it. |
+| [`firmware/`](firmware) | ESP-IDF 5.5.3 firmware for the robot (ESP32-S3). It starts from CircuitMess's [open-source firmware](https://github.com/CircuitMess/ButterBot-Firmware-Public) v1.0.5. The [`stock-firmware`](../../tree/stock-firmware) branch holds that release unmodified, so `git diff stock-firmware HEAD -- firmware` shows every change. |
 | [`plane/`](plane) | `bbplane`: robot link, MCP server, live view, BLE provisioning and a simulated robot (Rust workspace). See [`plane/README.md`](plane/README.md) for all options. |
 
 ## Quick start
@@ -61,7 +61,7 @@ You need:
 
 - a ButterBot;
 - a computer on the same network, with **2.4 GHz** Wi-Fi reachable by the robot;
-- [Rust](https://rustup.rs);
+- [Rust](https://rustup.rs) 1.89 or newer;
 - [ESP-IDF 5.5.3](https://docs.espressif.com/projects/esp-idf/en/v5.5.3/esp32s3/get-started/), only for flashing.
 
 ### 1. Build the plane
@@ -128,6 +128,17 @@ The safety rules copy what the stock firmware does in the same situation:
   move's duration for AI moves.
 - **Losing the link** stops the robot immediately. It leaves AI mode after 15 s without
   `bbplane`.
+
+## Security
+
+- **The live view and MCP endpoint have no login.** By default they listen only on
+  `127.0.0.1`. Opening them to the LAN (`web_bind = "0.0.0.0"`) lets anyone on that network
+  watch, listen and drive.
+- **Other websites cannot reach them through your browser.** `bbplane` only answers requests
+  addressed to an IP address, `localhost` or a name in `allowed_hosts`, and refuses browser
+  requests from other origins. This blocks cross-site WebSockets and DNS rebinding.
+- **The robot only accepts link traffic from the provisioned plane address.** The link is not
+  encrypted, so use a network you trust.
 
 ## Design notes
 

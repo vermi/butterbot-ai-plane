@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  plane:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plane
+    steps:
+      - uses: actions/checkout@v4
+      # btleplug talks to BlueZ over D-Bus.
+      - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: plane
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+
+  plane-msrv:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plane
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+      # Keep in sync with rust-version in plane/Cargo.toml.
+      - uses: dtolnay/rust-toolchain@1.89
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: plane
+      - run: cargo check --locked --all-targets
+
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.3
+          target: esp32s3
+          path: firmware

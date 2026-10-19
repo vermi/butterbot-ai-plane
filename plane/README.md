@@ -2,18 +2,18 @@
 
 Runs on a laptop and lets an AI (over MCP) or a person (in the browser) drive a CircuitMess
 ButterBot. It covers movement, live video, live audio, the speaker and text-to-speech. It needs
-the modified robot firmware on branch `ai-plane` in `../firmware`. The handheld controller keeps
+the modified robot firmware in [`../firmware`](../firmware). The handheld controller keeps
 working when AI mode is off.
 
 ```
 AI client --MCP (stdio or HTTP /mcp)--+
-Browser  --live view, REST------------+--> bbplane --TCP :7531 (robot dials in)--> ButterBot
+Browser  --live view, REST------------+--> bbplane --UDP :7531 (robot dials in)--> ButterBot
 ```
 
 ## Build
 
 ```sh
-cargo build --release        # binary: target/release/bbplane
+cargo build --release        # binary: target/release/bbplane (Rust 1.89 or newer)
 cargo test                   # unit tests + end-to-end test against the simulated robot
 ```
 
@@ -77,6 +77,11 @@ bbplane serve     # live view at http://127.0.0.1:7532/, MCP at http://127.0.0.1
 The robot must be able to reach port 7531 on the laptop. On macOS, allow incoming connections
 for `bbplane` when asked.
 
+The web server only answers requests addressed to an IP address, `localhost`, or a name in
+`allowed_hosts`, and refuses browser requests from other sites. This stops web pages you visit
+from reaching the robot's camera, microphone or controls through your browser. The live view and
+API have no login, so only set `web_bind = "0.0.0.0"` on a network you trust.
+
 Connect an MCP client using either option:
 
 - **HTTP**, while `bbplane serve` is running:
@@ -126,18 +131,20 @@ that streams a test card, a 440 Hz tone and fake events.
 ```toml
 web_bind = "127.0.0.1"   # use 0.0.0.0 to open the live view to the LAN
 web_port = 7532
+allowed_hosts = []       # extra host names for the web server, e.g. ["mylaptop.local"]
 link_port = 7531
 auto_enter_remote = true
 ble_wake = true          # wake the robot over Bluetooth when it is not connected
 
 [camera]
-res = "qvga"             # r128, qvga, vga, svga, xga, hd, uxga, qxga
-fps = 10
+res = "r128"             # r128, qvga, vga, svga, xga, hd, uxga, qxga
+fps = 15
 quality = 12             # 4..63, lower is better
 
 [mic]
 gate = true              # mute the mic while the robot speaks (no echo cancellation)
 gain = 1.0
+history_secs = 30        # microphone audio kept for `listen` with past=true
 
 [safety]
 tilt = true              # refuse to start moving when tipped over
@@ -154,5 +161,6 @@ The default `command` presets are `say` on macOS, `espeak-ng` on Linux, and SAPI
 ## Protocol
 
 The wire format is defined in `crates/bbproto`, and the firmware mirrors it in
-`firmware/main/src/Link/LinkProto.h`. Every message is a framed TCP message with a JSON control
-channel, JPEG video, and 16 kHz mono PCM audio in both directions.
+`firmware/main/src/Link/LinkProto.h`. Every message is one framed UDP datagram: a JSON control
+channel, JPEG video (split into fragments of at most 1400 bytes), and 16 kHz mono PCM audio in both
+directions. Control requests are retransmitted until acknowledged.
