@@ -4,5 +4,7 @@ members = ["crates/bbproto", "crates/bbplane"]
 
 [workspace.package]
 edition = "2024"
+# Oldest compiler the locked dependencies build with (uuid needs 1.89).
+rust-version = "1.89"
 version = "0.1.0"
 license = "MIT"

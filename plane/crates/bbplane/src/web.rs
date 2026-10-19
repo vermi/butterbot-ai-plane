@@ -1,12 +1,14 @@
 //! Live view for humans (MJPEG video, mic audio, push-to-talk, drive pad) plus a small
 //! REST API and the HTTP MCP endpoint at `/mcp`.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::{Body, Bytes};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Query, State};
-use axum::http::{StatusCode, header};
+use axum::extract::{Query, Request, State};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -26,10 +28,12 @@ const BOUNDARY: &str = "bbframe";
 
 pub fn router(robot: Robot) -> Router {
     let mcp_robot = robot.clone();
+    let allowed: Arc<[String]> = robot.hub.config.allowed_hosts.clone().into();
     let mcp: StreamableHttpService<BotServer, LocalSessionManager> = StreamableHttpService::new(
         move || Ok(BotServer::new(mcp_robot.clone())),
         Default::default(),
-        StreamableHttpServerConfig::default(),
+        // `guard` below checks Host and Origin for every route, /mcp included.
+        StreamableHttpServerConfig::default().disable_allowed_hosts(),
     );
     Router::new()
         .route("/", get(|| async { Html(INDEX) }))
@@ -44,7 +48,61 @@ pub fn router(robot: Robot) -> Router {
         .route("/api/say", post(say))
         .route("/api/camera", post(camera))
         .nest_service("/mcp", mcp)
+        .layer(middleware::from_fn(move |req, next| {
+            guard(allowed.clone(), req, next)
+        }))
         .with_state(robot)
+}
+
+/// Block DNS rebinding and cross-site requests. A browser on some other site can reach this
+/// server: plain WebSockets and MJPEG are not covered by CORS, and a rebound DNS name makes a page
+/// same-origin with us. So the Host must be one we serve under (an IP literal, `localhost`, or a
+/// configured name; rebinding needs a DNS name), and a browser's Origin must be that same host.
+/// Non-browser clients (MCP, curl) send no Origin.
+async fn guard(allowed: Arc<[String]>, req: Request, next: Next) -> Response {
+    match check_origin(req.headers(), &allowed) {
+        Ok(()) => next.run(req).await,
+        Err(why) => {
+            tracing::warn!("rejected {} {}: {why}", req.method(), req.uri());
+            (StatusCode::FORBIDDEN, why).into_response()
+        }
+    }
+}
+
+fn check_origin(h: &HeaderMap, allowed: &[String]) -> Result<(), &'static str> {
+    let host = h
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .ok_or("missing Host header")?;
+    if !host_allowed(host, allowed) {
+        return Err("Host not allowed; add it to allowed_hosts in the config");
+    }
+    let Some(origin) = h.get(header::ORIGIN) else {
+        return Ok(());
+    };
+    let origin = origin.to_str().map_err(|_| "bad Origin header")?;
+    let authority = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))
+        .ok_or("cross-origin request")?;
+    if authority.eq_ignore_ascii_case(host) {
+        Ok(())
+    } else {
+        Err("cross-origin request")
+    }
+}
+
+/// `host` is a Host header value: name or IP, optional port, IPv6 in brackets.
+fn host_allowed(host: &str, allowed: &[String]) -> bool {
+    let name = match host.strip_prefix('[') {
+        Some(rest) => rest.split(']').next().unwrap_or(""),
+        None => host.rsplit_once(':').map_or(host, |(n, _)| n),
+    };
+    name.parse::<std::net::IpAddr>().is_ok()
+        || name.eq_ignore_ascii_case("localhost")
+        || allowed
+            .iter()
+            .any(|a| a.eq_ignore_ascii_case(name) || a.eq_ignore_ascii_case(host))
 }
 
 fn err(e: anyhow::Error) -> Response {
@@ -312,4 +370,44 @@ pub async fn serve(robot: Robot, listener: tokio::net::TcpListener) -> anyhow::R
     );
     axum::serve(listener, router(robot)).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn headers(host: &str, origin: Option<&str>) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(header::HOST, host.parse().unwrap());
+        if let Some(o) = origin {
+            h.insert(header::ORIGIN, o.parse().unwrap());
+        }
+        h
+    }
+
+    #[test]
+    fn host_and_origin() {
+        let none: &[String] = &[];
+        let ok = |host, origin| check_origin(&headers(host, origin), none).is_ok();
+        assert!(ok("127.0.0.1:7532", None));
+        assert!(ok("localhost:7532", Some("http://localhost:7532")));
+        assert!(ok("[::1]:7532", Some("http://[::1]:7532")));
+        assert!(ok("192.168.1.20:7532", Some("http://192.168.1.20:7532")));
+        // DNS rebinding: a page on evil.example resolving to 127.0.0.1.
+        assert!(!ok("evil.example:7532", Some("http://evil.example:7532")));
+        assert!(!ok("evil.example:7532", None));
+        // Another site in the same browser (e.g. opening /ws/audio).
+        assert!(!ok("127.0.0.1:7532", Some("https://evil.example")));
+        assert!(!ok("127.0.0.1:7532", Some("null")));
+        assert!(!ok("127.0.0.1:7532", Some("http://127.0.0.1:8080")));
+
+        let named = ["robot.lan".to_string()];
+        assert!(
+            check_origin(
+                &headers("robot.lan:7532", Some("http://robot.lan:7532")),
+                &named
+            )
+            .is_ok()
+        );
+    }
 }

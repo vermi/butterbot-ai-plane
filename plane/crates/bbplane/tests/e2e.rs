@@ -63,9 +63,11 @@ fn text_of(r: &Value) -> String {
 
 async fn http_get(addr: std::net::SocketAddr, path: &str, max: usize) -> Vec<u8> {
     let mut s = TcpStream::connect(addr).await.unwrap();
-    s.write_all(format!("GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").as_bytes())
-        .await
-        .unwrap();
+    s.write_all(
+        format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n").as_bytes(),
+    )
+    .await
+    .unwrap();
     let mut out = Vec::new();
     let mut buf = [0u8; 4096];
     while out.len() < max {

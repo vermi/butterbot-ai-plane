@@ -13,6 +13,9 @@ pub struct Config {
     /// Address of the live view, REST API and HTTP MCP endpoint.
     pub web_bind: String,
     pub web_port: u16,
+    /// Extra host names the live view and MCP endpoint may be reached under. IP addresses and
+    /// `localhost` always work; anything else is refused to stop DNS rebinding attacks.
+    pub allowed_hosts: Vec<String>,
     /// Enter remote (AI) mode automatically when a control tool is used.
     pub auto_enter_remote: bool,
     /// Wake the robot over Bluetooth when it is not connected. The robot only runs Wi-Fi in AI mode.
@@ -65,6 +68,7 @@ impl Default for Config {
             link_port: bbproto::LINK_PORT,
             web_bind: "127.0.0.1".into(),
             web_port: 7532,
+            allowed_hosts: Vec::new(),
             auto_enter_remote: true,
             ble_wake: true,
             camera: CameraConfig::default(),
