@@ -167,13 +167,15 @@ async fn drive(State(r): State<Robot>, Json(b): Json<DriveBody>) -> Response {
     if let Err(e) = r.ensure_remote().await {
         return err(e);
     }
+    let ms = b.ms.unwrap_or(1000).min(1500);
     let msg = ToRobot::Drive {
         l: b.l.clamp(-100, 100),
         r: b.r.clamp(-100, 100),
-        ms: b.ms.unwrap_or(1000).min(1500),
+        ms,
         // Direct control from the live view: no safety checks, like the handheld RC controller.
         safe: false,
     };
+    r.moving_for(std::time::Duration::from_millis(ms as u64));
     match r.hub.send(msg).await {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(e) => err(e),

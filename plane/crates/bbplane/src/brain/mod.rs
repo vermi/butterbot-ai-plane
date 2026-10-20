@@ -258,6 +258,17 @@ pub fn describe(ev: &crate::control::AgentEvent) -> Option<(String, Option<Bytes
                     "[{} just came into view. In view: {in_view}.]",
                     info["name"].as_str().unwrap_or("someone")
                 ),
+                Some("handled") => {
+                    let what = match info["how"].as_str().unwrap_or_default() {
+                        "pickup" => "Someone just picked you up",
+                        "putdown" => "Someone just put you down",
+                        "shake" => "Someone is shaking you",
+                        "fall" => "You just fell or were dropped",
+                        "upside_down" => "You are upside down",
+                        _ => "Someone is handling you",
+                    };
+                    format!("[{what}. In view: {in_view}. React out loud, briefly.]")
+                }
                 Some("noticed") => {
                     let what = info["what"].as_str().unwrap_or("something");
                     // At the robot's resolution a dog can come out as a cat.

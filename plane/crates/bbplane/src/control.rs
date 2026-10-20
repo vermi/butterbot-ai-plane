@@ -48,6 +48,9 @@ pub struct Robot {
     wake_lock: Arc<Mutex<()>>,
     speaker: Arc<Mutex<Option<CancellationToken>>>,
     drive: Arc<Mutex<Option<CancellationToken>>>,
+    /// The robot is driving (or just stopped) until then: the jolts are its own, not someone
+    /// handling it.
+    moving_until: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
     /// Camera and mic state last asked for, restored when the link comes back.
     streams: Arc<Mutex<Streams>>,
     /// Set while the plane itself is waking the robot: the caller is about to use it, so
@@ -98,6 +101,7 @@ impl Robot {
             wake_lock: Default::default(),
             speaker: Default::default(),
             drive: Default::default(),
+            moving_until: Default::default(),
             plane_woke: Default::default(),
         }
     }
@@ -265,6 +269,7 @@ Ask to be unplugged first."
         let since = self.hub.last_event_seq().await;
         let start = tokio::time::Instant::now();
         let deadline = start + Duration::from_millis(ms);
+        self.moving_for(Duration::from_millis(ms));
         let mut stopped_early = None;
         loop {
             let now = tokio::time::Instant::now();
@@ -298,10 +303,27 @@ Ask to be unplugged first."
         if stopped_early.as_deref() != Some("cancelled") {
             self.hub.send(ToRobot::Stop).await.ok();
         }
+        self.moving_for(Duration::ZERO);
         Ok(DriveOutcome {
             completed_ms: start.elapsed().as_millis() as u64,
             stopped_early,
         })
+    }
+
+    /// Note that the robot drives for `d` (plus a moment to settle).
+    pub fn moving_for(&self, d: Duration) {
+        let until = std::time::Instant::now() + d + Duration::from_millis(1500);
+        let mut m = self.moving_until.lock().unwrap();
+        if m.is_none_or(|t| t < until) {
+            *m = Some(until);
+        }
+    }
+
+    pub fn is_moving(&self) -> bool {
+        self.moving_until
+            .lock()
+            .unwrap()
+            .is_some_and(|t| std::time::Instant::now() < t)
     }
 
     /// Spin in place by roughly `degrees` (positive = clockwise/right). Open loop.
@@ -711,11 +733,14 @@ impl Robot {
                     info["owner_in_view"] =
                         names.iter().any(|n| n.eq_ignore_ascii_case(&owner)).into();
                 }
-                // Nudges are about the surroundings: always show them.
-                return Ok(AgentEvent::Nudge {
-                    info,
-                    image: frame().await,
-                });
+                // Nudges are about the surroundings: show them. Being handled is not, and a
+                // picture slows the reaction down by seconds.
+                let image = if matches!(n, crate::life::Nudge::Handled { .. }) {
+                    None
+                } else {
+                    frame().await
+                };
+                return Ok(AgentEvent::Nudge { info, image });
             }
             let now = Instant::now();
             if now >= deadline {
@@ -726,6 +751,66 @@ impl Robot {
             self.ears
                 .wait_command((deadline - now).min(Duration::from_secs(1)))
                 .await;
+        }
+    }
+}
+
+/// Being picked up, put down, shaken or dropped becomes a nudge for the agent. Spawned once by
+/// `crate::start`.
+///
+/// Shakes and falls come from the robot's accelerometer. Its pick-up detection rarely fires, but
+/// the bottom IR sensor sees the floor go away when the robot is lifted, and come back when it is
+/// put down.
+pub async fn on_motion(robot: Robot) {
+    let mut cursor = robot.hub.last_event_seq().await;
+    let bottom = |v: &Value| match v["bottom"].as_str() {
+        Some("covered") => Some(true),
+        Some("uncovered") => Some(false),
+        _ => None,
+    };
+    // The last reading, if the robot is already connected.
+    let mut floor = robot
+        .hub
+        .status
+        .lock()
+        .await
+        .proximity
+        .as_ref()
+        .and_then(bottom);
+    loop {
+        for e in robot
+            .hub
+            .events_since(cursor, Duration::from_secs(60))
+            .await
+        {
+            cursor = e.seq;
+            let how = match e.kind.as_str() {
+                "motion" => e.data["kind"].as_str().map(String::from),
+                "proximity" => {
+                    let now = bottom(&e.data);
+                    let was = floor;
+                    floor = now.or(floor);
+                    match (was, now) {
+                        // Unknown before (the plane just started): it normally sits on the floor.
+                        (Some(true) | None, Some(false)) => Some("pickup".into()),
+                        (Some(false), Some(true)) => Some("putdown".into()),
+                        _ => None,
+                    }
+                }
+                // A new connection reports the sensors afresh.
+                "link" => {
+                    floor = None;
+                    None
+                }
+                _ => None,
+            };
+            let Some(how) = how else { continue };
+            // Its own driving jolts it, and the bottom sensor misreads while the motors run.
+            if robot.is_moving() {
+                continue;
+            }
+            tracing::info!("handled: {how}");
+            robot.life.handled(&how);
         }
     }
 }

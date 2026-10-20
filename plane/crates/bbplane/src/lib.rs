@@ -64,6 +64,7 @@ pub async fn start(config: config::Config) -> Result<Plane> {
     tokio::spawn(ears::run(robot.clone()));
     tokio::spawn(agent::run(robot.clone()));
     tokio::spawn(control::on_link_up(robot.clone()));
+    tokio::spawn(control::on_motion(robot.clone()));
     tokio::spawn(light::run(robot.clone()));
     tokio::spawn({
         let robot = robot.clone();

@@ -1,7 +1,7 @@
 //! The robot's own initiative while an agent runs it.
 //!
-//! Between commands, `hear` and `reply` also return *nudges*: someone familiar arrived, an animal
-//! came into view, or it has been quiet for a while. The agent decides what to do with them (look around, wander, start some
+//! Between commands, `hear` and `reply` also return *nudges*: someone picked the robot up or shook
+//! it, someone familiar arrived, an animal came into view, or it has been quiet for a while. The agent decides what to do with them (look around, wander, start some
 //! chit-chat, or rest). Nudges come every few minutes while someone is in view and rarely when the
 //! room is empty. In focus mode there are none until the robot is called by name or the focus time
 //! runs out.
@@ -17,6 +17,8 @@ use crate::config::LifeConfig;
 
 /// An arrival not picked up within this long is old news (they may have left again).
 const ARRIVAL_FRESH: Duration = Duration::from_secs(60);
+/// Being picked up or shaken not reacted to within this long is old news.
+const HANDLED_FRESH: Duration = Duration::from_secs(20);
 /// Someone keeps talking: do not end a session in the middle of a conversation.
 const SESSION_END_QUIET: Duration = Duration::from_secs(90);
 
@@ -39,6 +41,8 @@ const SUGGESTIONS_ALONE: &[&str] = &[
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "nudge", rename_all = "snake_case")]
 pub enum Nudge {
+    /// Someone handled the robot: `pickup`, `putdown`, `shake`, `fall` or `upside_down`.
+    Handled { how: String },
     /// A recognised person came into view.
     Arrived { name: String },
     /// Something worth noticing (a cat, a dog...) came into view.
@@ -57,6 +61,7 @@ struct State {
     wait_alone: Duration,
     arrivals: VecDeque<(String, Instant)>,
     noticed: VecDeque<(String, Instant)>,
+    handled: Option<(String, Instant)>,
     session_started: Instant,
     rng: u64,
 }
@@ -78,6 +83,7 @@ impl Life {
             wait_alone: Duration::ZERO,
             arrivals: VecDeque::new(),
             noticed: VecDeque::new(),
+            handled: None,
             session_started: Instant::now(),
             rng: seed,
         };
@@ -106,6 +112,7 @@ impl Life {
         s.focus_until = Some(Instant::now() + d);
         s.arrivals.clear();
         s.noticed.clear();
+        s.handled = None;
     }
 
     pub fn unfocus(&self) {
@@ -141,6 +148,14 @@ impl Life {
         s.arrivals.push_back((name.to_string(), Instant::now()));
     }
 
+    /// The robot was picked up, shaken, dropped or turned over (the latest one counts).
+    pub fn handled(&self, how: &str) {
+        if !self.cfg.enabled || self.focused().is_some() {
+            return;
+        }
+        self.state.lock().unwrap().handled = Some((how.to_string(), Instant::now()));
+    }
+
     /// Something worth noticing came into view.
     pub fn noticed(&self, what: &str) {
         if !self.cfg.enabled || self.focused().is_some() {
@@ -157,6 +172,13 @@ impl Life {
             return None;
         }
         let mut s = self.state.lock().unwrap();
+        if let Some((how, at)) = s.handled.take()
+            && at.elapsed() < HANDLED_FRESH
+        {
+            s.last_activity = Instant::now();
+            reschedule(&self.cfg, &mut s);
+            return Some(Nudge::Handled { how });
+        }
         s.arrivals.retain(|(_, at)| at.elapsed() < ARRIVAL_FRESH);
         if let Some((name, _)) = s.arrivals.pop_front() {
             s.last_activity = Instant::now();
@@ -260,6 +282,27 @@ mod tests {
         life.arrived("Mono");
         tokio::time::advance(Duration::from_secs(61)).await;
         assert!(!matches!(life.poll(false), Some(Nudge::Arrived { .. })));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn being_handled_comes_first_and_goes_stale() {
+        let life = Life::new(cfg([600, 600], [600, 600]));
+        life.arrived("Justin");
+        life.noticed("dog");
+        life.handled("pickup");
+        life.handled("shake"); // the latest counts
+        assert!(matches!(life.poll(true), Some(Nudge::Handled { how }) if how == "shake"));
+        assert!(matches!(life.poll(true), Some(Nudge::Arrived { .. })));
+        assert!(matches!(life.poll(true), Some(Nudge::Noticed { what }) if what == "dog"));
+        assert!(life.poll(true).is_none());
+
+        life.handled("pickup");
+        tokio::time::advance(Duration::from_secs(21)).await;
+        assert!(life.poll(true).is_none(), "put down again long ago");
+
+        life.focus(Duration::from_secs(60));
+        life.handled("pickup");
+        assert!(life.poll(true).is_none(), "quiet in focus mode");
     }
 
     #[tokio::test(start_paused = true)]
