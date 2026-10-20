@@ -99,16 +99,33 @@ that streams a test card, a 440 Hz tone and fake events.
 | `status` | Connection, mode, battery, sensors and stream state |
 | `enter_ai_mode` / `exit_ai_mode` | Pause or resume the robot's own behavior. Control tools enter AI mode automatically. |
 | `move`, `turn`, `drive`, `stop` | Timed movement. The robot stops by itself when the time runs out, the link drops, or a safety check trips. |
-| `look` | Latest live camera frame (image) |
-| `snapshot` | Still photo up to 2048x1536 |
+| `look` | Latest live camera frame (320x240 image) |
+| `snapshot` | Still photo, 640x480 by default (larger sizes are experimental) |
 | `set_stream` | Live camera resolution and frame rate |
 | `listen` | Microphone clip as WAV, with loudness and speech-activity stats |
 | `say` | Speak. Uses the robot's own voice by default; `engine: "command"` uses laptop TTS. |
 | `play_audio`, `stop_audio`, `set_volume` | Speaker control |
-| `events` | Long-poll robot events: proximity, motion, battery, button, scenario progress |
+| `events` | Long-poll robot events: proximity, motion, battery, button, scenario progress, faces |
+| `remember_face`, `forget_face`, `who_is_here` | Face recognition, run on this machine (see below) |
 | `led`, `run_scenario`, `scenarios`, `ir_list`, `ir_send`, `read_modules` | Stock features and add-on modules |
 
 **Resources:** `butterbot://camera/latest` and `butterbot://status`.
+
+## Face recognition
+
+`remember_face` (or **Remember me** in the live view) learns the one person in front of the camera
+under a name, from 8 live frames. While the robot streams video in AI mode, about three frames a
+second are checked:
+
+- YuNet finds faces, and SFace turns each into a 128-number embedding. Both are run with
+  [tract](https://github.com/sonos/tract), pure Rust with no native libraries.
+- Each embedding is compared with the enrolled ones (cosine similarity, `threshold`).
+- When someone has been seen in two checks in a row, a `face` event reports them as `arrived`
+  (`name` is null for strangers). They are reported `left` after 6 s out of view.
+
+`status` and `who_is_here` list the faces in view. The models are downloaded on first use into
+`<data_dir>/models` and checked against pinned SHA-256 hashes. People are stored in
+`<data_dir>/faces.json`: names and embeddings, no images, mode 0600.
 
 ## Safety
 
@@ -135,6 +152,7 @@ allowed_hosts = []       # extra host names for the web server, e.g. ["mylaptop.
 link_port = 7531
 auto_enter_remote = true
 ble_wake = true          # wake the robot over Bluetooth when it is not connected
+announce_connect = true  # the robot says "Connected." when it links up in AI mode
 
 [camera]
 res = "qvga"             # r128, qvga, vga, svga, xga, hd, uxga, qxga
@@ -150,6 +168,12 @@ history_secs = 30        # microphone audio kept for `listen` with past=true
 [safety]
 tilt = true              # refuse to start moving when tipped over
 obstacle = true          # stop driving forward when the front sensor is covered
+
+[faces]
+enabled = true           # recognize enrolled people in AI mode (idle until someone is enrolled)
+greet = true             # say "Hi, <name>!" when an enrolled person arrives
+greet_cooldown_secs = 600
+threshold = 0.40         # 0..1 similarity needed to name someone; higher = fewer mix-ups, more misses
 
 [tts]
 engine = "robot"         # or "command" for laptop TTS streamed to the robot

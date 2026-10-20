@@ -10,8 +10,8 @@ the little "you pass butter" robot. This repository holds two things:
   an **MCP server**, so Claude or any other MCP client can control it. It also serves a live view
   in the browser for humans.
 
-The stock features you use every day keep working: the handheld controller, RC mode, the idle
-behaviours and the robot's own voice.
+The handheld controller, RC mode, the idle behaviours and the robot's own voice keep working. Some
+stock features had to go to make room for Wi-Fi; see [what was removed](#design-notes).
 
 ## What an AI can do with it
 
@@ -22,6 +22,7 @@ behaviours and the robot's own voice.
 | **Hear** | `listen` returns microphone audio as a WAV file, with loudness stats |
 | **Talk** | `say` in the robot's own voice, or in a laptop TTS voice streamed to its speaker. `play_audio`, `set_volume` |
 | **Sense** | `events`: front and bottom IR sensors, motion (shake, pick-up, fall), battery, button |
+| **Recognize** | `remember_face`, `who_is_here`, `forget_face`. Enrolled people are greeted by name and reported as `face` events. |
 | **Extras** | `led`, `run_scenario` (jokes, facts, time, add-on modules), `ir_list`, `ir_send`, `read_modules` |
 
 ## How it works
@@ -41,12 +42,16 @@ behaviours and the robot's own voice.
 ```
 
 **Entering AI mode.** Short-press the robot's power button, or let `bbplane` wake it over
-Bluetooth; any control tool does this automatically. The robot pauses its own behaviour, joins
-Wi-Fi and dials `bbplane`.
+Bluetooth; any control tool does this automatically.
+1. The robot says "A I mode on", pauses its own behaviour, joins Wi-Fi and dials `bbplane`.
+2. When `bbplane` answers, it starts the camera and microphone and the robot says "Connected".
+   This takes a few seconds. Later joins are quicker, because the robot remembers the Wi-Fi
+   channel and its address.
+3. If it gets no answer within 30 s, it says "I can't reach the computer" and goes back to normal.
 
-**Leaving AI mode.** Press the power button again, call `exit_ai_mode`, or stop `bbplane`; the
-robot gives up after 15 s without it. Wi-Fi then turns off again, and the robot behaves exactly
-like stock.
+**Leaving AI mode.** Short-press the power button again, call `exit_ai_mode`, or stop `bbplane`.
+The robot says "A I mode off". Without `bbplane` it gives up after 15 s ("Lost the computer").
+Wi-Fi then turns off again.
 
 ## Repository layout
 
@@ -78,13 +83,18 @@ cargo test                     # includes end-to-end tests against a simulated r
 cd firmware
 . ~/esp/esp-idf/export.sh
 idf.py build
-idf.py -p /dev/cu.usbserial-XXXX flash        # first time: writes app and data partitions
+python tools/flash.py -p /dev/cu.usbserial-XXXX --all   # first time: everything (~4 min)
+python tools/flash.py -p /dev/cu.usbserial-XXXX         # after that: just the app (~2 min)
 ```
 
-> **Hold the power button while flashing.** The robot keeps itself powered only while its
-> firmware runs. In the chip's bootloader nothing holds the power latch, so keep the button
-> pressed for the whole flash (2–5 minutes). After the first full flash, `idf.py app-flash` only
-> rewrites the app and is quicker.
+When it finishes the robot switches itself off. Turn it on as usual by holding the button for a
+second.
+
+> **Why not plain `idf.py flash`?** The firmware switches the robot off whenever it boots without
+> the power button held (the stock hold-to-turn-on check). esptool's own reset at the end of a
+> flash also leaves the chip in its bootloader, with the light off and the button ignored.
+> `tools/flash.py` flashes without extra resets and ends with a clean one. If the robot ever
+> switches off during flashing, hold its button and run it again.
 
 ### 3. Tell the robot your Wi-Fi network
 
@@ -97,6 +107,10 @@ plane/target/release/bbplane provision --ssid "MyWiFi" --password "secret"
 This stores the network and this computer's address on the robot. The password must be empty
 (open network) or 8–63 characters.
 
+> **macOS:** run Bluetooth commands (`provision`, `wake`) from Terminal.app or iTerm2. Terminals
+> built into Warp, VS Code and other IDEs do not declare Bluetooth use, so macOS stops any
+> program they start that touches Bluetooth; `bbplane` then says so instead of crashing.
+
 ### 4. Run it
 
 ```sh
@@ -104,7 +118,7 @@ plane/target/release/bbplane serve
 ```
 
 - **Live view:** <http://127.0.0.1:7532/>. Video, listen live, hold-to-talk, drive pad
-  (W A S D) and an event log.
+  (W A S D), face enrollment and an event log.
 - **MCP over HTTP:** `http://127.0.0.1:7532/mcp`.
 
 Connect Claude Code:
@@ -115,6 +129,18 @@ claude mcp add --transport http butterbot http://127.0.0.1:7532/mcp
 
 Then ask Claude to look around, drive somewhere or say something. To try everything without a
 robot, run `bbplane sim` in a second terminal.
+
+### 5. Teach it your face (optional)
+
+Put the robot in AI mode, sit about an arm's length in front of it, alone in view, and either
+click **Remember me** in the live view or ask Claude to remember your face. From then on, in AI
+mode, the robot says hello when it sees you (at most every 10 minutes), and Claude gets `face`
+events and can ask `who_is_here`.
+
+Recognition runs on your computer, not the robot. The first enrollment downloads two open models
+from the OpenCV model zoo (about 40 MB, checked against pinned hashes). The robot's camera sits
+low, so standing people are often only in view from the chest down. At 320×240 a face across the
+room is only about 15 pixels wide, too small to recognize; closer is better.
 
 ## Safety
 
@@ -139,6 +165,9 @@ The safety rules copy what the stock firmware does in the same situation:
   requests from other origins. This blocks cross-site WebSockets and DNS rebinding.
 - **The robot only accepts link traffic from the provisioned plane address.** The link is not
   encrypted, so use a network you trust.
+- **Face data stays on your computer.** Enrollment stores a name and a few face embeddings
+  (numbers, no images) in `faces.json` in the data directory, readable only by your user.
+  `forget_face` deletes a person. Only enroll people who agree to it.
 
 ## Design notes
 
@@ -151,10 +180,18 @@ These are the lessons that shaped the firmware. Most of them came from the hardw
     itself off.
   - So, like the stock RC mode, **Wi-Fi only runs in AI mode**, and it is started on the state
     machine thread exactly as RC mode does it.
-- **Some stock features were removed for AI mode's memory:** phone notifications and music
-  control, on-robot voice commands, and face and object detection. The robot's own speech
-  (flite), idle behaviours, scenarios, IR, add-on modules and RC mode remain. Free internal RAM
-  went from about 27 KB to about 100 KB.
+- **Some stock features were removed to make room for Wi-Fi.** They are compiled out, so they
+  are gone outside AI mode too:
+  - on-robot voice commands (a short press of the power button now enters AI mode instead);
+  - face and object detection: "who's this", remember/forget face, "what's this", and the idle
+    "notice a person" and "observe" behaviours;
+  - the phone link: notifications, music control and clock sync. Without clock sync the "current
+    time" scenario cannot know the time;
+  - dice, eight ball, IR learning/forgetting and dance, which needed speech or music input.
+
+  The robot's own speech (flite), the other idle behaviours and scenarios, IR sending, add-on
+  modules and RC mode remain. Free internal RAM went from about 27 KB to about 100 KB. Face
+  recognition is back in AI mode, running on the computer instead (see step 5).
 - **UDP, like the stock video feed.** TCP stalled and died on the robot's busy 2.4 GHz link
   (Bluetooth shares the radio); UDP just skips lost packets.
   - **Video** is split into datagrams of at most 1400 bytes and reassembled on the computer;
