@@ -10,6 +10,11 @@ the little "you pass butter" robot. This repository holds two things:
   an **MCP server**, so Claude or any other MCP client can control it. It also serves a live view
   in the browser for humans.
 
+`bbplane` can also **let the robot run itself**: it keeps an agent attached while the robot is in AI
+mode. The agent is either its built-in brain on OpenAI's APIs or any MCP agent you name, such as
+Codex. You talk to it by name ("Butterbot, what's the weather?"), it answers out loud, and when
+nobody is talking to it, it does things of its own accord. See [Let it run itself](#6-let-it-run-itself-optional).
+
 The handheld controller, RC mode, the idle behaviours and the robot's own voice keep working. Some
 stock features had to go to make room for Wi-Fi; see [what was removed](#design-notes).
 
@@ -19,10 +24,11 @@ stock features had to go to make room for Wi-Fi; see [what was removed](#design-
 |---|---|
 | **Move** | `move`, `turn`, `drive`, `stop`. Each move is timed and stops by itself. |
 | **See** | `look` (live camera frame), `snapshot`, `set_stream` |
-| **Hear** | `listen` returns microphone audio as a WAV file, with loudness stats |
+| **Hear** | `hear` waits for the next thing someone says to the robot (transcribed on your computer), or for a nudge to do something. `reply` speaks, then does the same. `listen` returns microphone audio and a transcript. |
 | **Talk** | `say` in the robot's own voice, or in a laptop TTS voice streamed to its speaker. `play_audio`, `set_volume` |
 | **Sense** | `events`: front and bottom IR sensors, motion (shake, pick-up, fall), battery, button |
 | **Recognize** | `remember_face`, `who_is_here`, `forget_face`. Enrolled people are greeted by name and reported as `face` events. |
+| **Behave** | `focus` (stay quiet for a while), `end_conversation`, `power_off` |
 | **Extras** | `led`, `run_scenario` (jokes, facts, time, add-on modules), `ir_list`, `ir_send`, `read_modules` |
 
 ## How it works
@@ -142,6 +148,66 @@ from the OpenCV model zoo (about 40 MB, checked against pinned hashes). The robo
 low, so standing people are often only in view from the chest down. At 320×240 a face across the
 room is only about 15 pixels wide, too small to recognize; closer is better.
 
+### 6. Let it run itself (optional)
+
+Turn on the agent in `bbplane`'s config file (`bbplane config` shows where it is):
+
+```toml
+[agent]
+enabled = true            # kind = "realtime" by default
+
+[brain]
+api_key_file = "~/path/to/openai-key"   # or set OPENAI_API_KEY
+
+[life]
+owner = "Sam"             # your enrolled name: your requests come first
+```
+
+Then run `bbplane serve` and short-press the robot's button. From then on:
+
+- **Talk to it by name:** "Butterbot, turn around." For 30 s after it answers, you can carry on
+  without the name. "Goodbye" ends the conversation; it goes back to waiting for its name.
+- **It has a life of its own.** When it sees someone it knows, or nobody has spoken to it for a
+  while, the agent gets a nudge. It decides for itself whether to greet, chat, look around or stay
+  quiet. It chats more when someone is around.
+- **"Butterbot, I need to focus"** makes it stay quiet (an hour by default, or as long as you
+  say) until you call it by name. **"Butterbot, switch off"** powers it down; "goodbye" alone
+  never does.
+- **The status light** shows what it is doing; see [Status light](#status-light).
+- **The live view** shows the conversation, what the agent is doing and its token use, and has
+  Pause and Focus buttons.
+
+Speech is transcribed on your computer with Whisper (about 150 MB of models, downloaded once and
+checked against pinned hashes). The agent can be:
+
+| `[agent] kind` | What | Speed |
+|---|---|---|
+| `realtime` (default) | Built-in brain on OpenAI's Realtime API | Answers in about 1 s |
+| `text` | Built-in brain on a cheaper text model (`gpt-5.6-terra`) | A little slower |
+| `command` | Any MCP agent as a command, by default `codex exec` | 3–5 s with Codex |
+
+The built-in brains speak in the robot's own voice by default, sentence by sentence while the
+rest is still being written. Set `[brain] voice` to an OpenAI voice (`marin`, `cedar`...) to use
+that instead. Both can search the web. See [`plane/README.md`](plane/README.md#the-agent) for
+setting up Codex and all options.
+
+## Status light
+
+In AI mode the robot's status light shows what it is doing. It has three levels: off, dim and
+bright. (The light sits on an I/O expander pin that can only switch on and off; "dim" lets the pin
+float on the expander's weak pull-up, the glow you see while holding the button at power-on.)
+
+| Light | Meaning |
+|---|---|
+| A short tick every second | Joining Wi-Fi |
+| Steady dim | Listening for its name |
+| Bright, with a short dim wink every 2 s | In a conversation: no name needed |
+| Quick flicker | Heard you, thinking |
+| Steady bright | Talking |
+| Off, with a soft glow every 6 s | Focus mode |
+| Two dim blips every 4 s | No agent running (paused, or not set up) |
+| Three quick blinks, pause | Cannot reach the computer |
+
 ## Safety
 
 The safety rules copy what the stock firmware does in the same situation:
@@ -157,6 +223,10 @@ The safety rules copy what the stock firmware does in the same situation:
   move's duration for AI moves.
 - **Losing the link** stops the robot immediately. It leaves AI mode after 15 s without
   `bbplane`.
+- **The agent does not drive while the robot is plugged in**: it would pull on the cable
+  (`[safety] drive_when_plugged`). The live view's drive pad is not limited.
+- **The agent can switch the robot off only when someone asked for that** in the last command
+  ("switch off", "shut down", "power off"...). Models have taken a plain "goodbye" for it.
 
 ## Security
 
@@ -168,6 +238,10 @@ The safety rules copy what the stock firmware does in the same situation:
   requests from other origins. This blocks cross-site WebSockets and DNS rebinding.
 - **The robot only accepts link traffic from the provisioned plane address.** The link is not
   encrypted, so use a network you trust.
+- **Speech is transcribed on your computer.** Only what follows the robot's name (or is said in
+  a conversation with it) goes to the agent, as text. With the built-in brain that text, the
+  replies and an occasional camera frame go to OpenAI. The API key is read from the file you
+  name and is never logged.
 - **Face data stays on your computer.** Enrollment stores a name and a few face embeddings
   (numbers, no images) in `faces.json` in the data directory, readable only by your user.
   `forget_face` deletes a person. Only enroll people who agree to it.
@@ -223,9 +297,9 @@ These are the lessons that shaped the firmware. Most of them came from the hardw
   (`encoder = "sensor"`) stalls after a frame or two.
 - **Network:** 2.4 GHz Wi-Fi only (an ESP32 limitation). Expect some lost audio and video on a
   busy network.
-- **Microphone:** quiet, with no echo cancellation; it is muted while the robot speaks.
-  `listen` returns audio, not text: transcribe it with your own speech-to-text if your client
-  cannot handle audio.
+- **Microphone:** quiet, with no echo cancellation; it is muted while the robot speaks, so you
+  cannot interrupt it. The S3's microphone input has no hardware high-pass filter; the firmware
+  removes the rumble and DC offset in software.
 - **Movement:** open loop (no wheel encoders), so `turn` estimates angles from time.
 - **Removed scenarios:** those that needed the removed features (dice, eight ball, face
   detection, "what's this", phone controls, dance) are not available.
