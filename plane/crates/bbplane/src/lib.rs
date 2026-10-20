@@ -19,6 +19,7 @@ pub mod provision;
 pub mod reminders;
 pub mod service;
 pub mod sim;
+pub mod sounds;
 pub mod stt;
 pub mod tts;
 pub mod web;
@@ -64,6 +65,7 @@ pub async fn start(config: config::Config) -> Result<Plane> {
     });
     tokio::spawn(face::run(robot.clone()));
     tokio::spawn(objects::run(robot.clone()));
+    tokio::spawn(sounds::run(robot.clone()));
     tokio::spawn(ears::run(robot.clone()));
     tokio::spawn(agent::run(robot.clone()));
     tokio::spawn(control::on_link_up(robot.clone()));

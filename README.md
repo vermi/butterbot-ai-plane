@@ -186,13 +186,16 @@ short-press the robot's button. From then on:
   survive a restart and come through focus mode.
 - **It knows its battery:** it asks to be charged at 20% and 10%, and says thanks when plugged in.
 - **Phone calls:** with your phone paired, it tells you who is calling.
+- **It hears things:** a bark, the doorbell, a knock, beeping, a smoke alarm (that one even in
+  focus mode). Sound recognition (YAMNet) runs on your computer too.
 - **The status light** shows what it is doing; see [Status light](#status-light).
 - **The live view** shows the conversation, what the agent is doing and its token use, what it
   remembers and the reminders that are set (both can be removed there), and has Pause and Focus
   buttons.
 
 Speech is transcribed on your computer with Whisper, and objects are detected there with YOLOX-S
-(about 190 MB of models in all, downloaded once and checked against pinned hashes). When several
+and sounds with YAMNet (about 210 MB of models in all, downloaded once and checked against pinned
+hashes). When several
 known people are in view, the agent is told it cannot tell which of them is talking. The agent can be:
 
 | `[agent] kind` | What | Speed |
@@ -326,6 +329,9 @@ These are the lessons that shaped the firmware. Most of them came from the hardw
   cannot interrupt it. The S3's microphone input has no hardware high-pass filter; the firmware
   removes the rumble and DC offset in software.
 - **Movement:** open loop (no wheel encoders), so `turn` estimates angles from time.
+- **Sound recognition** is not tuned for the robot's quiet microphone yet: in a first test it
+  heard a knock (as "chopping") and a cough, but not a doorbell or barking played from a phone.
+  `status` lists the sounds it recently heard, with scores.
 - **Object detection** knows COCO's 80 everyday classes: a fireplace comes out as an oven, and a
   dog lying down can come out as a cat. At 320×240 it misses small or still animals entirely.
 - **Removed scenarios:** those that needed the removed features (dice, eight ball, face

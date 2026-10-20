@@ -19,6 +19,8 @@ use crate::config::LifeConfig;
 const ARRIVAL_FRESH: Duration = Duration::from_secs(60);
 /// Being picked up or shaken not reacted to within this long is old news.
 const HANDLED_FRESH: Duration = Duration::from_secs(20);
+/// A sound not reacted to within this long is old news.
+const HEARD_FRESH: Duration = Duration::from_secs(30);
 /// A phone rings for about this long.
 const CALL_FRESH: Duration = Duration::from_secs(25);
 /// A battery warning not passed on within this long waits for the next one.
@@ -55,6 +57,8 @@ pub enum Nudge {
     Arrived { name: String },
     /// Something worth noticing (a cat, a dog...) came into view.
     Noticed { what: String },
+    /// A sound worth noticing (a bark, the doorbell, an alarm...).
+    Heard { what: String },
     /// Nobody has said anything to the robot for a while.
     Idle {
         quiet_for_minutes: u64,
@@ -71,6 +75,8 @@ struct State {
     noticed: VecDeque<(String, Instant)>,
     handled: Option<(String, Instant)>,
     call: Option<(String, Instant)>,
+    /// What, whether it is urgent (an alarm), when.
+    heard: Option<(String, bool, Instant)>,
     battery: Option<(u32, bool, Instant)>,
     session_started: Instant,
     rng: u64,
@@ -95,6 +101,7 @@ impl Life {
             noticed: VecDeque::new(),
             handled: None,
             call: None,
+            heard: None,
             battery: None,
             session_started: Instant::now(),
             rng: seed,
@@ -126,6 +133,7 @@ impl Life {
         s.noticed.clear();
         s.handled = None;
         s.call = None;
+        s.heard.take_if(|(_, urgent, _)| !*urgent);
         s.battery = None;
     }
 
@@ -170,6 +178,14 @@ impl Life {
         self.state.lock().unwrap().handled = Some((how.to_string(), Instant::now()));
     }
 
+    /// A sound worth noticing was heard. `urgent` ones (alarms) come through focus mode.
+    pub fn heard(&self, what: &str, urgent: bool) {
+        if !self.cfg.enabled || (!urgent && self.focused().is_some()) {
+            return;
+        }
+        self.state.lock().unwrap().heard = Some((what.to_string(), urgent, Instant::now()));
+    }
+
     /// The paired phone is ringing.
     pub fn call(&self, from: &str) {
         if !self.cfg.enabled || self.focused().is_some() {
@@ -198,10 +214,21 @@ impl Life {
 
     /// A nudge that is due now. `anyone_in_view`: a face (known or not) is in front of the camera.
     pub fn poll(&self, anyone_in_view: bool) -> Option<Nudge> {
-        if !self.cfg.enabled || self.focused().is_some() {
+        if !self.cfg.enabled {
             return None;
         }
+        let focused = self.focused().is_some();
         let mut s = self.state.lock().unwrap();
+        s.heard.take_if(|(_, _, at)| at.elapsed() >= HEARD_FRESH);
+        // Alarms come through focus mode.
+        if let Some((what, _, _)) = s.heard.take_if(|(_, urgent, _)| *urgent || !focused) {
+            s.last_activity = Instant::now();
+            reschedule(&self.cfg, &mut s);
+            return Some(Nudge::Heard { what });
+        }
+        if focused {
+            return None;
+        }
         if let Some((from, at)) = s.call.take()
             && at.elapsed() < CALL_FRESH
         {

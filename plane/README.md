@@ -158,6 +158,19 @@ hash.
 - `status`, `who_is_here` and the live view (dashed blue boxes) show what else it detects. These
   are not passed to the built-in brains, which see the picture instead.
 
+## Sound recognition
+
+With `[sounds] enabled` (the default), the microphone stream goes through YAMNet (Google,
+Apache-2.0; AudioSet's 521 classes) twice a second, the last 0.96 s each time, in about 3 ms.
+The model is an ONNX conversion of the original (16 MB, weights unchanged), downloaded into
+`<data_dir>/models` on first use and checked against a pinned hash. Windows whose loudest moment
+stays below about -42 dBFS are skipped as room noise; louder ones are levelled first, since the
+robot's microphone is quiet. Nothing is heard while the robot speaks (the mic is muted then).
+
+When one of the `notice` sounds scores at least `threshold`, `hear` returns a `heard` nudge, at
+most once per sound per `cooldown_secs`. Alarms (smoke, fire) come through focus mode. `status`
+lists the most recent sounds of any kind, with scores, for tuning.
+
 ## Listening
 
 With `[stt] enabled` (the default), the plane transcribes the robot's microphone while it is in AI
@@ -207,6 +220,7 @@ default_tools_approval_mode = "approve"
 **Nudges.** `hear` and `reply` also return nudges, so the agent can act on its own:
 
 - `call`: the paired phone is ringing (with the caller's name);
+- `heard`: a sound worth noticing (see [Sound recognition](#sound-recognition));
 - `reminder`: a reminder it set with `remind` is due (in focus mode too; with no agent to pass
   it on within a minute, the robot says it itself);
 - `handled`: someone picked it up, put it down, shook it or dropped it;
@@ -296,6 +310,13 @@ enabled = true           # detect objects in AI mode (downloads a 36 MB model on
 notice = ["cat", "dog", "bird"]   # COCO classes whose arrival nudges the agent
 threshold = 0.4          # detection confidence needed
 notice_cooldown_secs = 600
+
+[sounds]
+enabled = true           # recognise sounds in AI mode (downloads a 16 MB model on first use)
+notice = ["Bark", "Doorbell", "Ding-dong", "Knock", "Beep, bleep", "Smoke detector, smoke alarm",
+          "Fire alarm", "Alarm", "Baby cry, infant cry", "Shatter", "Meow"]   # AudioSet names
+threshold = 0.3
+cooldown_secs = 300
 
 [stt]
 enabled = true           # transcribe the microphone in AI mode

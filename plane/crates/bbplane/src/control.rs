@@ -40,6 +40,7 @@ pub struct Robot {
     pub hub: Arc<Hub>,
     pub faces: Arc<crate::face::Faces>,
     pub objects: Arc<crate::objects::Objects>,
+    pub sounds: Arc<crate::sounds::Sounds>,
     pub reminders: Arc<crate::reminders::Reminders>,
     pub memory: Arc<crate::memory::Memory>,
     pub ears: Arc<crate::ears::Ears>,
@@ -94,6 +95,7 @@ impl Robot {
         Robot {
             faces: Arc::new(crate::face::Faces::new(hub.clone())),
             objects: Arc::new(crate::objects::Objects::new(hub.clone())),
+            sounds: Arc::new(crate::sounds::Sounds::new(&hub)),
             reminders: Arc::new(crate::reminders::Reminders::load(&hub.config.data_dir())),
             memory: Arc::new(crate::memory::Memory::load(&hub.config.data_dir())),
             ears: Arc::new(crate::ears::Ears::new(hub.clone())),
@@ -688,6 +690,7 @@ goodbye). Say bye and keep listening."
             "latest_frame": latest,
             "faces": self.faces.status_json(),
             "objects": self.objects.status_json(),
+            "sounds": self.sounds.status_json(),
             "focus_minutes_left": self.life.focused().map(|d| d.as_secs().div_ceil(60)),
             "agent": {
                 "enabled": self.hub.config.agent.enabled,
@@ -791,7 +794,10 @@ impl Robot {
                     .map(|s| s.name.clone().unwrap_or_else(|| "someone".into()))
                     .collect();
                 info["in_view"] = names.clone().into();
-                if matches!(n, crate::life::Nudge::Noticed { .. }) {
+                if matches!(
+                    n,
+                    crate::life::Nudge::Noticed { .. } | crate::life::Nudge::Heard { .. }
+                ) {
                     info["pets"] = self.hub.config.life.pets.clone().into();
                 }
                 if !owner.is_empty() {
@@ -800,7 +806,10 @@ impl Robot {
                 }
                 // Nudges are about the surroundings: show them. Being handled is not, and a
                 // picture slows the reaction down by seconds.
-                let image = if matches!(n, crate::life::Nudge::Handled { .. }) {
+                let image = if matches!(
+                    n,
+                    crate::life::Nudge::Handled { .. } | crate::life::Nudge::Heard { .. }
+                ) {
                     None
                 } else {
                     frame().await

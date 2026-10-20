@@ -29,6 +29,7 @@ pub struct Config {
     pub safety: SafetyConfig,
     pub faces: FacesConfig,
     pub objects: ObjectsConfig,
+    pub sounds: SoundsConfig,
     pub stt: SttConfig,
     pub life: LifeConfig,
     pub agent: AgentConfig,
@@ -122,6 +123,7 @@ impl Default for Config {
             safety: SafetyConfig::default(),
             faces: FacesConfig::default(),
             objects: ObjectsConfig::default(),
+            sounds: SoundsConfig::default(),
             stt: SttConfig::default(),
             life: LifeConfig::default(),
             agent: AgentConfig::default(),
@@ -192,6 +194,45 @@ impl Default for ObjectsConfig {
             notice: ["cat", "dog", "bird"].map(String::from).to_vec(),
             threshold: 0.4,
             notice_cooldown_secs: 600,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SoundsConfig {
+    /// Recognise sounds in AI mode (runs on this machine; the model, about 16 MB, is downloaded
+    /// on first use).
+    pub enabled: bool,
+    /// Sounds (AudioSet class names) that nudge the agent. Alarms come through focus mode too.
+    pub notice: Vec<String>,
+    /// Score (0..1) needed to count a sound as heard.
+    pub threshold: f32,
+    /// Notice the same sound at most this often.
+    pub cooldown_secs: u64,
+}
+
+impl Default for SoundsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            notice: [
+                "Bark",
+                "Doorbell",
+                "Ding-dong",
+                "Knock",
+                "Beep, bleep",
+                "Smoke detector, smoke alarm",
+                "Fire alarm",
+                "Alarm",
+                "Baby cry, infant cry",
+                "Shatter",
+                "Meow",
+            ]
+            .map(String::from)
+            .to_vec(),
+            threshold: 0.3,
+            cooldown_secs: 300,
         }
     }
 }

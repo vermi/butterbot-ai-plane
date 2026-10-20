@@ -432,6 +432,38 @@ pub fn describe(ev: &crate::control::AgentEvent) -> Option<(String, Option<Bytes
                     };
                     format!("[{what}. In view: {in_view}. React out loud, briefly.]")
                 }
+                Some("heard") => {
+                    let what = info["what"].as_str().unwrap_or("something");
+                    let pets = info["pets"]
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| v.as_str())
+                                .collect::<Vec<_>>()
+                                .join("; ")
+                        })
+                        .unwrap_or_default();
+                    match what {
+                        w if crate::sounds::ALARMS.contains(&w) => {
+                            format!("[You hear an alarm ({w})! Tell your person right away.]")
+                        }
+                        "Doorbell" | "Ding-dong" | "Knock" => format!(
+                            "[You heard {} Someone may be at the door: tell your person, briefly.]",
+                            if what == "Knock" {
+                                "a knock."
+                            } else {
+                                "the doorbell."
+                            }
+                        ),
+                        "Bark" | "Meow" if !pets.is_empty() => format!(
+                            "[You just heard a {}. Pets here: {pets}. React if you like, or call stay_quiet.]",
+                            what.to_lowercase()
+                        ),
+                        _ => format!(
+                            "[You just heard: {what}. React if you like, or call stay_quiet.]"
+                        ),
+                    }
+                }
                 Some("noticed") => {
                     let what = info["what"].as_str().unwrap_or("something");
                     // At the robot's resolution a dog can come out as a cat.
