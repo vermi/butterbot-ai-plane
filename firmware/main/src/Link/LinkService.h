@@ -175,6 +175,9 @@ private:
 	std::atomic_uint32_t minFree = 34 * 1024;
 	std::atomic_uint32_t minBlock = 16 * 1024;
 	std::atomic_bool tuneChanged = false;
+	// Channel the network was last joined on, so the next join can skip the full scan.
+	std::atomic<uint8_t> lastChannel = 0;
+	std::atomic_bool channelChanged = false;
 	std::atomic_bool wanted = false;
 	std::atomic<uint64_t> wakeUntil = 0;
 	std::atomic_uint32_t downCount = 0;

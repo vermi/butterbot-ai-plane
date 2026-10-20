@@ -242,7 +242,7 @@ int WiFi::getConnectionRSSI() const noexcept {
     return rssi;
 }
 
-void WiFi::setTargetParameters(const std::string& ssid, const std::string& password) const noexcept {
+void WiFi::setTargetParameters(const std::string& ssid, const std::string& password, uint8_t channel) const noexcept {
     if(type != WiFiType::Station) {
         return;
     }
@@ -254,9 +254,16 @@ void WiFi::setTargetParameters(const std::string& ssid, const std::string& passw
     strncpy((char*) cfg_wifi.sta.password, password.c_str(), sizeof(cfg_wifi.sta.password));
 
     if(ipMode == WiFiIPMode::DHCP){
-        // Home networks: find the strongest AP on any channel, accept WPA2/WPA3.
-        cfg_wifi.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
-        cfg_wifi.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+        // Home networks: find the strongest AP on any channel, accept WPA2/WPA3. A full scan takes
+        // a couple of seconds; with a known channel, start there and take the first match (the
+        // driver still moves on to the other channels if the network is not found there).
+        if(channel >= 1 && channel <= 14){
+            cfg_wifi.sta.scan_method = WIFI_FAST_SCAN;
+            cfg_wifi.sta.channel = channel;
+        }else{
+            cfg_wifi.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+            cfg_wifi.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+        }
         cfg_wifi.sta.threshold.authmode = password.empty() ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA2_PSK;
         cfg_wifi.sta.pmf_cfg.capable = true;
     }

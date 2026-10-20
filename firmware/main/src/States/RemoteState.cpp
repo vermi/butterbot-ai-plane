@@ -65,9 +65,14 @@ RemoteState::RemoteState(BBStateMachine* sm) : State(sm){
 	base->requestProximityState();
 	link->reportMode("remote");
 
+	// Joining Wi-Fi takes a few seconds; say so right away. Wait for it: speech allocates from
+	// the same internal RAM Wi-Fi start-up needs, and a failed allocation reboots (and so powers
+	// off) the robot.
+	speak("A I mode on.", true);
+
 	// Wi-Fi only ever runs in this state (like RC mode): autonomy is off, so its internal RAM fits.
-	// The camera stays as initialised at boot (128x128 RGB565, like the stock RC feed uses it);
-	// re-initialising it with Wi-Fi running is what produced corrupted frames at larger sizes.
+	// The camera stays as initialised at boot (128x128 RGB565) until the plane asks for a stream;
+	// larger sizes need a slower sensor clock than the board's 27 MHz (the plane sends one).
 	// Wi-Fi and BLE share one radio. Use the stock low-power BLE mode (slow advertising and
 	// connection intervals, ConManager::goLowPow) while the Wi-Fi link is in use; the BLE wake
 	// still works, just with more latency.
@@ -149,8 +154,13 @@ void RemoteState::tick(float deltaTime){
 	}
 
 	if(abortRequested || (linkDeadline != 0 && millis() > linkDeadline)){
-		if(!abortRequested){
+		// Without this the robot just went back to idle, and nobody could tell a short press had
+		// done anything at all.
+		if(abortRequested){
+			speak("A I mode could not start.", true);
+		}else{
 			CMF_LOG(RemoteState, LogLevel::Warning, "no plane connection, leaving remote mode");
+			speak(connectedOnce ? "Lost the computer." : "I can't reach the computer.", true);
 		}
 		sm->transitionTo<IdleState>();
 		return;
@@ -189,6 +199,7 @@ void RemoteState::onRequest(LinkRequest req){
 
 		case T::ExitRemote:
 			link->ack(req.id);
+			speak("A I mode off.", true);
 			sm->transitionTo<IdleState>();
 			break;
 
@@ -365,6 +376,7 @@ void RemoteState::onConnection(bool online){
 	if(online){
 		linkDeadline = 0;
 		link->radioConfirmed();
+		connectedOnce = true;
 		// BaseBoard calls are made from this thread only (they abort on I2C errors).
 		base->requestProximityState();
 		return;
@@ -389,9 +401,23 @@ void RemoteState::onButton(int button, ISRButtonInput::Action action){
 	// Short press hands control back to the robot; long presses are the shutdown gesture.
 	if(buttonPressedAt != 0 && millis() - buttonPressedAt <= ShortPressMs){
 		base->stopMotors();
+		speak("A I mode off.", true);
 		sm->transitionTo<IdleState>();
 	}
 	buttonPressedAt = 0;
+}
+
+void RemoteState::speak(const char* text, bool wait){
+	if(audio == nullptr || !ServiceLocator::SpeechAudioGenInstance){
+		return;
+	}
+	if(session){
+		session->speakerAbort();
+	}
+	audio->play(ServiceLocator::SpeechAudioGenInstance.get(), std::make_unique<SpeechAudioSource>(SpeechGen::InputType::Text, text));
+	if(wait){
+		audio->waitEnd(pdMS_TO_TICKS(5000));
+	}
 }
 
 void RemoteState::onAudioStatus(bool playing){

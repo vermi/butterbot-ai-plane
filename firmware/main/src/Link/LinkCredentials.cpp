@@ -105,3 +105,26 @@ bool LinkCredentials::storeTune(const LinkTuneData& data){
 	nvs_close(handle);
 	return err == ESP_OK;
 }
+
+static constexpr const char* ChannelKey = "channel";
+
+uint8_t LinkCredentials::loadChannel(){
+	nvs_handle_t handle;
+	if(nvs_open(Namespace, NVS_READONLY, &handle) != ESP_OK){
+		return 0;
+	}
+	uint8_t value = 0;
+	nvs_get_u8(handle, ChannelKey, &value);
+	nvs_close(handle);
+	return value;
+}
+
+void LinkCredentials::storeChannel(uint8_t channel){
+	nvs_handle_t handle;
+	if(nvs_open(Namespace, NVS_READWRITE, &handle) != ESP_OK){
+		return;
+	}
+	nvs_set_u8(handle, ChannelKey, channel);
+	nvs_commit(handle);
+	nvs_close(handle);
+}

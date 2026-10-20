@@ -46,15 +46,18 @@ private:
 
 	// Leave remote mode if the plane is not connected by then (0 = connected).
 	uint64_t linkDeadline = 0;
-	static constexpr uint64_t InitialConnectMs = 60000; // join Wi-Fi + DHCP + dial
+	static constexpr uint64_t InitialConnectMs = 30000; // join Wi-Fi + DHCP + dial (normally 3-10 s)
 	static constexpr uint64_t LinkLossGraceMs = 15000;
 
 	bool abortRequested = false; // transitions cannot be requested from the constructor
+	bool connectedOnce = false;  // the plane connected at least once in this session
 	bool statusLedTouched = false;
 	float savedGain = 1.0f;
 
 	void onRequest(LinkRequest req);
 	void onConnection(bool online);
+	/** Say a short status phrase in the robot's voice; `wait` blocks until it has been said. */
+	void speak(const char* text, bool wait);
 	void onRadioIP(uint32_t ip);
 	void onRadioDisconnected(uint8_t reason, int8_t rssi);
 	void onProximityChange(ProxSensor sensor, bool covered);

@@ -22,6 +22,10 @@ public:
 
 	static bool loadTune(LinkTuneData& out);
 	static bool storeTune(const LinkTuneData& data);
+
+	/** Wi-Fi channel the network was last joined on (0: unknown). */
+	static uint8_t loadChannel();
+	static void storeChannel(uint8_t channel);
 };
 
 #endif //BUTTERBOT_FIRMWARE_LINKCREDENTIALS_H

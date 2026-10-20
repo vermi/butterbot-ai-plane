@@ -4,6 +4,7 @@
 #include <cJSON.h>
 #include <esp_heap_caps.h>
 #include <esp_mac.h>
+#include <esp_wifi.h>
 #include <lwip/sockets.h>
 #include <lwip/netdb.h>
 #include <Periphery/WiFi.h>
@@ -127,6 +128,8 @@ LinkService::LinkService() : AsyncEntity(1, 6 * 1024, 6, 0, /*internalStack=*/fa
 		LinkCredentials::setWiFiStarting(false);
 		CMF_LOG(LinkService, LogLevel::Error, "the previous Wi-Fi start crashed the firmware");
 	}
+
+	lastChannel = LinkCredentials::loadChannel();
 
 	LinkTuneData tuneData{};
 	if(LinkCredentials::loadTune(tuneData)){
@@ -401,8 +404,16 @@ void LinkService::persist(){
 		CMF_LOG(LinkService, LogLevel::Info, "Wi-Fi RAM thresholds now free >= %lu, block >= %lu", (unsigned long) data.minFree, (unsigned long) data.minBlock);
 	}
 
+	if(channelChanged){
+		channelChanged = false;
+		LinkCredentials::storeChannel(lastChannel);
+	}
+
 	if(configChanged){
 		configChanged = false;
+		// Possibly another network: find it with a full scan.
+		lastChannel = 0;
+		LinkCredentials::storeChannel(0);
 		LinkConfigData cfg;
 		{
 			std::lock_guard lock(configMutex);
@@ -465,7 +476,7 @@ bool LinkService::startRadio(){
 	CMF_LOG(LinkService, LogLevel::Warning, "Wi-Fi started: internal free %u, largest block %u",
 			(unsigned) heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA),
 			(unsigned) heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
-	wifi->setTargetParameters(cfg.SSID, cfg.password);
+	wifi->setTargetParameters(cfg.SSID, cfg.password, lastChannel);
 	wifi->connect();
 	radioUp = true;
 	CMF_LOG(LinkService, LogLevel::Info, "joining Wi-Fi \"%s\"", cfg.SSID);
@@ -498,6 +509,11 @@ void LinkService::onGotIP(uint32_t ip){
 	gotIP = ip != 0;
 	if(gotIP){
 		CMF_LOG(LinkService, LogLevel::Info, "got IP " IPSTR, IP2STR(reinterpret_cast<esp_ip4_addr_t*>(&ip)));
+		wifi_ap_record_t ap{};
+		if(esp_wifi_sta_get_ap_info(&ap) == ESP_OK && ap.primary != lastChannel){
+			lastChannel = ap.primary;
+			channelChanged = true; // stored by persist() on the state machine thread
+		}
 	}
 }
 
