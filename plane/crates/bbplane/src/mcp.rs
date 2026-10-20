@@ -211,7 +211,8 @@ pub struct LedArgs {
     pub target: LedTarget,
     /// on, off, blink or breathe.
     pub mode: LedMode,
-    /// Brightness 0.0..1.0 (default 1.0).
+    /// Brightness 0.0..1.0 (default 1.0). The status LED has three levels: off (0), dim (below
+    /// 0.5) and bright.
     pub level: Option<f32>,
 }
 
@@ -566,7 +567,9 @@ by hand."
         ok_json(json!({ "events": evs, "next_since": last }))
     }
 
-    #[tool(description = "Control an LED.")]
+    #[tool(
+        description = "Control an LED. The status LED shows the robot's state by itself (listening, thinking, focus...); what you set stays until that state changes."
+    )]
     async fn led(&self, Parameters(a): Parameters<LedArgs>) -> Result<CallToolResult, McpError> {
         ok_json(tryt!(
             self.robot

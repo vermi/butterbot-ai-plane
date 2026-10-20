@@ -6,6 +6,7 @@
 #include "Link/LinkService.h"
 #include "Services/BaseBoard.h"
 #include "Services/ISRButtonInput.h"
+#include "Services/LEDRhythm.h"
 
 /**
  * AI mode: the laptop control plane drives the robot over the link. Autonomy is off.
@@ -51,8 +52,16 @@ private:
 
 	bool abortRequested = false; // transitions cannot be requested from the constructor
 	bool connectedOnce = false;  // the plane connected at least once in this session
-	bool statusLedTouched = false;
 	float savedGain = 1.0f;
+
+	// The status LED (see showLed()): the plane picks the rhythm; the robot shows its own while it
+	// talks and while the plane is out of reach.
+	LEDRhythm planeLed;
+	LEDRhythm shownLed;
+	bool ledShown = false;
+	bool speaking = false;
+	uint64_t speakingUntil = 0; // keep the talking light a moment after the audio stops
+	uint64_t enteredAt = 0;
 
 	void onRequest(LinkRequest req);
 	void onConnection(bool online);
@@ -69,6 +78,7 @@ private:
 	void stopDriving(const char* reason);
 	const char* driveRefusal(bool forward);
 	void led(const LinkRequest& req);
+	void showLed();
 	void startScenario(const LinkRequest& req);
 	void finishScenario(bool aborted = false);
 	void irList(uint32_t id);

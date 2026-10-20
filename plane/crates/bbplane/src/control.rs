@@ -42,6 +42,7 @@ pub struct Robot {
     pub ears: Arc<crate::ears::Ears>,
     pub life: Arc<crate::life::Life>,
     pub agent: Arc<crate::agent::AgentState>,
+    pub light: Arc<crate::light::Light>,
     /// Serialises wake attempts: many tool calls / clicks share one BLE wake.
     wake_lock: Arc<Mutex<()>>,
     speaker: Arc<Mutex<Option<CancellationToken>>>,
@@ -89,6 +90,7 @@ impl Robot {
             ears: Arc::new(crate::ears::Ears::new(hub.clone())),
             life: Arc::new(crate::life::Life::new(hub.config.life.clone())),
             agent: Default::default(),
+            light: Default::default(),
             streams: Arc::new(Mutex::new(Streams::defaults(&hub.config))),
             hub,
             wake_lock: Default::default(),
@@ -656,6 +658,7 @@ impl Robot {
         include_image: Option<bool>,
     ) -> Result<AgentEvent> {
         use tokio::time::Instant;
+        let _waiting = self.light.waiting();
         self.ears.start_listening().await?;
         let deadline = Instant::now() + timeout;
         let owner = self.life.owner().to_string();
@@ -677,6 +680,7 @@ impl Robot {
                         .into();
                 }
                 let image = if want_image { frame().await } else { None };
+                self.light.thinking();
                 return Ok(AgentEvent::Command { info, image });
             }
             if self.life.session_over() {

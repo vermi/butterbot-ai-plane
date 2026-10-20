@@ -285,6 +285,15 @@ impl Ears {
             && self.open_until.lock().unwrap().is_some_and(|t| now < t)
     }
 
+    /// Whether speech now counts as a command without the wake word. Unlike `is_open` it does not
+    /// use up a call by name (for the status light).
+    pub fn window_open(&self) -> bool {
+        let now = Instant::now();
+        self.name_until.lock().unwrap().is_some_and(|t| now < t)
+            || (self.attentive.load(Ordering::Relaxed)
+                && self.open_until.lock().unwrap().is_some_and(|t| now < t))
+    }
+
     /// The robot heard its name alone: what is said next (within `d`) is the command.
     fn called_by_name(&self, d: Duration) {
         *self.name_until.lock().unwrap() = Some(Instant::now() + d);
@@ -594,19 +603,7 @@ fn handle_utterance(ears: Arc<Ears>, robot: Robot, utterance: Vec<i16>) {
             )
             .await;
         ears.push(c);
-        // Show it was understood while the agent thinks: fast blink, the stock "listening"
-        // signal. The robot's own talking light (solid, then its idle slow blink) takes
-        // over when the answer is spoken.
-        if let Err(e) = robot
-            .led(
-                bbproto::ctrl::LedTarget::Status,
-                bbproto::ctrl::LedMode::Blink,
-                1.0,
-            )
-            .await
-        {
-            tracing::debug!("thinking light: {e:#}");
-        }
+        robot.light.thinking();
     });
 }
 

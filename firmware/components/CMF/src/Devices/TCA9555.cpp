@@ -50,12 +50,11 @@ void TCA9555::pinMode(uint8_t pin, TCA9555::PinMode mode){
 	const uint8_t mask = TCA_MASK(pin);
 	const uint8_t regDir = TCA_REG(REG_DIR, pin);
 	uint8_t& intRegDir = regs.dir[it];
-
-	if(mode == PinMode::OUT){
-		intRegDir = intRegDir & ~mask;
-	}else{
-		intRegDir = intRegDir | mask;
+	const uint8_t dir = mode == PinMode::OUT ? (intRegDir & ~mask) : (intRegDir | mask);
+	if(dir == intRegDir){
+		return; // reset() wrote the cached directions, so they match the chip
 	}
+	intRegDir = dir;
 
 	ESP_ERROR_CHECK(dev->writeRegister(regDir, intRegDir));
 }

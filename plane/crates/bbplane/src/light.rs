@@ -1,0 +1,174 @@
+//! The status LED in AI mode: what the robot is up to, at a glance. The robot itself shows when it
+//! is talking (bright), connecting and when it cannot reach the plane; the plane picks the rest
+//! from the agent, the ears and focus mode. The LED has three levels: off, dim and bright.
+
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
+
+use bbproto::ctrl::{Rhythm, ToRobot};
+
+use crate::control::Robot;
+
+/// An agent that has not asked for the next event for this long is gone (crashed or stopped).
+const AGENT_GONE: Duration = Duration::from_secs(60);
+/// Stop showing "thinking" if the agent never comes back for the next event.
+const THINKING_MAX: Duration = Duration::from_secs(90);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum State {
+    /// Waiting for its name: steady dim.
+    Listening,
+    /// In a conversation, no name needed: bright, with a short dim wink every 2 s.
+    Attentive,
+    /// Heard a command, the agent is working on it: quick bright flicker over dim.
+    Thinking,
+    /// Focus mode: off, with a soft dim glow every 6 s.
+    Focus,
+    /// AI mode without an agent (paused, not running): two dim blips every 4 s.
+    NoBrain,
+}
+
+impl State {
+    pub fn rhythm(self) -> Rhythm {
+        let r = |on_ms, off_ms, count, period_ms, base, flash| Rhythm {
+            on_ms,
+            off_ms,
+            count,
+            period_ms,
+            base,
+            flash,
+        };
+        match self {
+            State::Listening => Rhythm::steady(Rhythm::DIM),
+            State::Attentive => r(150, 0, 1, 2000, Rhythm::BRIGHT, Rhythm::DIM),
+            State::Thinking => r(100, 0, 1, 200, Rhythm::DIM, Rhythm::BRIGHT),
+            State::Focus => r(1500, 0, 1, 6000, Rhythm::OFF, Rhythm::DIM),
+            State::NoBrain => r(150, 200, 2, 4000, Rhythm::OFF, Rhythm::DIM),
+        }
+    }
+}
+
+/// What the light needs to know about the agent.
+#[derive(Default)]
+pub struct Light {
+    /// A command is waiting for (or being worked on by) the agent since then.
+    thinking_since: Mutex<Option<Instant>>,
+    /// Agents waiting in `Robot::next_event` right now.
+    waiting: AtomicUsize,
+    /// When an agent last stopped waiting for an event.
+    last_seen: Mutex<Option<Instant>>,
+}
+
+impl Light {
+    /// Someone gave the agent a command.
+    pub fn thinking(&self) {
+        *self.thinking_since.lock().unwrap() = Some(Instant::now());
+    }
+
+    /// The agent is waiting for the next event (so it has finished the last one) until the guard
+    /// is dropped.
+    pub fn waiting(&self) -> Waiting<'_> {
+        self.waiting.fetch_add(1, Ordering::Relaxed);
+        *self.thinking_since.lock().unwrap() = None;
+        Waiting(self)
+    }
+
+    fn agent_present(&self) -> bool {
+        self.waiting.load(Ordering::Relaxed) > 0
+            || self
+                .last_seen
+                .lock()
+                .unwrap()
+                .is_some_and(|t| t.elapsed() < AGENT_GONE)
+    }
+
+    fn is_thinking(&self) -> bool {
+        self.thinking_since
+            .lock()
+            .unwrap()
+            .is_some_and(|t| t.elapsed() < THINKING_MAX)
+    }
+}
+
+pub struct Waiting<'a>(&'a Light);
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        self.0.waiting.fetch_sub(1, Ordering::Relaxed);
+        *self.0.last_seen.lock().unwrap() = Some(Instant::now());
+    }
+}
+
+/// What the light should show now.
+pub fn state(robot: &Robot) -> State {
+    let paused = robot.hub.config.agent.enabled && robot.agent.paused.load(Ordering::Relaxed);
+    if paused || !robot.light.agent_present() {
+        State::NoBrain
+    } else if robot.light.is_thinking() {
+        State::Thinking
+    } else if robot.life.focused().is_some() {
+        State::Focus
+    } else if robot.ears.window_open() {
+        State::Attentive
+    } else {
+        State::Listening
+    }
+}
+
+/// Keep the robot's status LED in step with `state`. Spawned once by `crate::start`.
+pub async fn run(robot: Robot) {
+    let mut shown: Option<State> = None;
+    let mut tick = tokio::time::interval(Duration::from_millis(150));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tick.tick().await;
+        // Sent again whenever the robot (re)enters AI mode: it starts from its own default.
+        if !robot.hub.is_connected().await || robot.mode().await.as_deref() != Some("remote") {
+            shown = None;
+            continue;
+        }
+        let s = state(&robot);
+        if shown == Some(s) {
+            continue;
+        }
+        match robot.hub.send(ToRobot::StatusLight(s.rhythm())).await {
+            Ok(()) => {
+                tracing::debug!("status light: {s:?}");
+                shown = Some(s);
+            }
+            Err(e) => tracing::debug!("status light: {e:#}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thinking_lasts_until_the_agent_waits_again() {
+        let l = Light::default();
+        assert!(!l.agent_present());
+        {
+            let _w = l.waiting();
+            assert!(l.agent_present());
+            l.thinking(); // a command arrived and was handed over
+        }
+        assert!(l.is_thinking());
+        assert!(l.agent_present()); // seen just now
+        let _w = l.waiting();
+        assert!(!l.is_thinking());
+    }
+
+    #[test]
+    fn states_look_different() {
+        use State::*;
+        let all = [Listening, Attentive, Thinking, Focus, NoBrain];
+        for (i, a) in all.iter().enumerate() {
+            for b in &all[i + 1..] {
+                assert_ne!(a.rhythm(), b.rhythm(), "{a:?} and {b:?}");
+            }
+        }
+    }
+}

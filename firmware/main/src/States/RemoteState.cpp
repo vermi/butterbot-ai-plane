@@ -3,8 +3,6 @@
 #include <Devices/Camera.h>
 #include <Services/Audio/Audio.h>
 #include <Services/LED/LED.h>
-#include <Services/LED/LEDBlinkFunction.h>
-#include <Services/LED/LEDFadeFunction.h>
 #include <Services/Modules/ModuleService.h>
 #include <Services/Modules/ModuleDevices/RM_IRModule.h>
 #include <Services/Modules/ModuleDevices/RM_TempHumModule.h>
@@ -26,6 +24,17 @@
 
 DEFINE_LOG(RemoteState)
 
+namespace {
+	// Status LED rhythms the robot shows on its own; the plane picks the others (listening,
+	// thinking, focus...).
+	constexpr LEDRhythm Connecting{ 60, 0, 1, 1000, 0.0f, LEDRhythm::Bright };  // a short tick every second
+	constexpr LEDRhythm Trouble{ 80, 120, 3, 1600, 0.0f, LEDRhythm::Bright };   // three quick blinks, pause
+	constexpr LEDRhythm Online = LEDRhythm::steady(LEDRhythm::Dim);             // until the plane picks one
+	constexpr LEDRhythm Talking = LEDRhythm::steady(LEDRhythm::Bright);
+	constexpr uint64_t TroubleAfterMs = 12000; // still connecting after this long: show trouble
+	constexpr uint64_t TalkingHoldMs = 400;    // bridges the gaps between spoken sentences
+}
+
 RemoteState::RemoteState(BBStateMachine* sm) : State(sm){
 	const Application* app = Application::getApp();
 	link = app->getService<LinkService>();
@@ -42,6 +51,13 @@ RemoteState::RemoteState(BBStateMachine* sm) : State(sm){
 	if(LEDModuleControl* leds = app->getService<LEDModuleControl>()){
 		leds->turnLedOff();
 	}
+	// The status LED shows AI mode's states from here on, not the stock audio reactions.
+	if(ServiceLocator::LEDControlInstance){
+		ServiceLocator::LEDControlInstance->suspend(true);
+	}
+	enteredAt = millis();
+	planeLed = Online;
+	showLed();
 
 	session = new RemoteSession(link, app->getDevice<Camera>(), audio);
 
@@ -135,7 +151,8 @@ RemoteState::~RemoteState(){
 		// Volume set by the plane must not leak into the robot's own behaviour.
 		audio->setGain(savedGain);
 	}
-	if(statusLedTouched && ServiceLocator::LEDControlInstance){
+	if(ServiceLocator::LEDControlInstance){
+		ServiceLocator::LEDControlInstance->suspend(false);
 		ServiceLocator::LEDControlInstance->startIdle();
 	}
 }
@@ -160,6 +177,7 @@ void RemoteState::tick(float deltaTime){
 	if(link){
 		link->persist();
 	}
+	showLed();
 
 	if(abortRequested || (linkDeadline != 0 && millis() > linkDeadline)){
 		// Without this the robot just went back to idle, and nobody could tell a short press had
@@ -282,6 +300,10 @@ void RemoteState::onRequest(LinkRequest req){
 
 		case T::Led:
 			led(req);
+			break;
+
+		case T::StatusLight:
+			planeLed = req.rhythm;
 			break;
 
 		case T::Scenario:
@@ -425,6 +447,9 @@ void RemoteState::speak(const char* text, bool wait){
 	if(session){
 		session->speakerAbort();
 	}
+	// This may block the thread that updates the LED; light it now (the audio events take over).
+	speakingUntil = millis() + 3000;
+	showLed();
 	audio->play(ServiceLocator::SpeechAudioGenInstance.get(), std::make_unique<SpeechAudioSource>(SpeechGen::InputType::Text, text));
 	if(wait){
 		audio->waitEnd(pdMS_TO_TICKS(5000));
@@ -432,6 +457,10 @@ void RemoteState::speak(const char* text, bool wait){
 }
 
 void RemoteState::onAudioStatus(bool playing){
+	speaking = playing;
+	if(!playing){
+		speakingUntil = millis() + TalkingHoldMs;
+	}
 	link->sendJson(std::string("{\"t\":\"speaker\",\"playing\":") + (playing ? "true" : "false") +
 				   ",\"underruns\":" + std::to_string(session ? session->speakerUnderruns() : 0) + "}");
 }
@@ -458,27 +487,49 @@ void RemoteState::led(const LinkRequest& req){
 		return;
 	}
 
-	auto* ledService = app->getService<LED<MonoLED, RGBLED>>();
-	if(ledService == nullptr){
-		link->error(req.id, "LED service missing");
-		return;
-	}
-	statusLedTouched = true;
+	// The status LED is off, dim (level below 0.5) or bright; it cannot fade, so "breathe" swaps
+	// dim and the level slowly. Shown by showLed() unless the robot is talking or the plane is out
+	// of reach.
 	switch(req.ledMode){
 		case 1:
-			ledService->off(MonoLED::Status);
+			planeLed = LEDRhythm::steady(0.0f);
 			break;
 		case 2:
-			ledService->set(MonoLED::Status, std::make_unique<LEDBlinkFunction<MonoLED, float>>(req.level, 0.5f, 0.25f));
+			planeLed = { 250, 0, 1, 500, 0.0f, req.level };
 			break;
 		case 3:
-			ledService->set(MonoLED::Status, std::make_unique<LEDFadeFunction<MonoLED, float>>(0.0f, req.level, 2.0f, 0));
+			planeLed = { 1000, 0, 1, 2000, LEDRhythm::Dim, req.level };
 			break;
 		default:
-			ledService->on(MonoLED::Status, req.level);
+			planeLed = LEDRhythm::steady(req.level);
 			break;
 	}
 	link->ack(req.id);
+}
+
+void RemoteState::showLed(){
+	if(link == nullptr){
+		return;
+	}
+	LEDRhythm want = planeLed;
+	if(speaking || millis() < speakingUntil){
+		want = Talking;
+	}else if(!link->isOnline()){
+		want = connectedOnce || millis() - enteredAt > TroubleAfterMs ? Trouble : Connecting;
+	}
+	if(ledShown && want == shownLed){
+		return;
+	}
+	if(ServiceLocator::LEDControlInstance && ServiceLocator::LEDControlInstance->isBatteryCritical()){
+		return;
+	}
+	auto* ledService = Application::getApp()->getService<LED<MonoLED, RGBLED>>();
+	if(ledService == nullptr){
+		return;
+	}
+	ledService->set(MonoLED::Status, std::make_unique<LEDRhythmFunction<MonoLED>>(want));
+	shownLed = want;
+	ledShown = true;
 }
 
 void RemoteState::startScenario(const LinkRequest& req){
@@ -526,6 +577,7 @@ void RemoteState::finishScenario(bool aborted){
 	lastTickingState = Routine::TickingState::None;
 	base->stopMotors();
 	session->pause(false);
+	ledShown = false; // routines may have used the LED; show ours again
 	link->ack(scenarioId, aborted ? "{\"done\":false,\"aborted\":true}" : "{\"done\":true}");
 }
 

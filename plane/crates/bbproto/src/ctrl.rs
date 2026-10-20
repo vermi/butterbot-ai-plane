@@ -100,6 +100,36 @@ pub enum LedMode {
     Breathe,
 }
 
+/// A status LED rhythm. The status LED has three levels: off (0), dim (above 0, below 0.5) and
+/// bright. It sits at `base`, and every period starts with `count` flashes to `flash`, `on_ms`
+/// long and `off_ms` apart. `count` 0 is steady at `base`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Rhythm {
+    pub on_ms: u16,
+    pub off_ms: u16,
+    pub count: u8,
+    pub period_ms: u16,
+    pub base: f32,
+    pub flash: f32,
+}
+
+impl Rhythm {
+    pub const OFF: f32 = 0.0;
+    pub const DIM: f32 = 0.2;
+    pub const BRIGHT: f32 = 1.0;
+
+    pub const fn steady(level: f32) -> Rhythm {
+        Rhythm {
+            on_ms: 0,
+            off_ms: 0,
+            count: 0,
+            period_ms: 1000,
+            base: level,
+            flash: level,
+        }
+    }
+}
+
 fn yes() -> bool {
     true
 }
@@ -179,6 +209,9 @@ pub enum ToRobot {
         mode: LedMode,
         level: f32,
     },
+    /// What the status LED shows in AI mode, unless the robot is talking (bright) or cannot reach
+    /// the plane (it shows those itself). Not acknowledged.
+    StatusLight(Rhythm),
     /// Run a stock scenario routine (`BB::Action::Scenario` value + `ScenarioData.raw`).
     Scenario {
         id: u32,
@@ -223,7 +256,9 @@ impl ToRobot {
             | IrSend { id, .. }
             | Modules { id }
             | Safety { id, .. } => Some(*id),
-            Hello | Drive { .. } | Stop | SpkEnd | SpkAbort | Volume { .. } => None,
+            Hello | Drive { .. } | Stop | SpkEnd | SpkAbort | Volume { .. } | StatusLight(_) => {
+                None
+            }
         }
     }
 }
@@ -368,6 +403,20 @@ mod tests {
             quality: 10,
         };
         assert_eq!(serde_json::to_value(&m).unwrap()["res"], "r128");
+        let m = ToRobot::StatusLight(Rhythm {
+            on_ms: 100,
+            off_ms: 0,
+            count: 1,
+            period_ms: 200,
+            base: 0.25,
+            flash: 1.0,
+        });
+        let v = serde_json::to_value(&m).unwrap();
+        assert_eq!(
+            v,
+            json!({"t":"status_light","on_ms":100,"off_ms":0,"count":1,"period_ms":200,"base":0.25,"flash":1.0})
+        );
+        assert_eq!(serde_json::from_value::<ToRobot>(v).unwrap(), m);
     }
 
     #[test]

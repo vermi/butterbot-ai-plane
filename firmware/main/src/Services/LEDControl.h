@@ -21,6 +21,9 @@ public:
 	void stopPlay();
 	void startListen();
 	void stopListen();
+	/** While suspended (AI mode owns the LED) audio and listening changes leave it alone. */
+	void suspend(bool value);
+	bool isBatteryCritical() const{ return pattern == Pattern::BattCritical; }
 
 private:
 	enum class Pattern : uint8_t {
@@ -37,6 +40,7 @@ private:
 	float blinkOffTime = 0.0f;
 	bool playing = false;
 	bool listening = false;
+	bool suspended = false;
 	std::mutex stateMutex;
 
 	static constexpr uint32_t TickIntervalMs = 10;

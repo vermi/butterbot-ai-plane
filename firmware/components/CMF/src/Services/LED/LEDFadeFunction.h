@@ -61,7 +61,7 @@ private:
 	uint32_t elapsedCount = 0;
 	float startDelay = 0;
 	bool delayCleared = false;
-	float timeCounter;
+	float timeCounter = 0;
 };
 
 

@@ -100,6 +100,11 @@ void LEDControl::stopListen(){
 	applyState();
 }
 
+void LEDControl::suspend(bool value){
+	std::lock_guard lock(stateMutex);
+	suspended = value;
+}
+
 void LEDControl::setSolidOn(){
 	pattern = Pattern::On;
 	setLedState(true);
@@ -132,6 +137,10 @@ void LEDControl::setLedState(bool on) const{
 }
 
 void LEDControl::applyState(){
+	if(suspended){
+		return;
+	}
+
 	if(listening){
 		setBlink(FastBlinkOnTime, FastBlinkOffTime);
 		return;

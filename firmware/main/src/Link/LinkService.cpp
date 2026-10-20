@@ -77,6 +77,7 @@ namespace {
 		{ "snapshot", LinkRequest::Type::Snapshot },
 		{ "mic", LinkRequest::Type::Mic },
 		{ "led", LinkRequest::Type::Led },
+		{ "status_light", LinkRequest::Type::StatusLight },
 		{ "scenario", LinkRequest::Type::Scenario },
 		{ "ir_list", LinkRequest::Type::IrList },
 		{ "ir_send", LinkRequest::Type::IrSend },
@@ -772,6 +773,16 @@ void LinkService::handleCtrl(const char* json, size_t len){
 	}
 	if(const char* m = str(root, "mode")){
 		req.ledMode = !strcmp(m, "off") ? 1 : !strcmp(m, "blink") ? 2 : !strcmp(m, "breathe") ? 3 : 0;
+	}
+	if(req.type == T::StatusLight){
+		req.rhythm = LEDRhythm{
+			(uint16_t) std::clamp<double>(num(root, "on_ms", 0), 0, 5000),
+			(uint16_t) std::clamp<double>(num(root, "off_ms", 0), 0, 5000),
+			(uint8_t) std::clamp<double>(num(root, "count", 0), 0, 5),
+			(uint16_t) std::clamp<double>(num(root, "period_ms", 1000), 0, 60000),
+			(float) std::clamp<double>(num(root, "base", 0), 0, 1),
+			(float) std::clamp<double>(num(root, "flash", 1), 0, 1),
+		}.sane();
 	}
 	if(const char* text = str(root, "text")){
 		req.text = text;

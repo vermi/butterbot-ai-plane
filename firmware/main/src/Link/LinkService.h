@@ -19,6 +19,7 @@
 #include "Thread/Threaded.h"
 #include "LinkProto.h"
 #include "Services/BaseBoard.h"
+#include "Services/LEDRhythm.h"
 #include "Services/MotionService.h"
 #include "Services/ISRButtonInput.h"
 #include "Battery/Battery.h"
@@ -30,7 +31,7 @@
 struct LinkRequest {
 	enum class Type : uint8_t {
 		EnterRemote, ExitRemote, Drive, Stop, Say, SpkBegin, SpkEnd, SpkAbort, Volume,
-		Camera, Snapshot, Mic, Led, Scenario, IrList, IrSend, Modules, Safety
+		Camera, Snapshot, Mic, Led, StatusLight, Scenario, IrList, IrSend, Modules, Safety
 	} type = Type::Stop;
 
 	uint32_t id = 0;
@@ -54,6 +55,7 @@ struct LinkRequest {
 	int8_t psramDma = -1;
 	uint8_t ledTarget = 0; // 0 status, 1 module
 	uint8_t ledMode = 0;   // 0 on, 1 off, 2 blink, 3 breathe
+	LEDRhythm rhythm;      // StatusLight
 	uint32_t scenario = 0;
 	uint8_t arg = 0;
 	uint8_t index = 0;
