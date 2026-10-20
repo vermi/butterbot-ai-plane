@@ -399,6 +399,7 @@ impl Hub {
     }
 
     async fn handle_mic(&self, c: MicChunk) {
+        // The firmware high-pass filters the microphone (MicInput::getMono).
         {
             let mut s = self.status.lock().await;
             s.mic_chunks += 1;

@@ -25,7 +25,12 @@ driving forward when something is in front, and reports `drive_stopped` events.
 - Using a control tool switches the robot into AI mode (its own autonomy pauses). \
 Call `exit_ai_mode` to give it back.
 - `look` returns what the camera sees now (320x240 live frame); `snapshot` takes a 640x480 still.
-- `listen` returns microphone audio as WAV plus loudness stats.
+- `hear` waits until someone talks to the robot (\"Butterbot, ...\") and returns what they said as \
+text. For a conversation: `hear` once, then answer each time with `reply`, which speaks and \
+returns the next thing said. \
+After the robot answers, people can reply for a while without saying its name. A `hear` that \
+times out just means nobody spoke; call it again.
+- `listen` returns microphone audio as WAV plus loudness stats and a transcript.
 - `say` speaks through the robot (on-robot voice by default).
 - `events` long-polls robot events (sensors, battery, button, scenario progress, faces).
 - Face recognition runs on this machine. People enrolled with `remember_face` are recognized \
@@ -131,6 +136,28 @@ pub struct ListenArgs {
     pub past: Option<bool>,
     /// Include the WAV audio in the result (default true). The file path is always returned.
     pub include_audio: Option<bool>,
+    /// Transcribe the audio to text on this machine (default true).
+    pub transcribe: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ReplyArgs {
+    /// What to say (one or two short sentences work best).
+    pub text: String,
+    /// Longest to wait for the next thing someone says, in seconds (default 50, max 3600).
+    pub timeout_s: Option<u64>,
+    /// Also return what the camera sees as the person finishes speaking (default false).
+    pub include_image: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct HearArgs {
+    /// Longest to wait for someone to speak, in seconds (default 50, max 3600). Keep it under
+    /// your client's tool-call timeout.
+    pub timeout_s: Option<u64>,
+    /// Also return what the camera sees as the person finishes speaking (default false). Saves
+    /// a separate `look` when questions may be about what is in front of the robot.
+    pub include_image: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -389,14 +416,46 @@ similarity score), anyone else as unknown, plus everyone enrolled."
         );
         let (wav, stats) = control::clip_summary(&pcm);
         let path = save(&self.robot, "wav", &wav);
+        let mut info = serde_json::to_value(&stats).unwrap_or_default();
+        if a.transcribe.unwrap_or(true) {
+            match self.robot.ears.transcribe(pcm).await {
+                Ok(t) => info["transcript"] = t.into(),
+                Err(e) => info["transcript_error"] = format!("{e:#}").into(),
+            }
+        }
         let mut out = vec![ContentBlock::text(format!(
             "{}\nsaved to {path}",
-            serde_json::to_string_pretty(&stats).unwrap_or_default()
+            serde_json::to_string_pretty(&info).unwrap_or_default()
         ))];
         if a.include_audio.unwrap_or(true) {
             out.push(ContentBlock::audio(B64.encode(&wav), "audio/wav"));
         }
         Ok(CallToolResult::success(out))
+    }
+
+    #[tool(
+        description = "Wait until someone speaks to the robot and return what they said, as text. \
+Speech must start with the robot's name (\"Butterbot, ...\") unless the robot has just answered \
+someone, in which case they can simply reply. Other speech is ignored. Returns the command, the \
+full transcript, and enrolled people in view (likely the speaker); or timed_out if nobody spoke. \
+The first call loads the speech model (downloading about 150 MB once)."
+    )]
+    async fn hear(&self, Parameters(a): Parameters<HearArgs>) -> Result<CallToolResult, McpError> {
+        tryt!(self.robot.ensure_remote().await);
+        self.next_command(a.timeout_s, a.include_image).await
+    }
+
+    #[tool(
+        description = "Say something in the robot's voice, then wait for what the person says \
+next and return it, like `hear`. One call per conversational turn, so prefer it over say + hear: \
+the robot is listening again the moment it stops talking."
+    )]
+    async fn reply(
+        &self,
+        Parameters(a): Parameters<ReplyArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        tryt!(self.robot.say(&a.text, Some("robot"), true).await);
+        self.next_command(a.timeout_s, a.include_image).await
     }
 
     #[tool(description = "Make the robot speak.")]
@@ -518,6 +577,35 @@ fn chrono_like_stamp() -> String {
 
 const RES_CAMERA: &str = "butterbot://camera/latest";
 const RES_STATUS: &str = "butterbot://status";
+
+impl BotServer {
+    /// The next command for the robot (see `Ears`), as a tool result.
+    async fn next_command(
+        &self,
+        timeout_s: Option<u64>,
+        include_image: Option<bool>,
+    ) -> Result<CallToolResult, McpError> {
+        let timeout = std::time::Duration::from_secs(timeout_s.unwrap_or(50).clamp(1, 3600));
+        match tryt!(self.robot.ears.next_command(timeout).await) {
+            Some(c) => {
+                let mut out = vec![ContentBlock::text(
+                    serde_json::to_string_pretty(&c).unwrap_or_default(),
+                )];
+                if include_image.unwrap_or(false)
+                    && let Some(f) = self.robot.hub.latest_frame().await
+                {
+                    out.push(ContentBlock::image(B64.encode(&f.jpeg), "image/jpeg"));
+                }
+                Ok(CallToolResult::success(out))
+            }
+            None => ok_json(serde_json::json!({
+                "timed_out": true,
+                "wake_word": self.robot.ears.wake_word(),
+                "hint": "nobody spoke to the robot; call hear again to keep listening",
+            })),
+        }
+    }
+}
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for BotServer {

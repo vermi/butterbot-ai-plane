@@ -153,7 +153,7 @@ pub fn level_stats(samples: &[i16]) -> LevelStats {
     let n = energies.len();
     let mut sorted = energies.clone();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let floor = sorted[n / 10].max(30.0);
+    let floor = sorted[n / 10].max(10.0);
     // -35 dBFS: clearly audible regardless of how steady the sound is.
     let loud = i16::MAX as f64 * 10f64.powf(-35.0 / 20.0);
     let active = energies
@@ -166,7 +166,7 @@ pub fn level_stats(samples: &[i16]) -> LevelStats {
         rms_dbfs: dbfs(rms),
         peak_dbfs: dbfs(peak),
         active_ratio,
-        likely_sound: active_ratio > 0.05 && dbfs(peak) > -40.0,
+        likely_sound: active_ratio > 0.05 && dbfs(peak) > -46.0,
     }
 }
 

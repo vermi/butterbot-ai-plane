@@ -37,6 +37,7 @@ const SPK_LEAD: Duration = Duration::from_millis(200);
 pub struct Robot {
     pub hub: Arc<Hub>,
     pub faces: Arc<crate::face::Faces>,
+    pub ears: Arc<crate::ears::Ears>,
     /// Serialises wake attempts: many tool calls / clicks share one BLE wake.
     wake_lock: Arc<Mutex<()>>,
     speaker: Arc<Mutex<Option<CancellationToken>>>,
@@ -81,6 +82,7 @@ impl Robot {
     pub fn new(hub: Arc<Hub>) -> Robot {
         Robot {
             faces: Arc::new(crate::face::Faces::new(hub.clone())),
+            ears: Arc::new(crate::ears::Ears::new(hub.clone())),
             streams: Arc::new(Mutex::new(Streams::defaults(&hub.config))),
             hub,
             wake_lock: Default::default(),

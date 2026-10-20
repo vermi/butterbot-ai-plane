@@ -69,7 +69,7 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,rmcp=warn".into()),
+                .unwrap_or_else(|_| "info,rmcp=warn,whisper_rs=warn".into()),
         )
         .init();
 

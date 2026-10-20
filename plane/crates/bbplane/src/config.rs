@@ -28,6 +28,7 @@ pub struct Config {
     pub tts: TtsConfig,
     pub safety: SafetyConfig,
     pub faces: FacesConfig,
+    pub stt: SttConfig,
     /// Where `listen` recordings and snapshots are saved.
     pub data_dir: Option<PathBuf>,
 }
@@ -116,6 +117,7 @@ impl Default for Config {
             tts: TtsConfig::default(),
             safety: SafetyConfig::default(),
             faces: FacesConfig::default(),
+            stt: SttConfig::default(),
             data_dir: None,
         }
     }
@@ -150,6 +152,32 @@ impl Default for FacesConfig {
             greet: true,
             greet_cooldown_secs: 600,
             threshold: 0.40,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SttConfig {
+    /// Speech-to-text on this machine, for `hear` and `listen` transcripts.
+    pub enabled: bool,
+    /// Only speech that starts with this name is passed to the agent ("Butterbot, ..."). Empty
+    /// passes everything that is said.
+    pub wake_word: String,
+    /// Commands not picked up by the agent within this many seconds are dropped.
+    pub command_max_age_secs: u64,
+    /// After the robot finishes answering, anything said within this many seconds counts as a
+    /// command without the wake word, so a conversation can carry on.
+    pub follow_up_secs: u64,
+}
+
+impl Default for SttConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            wake_word: "Butterbot".into(),
+            command_max_age_secs: 60,
+            follow_up_secs: 30,
         }
     }
 }

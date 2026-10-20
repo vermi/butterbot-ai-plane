@@ -4,22 +4,17 @@
 //! checked against a pinned SHA-256. The pre- and post-processing follows OpenCV's
 //! `FaceDetectorYN` and `FaceRecognizerSF`, which these models were trained for.
 
-use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use image::RgbImage;
-use sha2::{Digest, Sha256};
 use tract_onnx::prelude::*;
 
-struct ModelFile {
-    name: &'static str,
-    url: &'static str,
-    sha256: &'static str,
-}
+use crate::models::{ModelFile, fetch};
 
 /// YuNet face detector (MIT license, Shiqi Yu).
 const DETECTOR: ModelFile = ModelFile {
+    max_bytes: 1 << 20,
     name: "face_detection_yunet_2023mar.onnx",
     url: "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
     sha256: "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
@@ -27,6 +22,7 @@ const DETECTOR: ModelFile = ModelFile {
 
 /// SFace face recognizer (Apache-2.0).
 const RECOGNIZER: ModelFile = ModelFile {
+    max_bytes: 64 << 20,
     name: "face_recognition_sface_2021dec.onnx",
     url: "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx",
     sha256: "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
@@ -154,53 +150,6 @@ fn load_plan(path: &Path) -> Result<Plan> {
         .and_then(|m| m.into_optimized())
         .and_then(|m| m.into_runnable())
         .with_context(|| format!("loading {}", path.display()))
-}
-
-/// Path of `m` in `dir`, downloading and verifying it first if needed.
-fn fetch(dir: &Path, m: &ModelFile) -> Result<PathBuf> {
-    let path = dir.join(m.name);
-    if let Ok(bytes) = std::fs::read(&path) {
-        if sha256_hex(&bytes) == m.sha256 {
-            return Ok(path);
-        }
-        tracing::warn!("{} is damaged; downloading it again", path.display());
-    }
-    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    tracing::info!("downloading {}", m.url);
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_connect(Some(std::time::Duration::from_secs(15)))
-        .timeout_global(Some(std::time::Duration::from_secs(300)))
-        .build()
-        .into();
-    let mut bytes = Vec::new();
-    agent
-        .get(m.url)
-        .call()
-        .with_context(|| format!("downloading {}", m.url))?
-        .into_body()
-        .into_reader()
-        .take(100 << 20)
-        .read_to_end(&mut bytes)
-        .with_context(|| format!("downloading {}", m.url))?;
-    let got = sha256_hex(&bytes);
-    if got != m.sha256 {
-        bail!(
-            "{} has SHA-256 {got}, expected {}; not using it",
-            m.url,
-            m.sha256
-        );
-    }
-    let tmp = path.with_extension("part");
-    std::fs::write(&tmp, &bytes).with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, &path)?;
-    Ok(path)
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
 }
 
 /// Turn one stride's raw outputs into detections in 640x640 input coordinates.
