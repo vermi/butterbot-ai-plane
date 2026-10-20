@@ -220,6 +220,12 @@ pub struct LedArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ActivityArgs {
+    /// quiet (speaks only when spoken to), calm, normal or lively (chats often, roams about).
+    pub level: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RememberArgs {
     /// One short sentence worth knowing next time, with names.
     pub fact: String,
@@ -657,6 +663,33 @@ by hand."
     #[tool(description = "Read inserted add-on modules (temperature/humidity, CO2, motion, ...).")]
     async fn read_modules(&self) -> Result<CallToolResult, McpError> {
         ok_json(tryt!(self.robot.modules().await))
+    }
+
+    #[tool(
+        description = "Set how much the robot does of its own accord: quiet, calm, normal or lively. Kept across \
+restarts. Use it when someone asks the robot to be livelier, calmer or quieter (focus mode is separate)."
+    )]
+    async fn set_activity(
+        &self,
+        Parameters(a): Parameters<ActivityArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        match crate::life::Activity::parse(&a.level) {
+            Some(level) => {
+                self.robot.set_activity(level);
+                ok_json(serde_json::json!({ "activity": level.name() }))
+            }
+            None => Err(McpError::invalid_params(
+                "level must be quiet, calm, normal or lively",
+                None,
+            )),
+        }
+    }
+
+    #[tool(
+        description = "Wander a little: turn somewhere at random and drive a short hop. Then `look`."
+    )]
+    async fn wander(&self) -> Result<CallToolResult, McpError> {
+        ok_text(tryt!(self.robot.wander().await))
     }
 
     #[tool(

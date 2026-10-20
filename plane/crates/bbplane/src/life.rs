@@ -29,19 +29,65 @@ const BATTERY_FRESH: Duration = Duration::from_secs(300);
 const SESSION_END_QUIET: Duration = Duration::from_secs(90);
 
 /// Ideas offered with an idle nudge; the agent is free to ignore them.
-const SUGGESTIONS_IN_VIEW: &[&str] = &[
+const CHAT: &[&str] = &[
     "start a little chit-chat with whoever is in view",
     "comment on something you notice in the picture",
     "ask the person in view how their day is going",
-    "look around (turn a little) and say what you find",
-    "stay quiet for now",
 ];
-const SUGGESTIONS_ALONE: &[&str] = &[
-    "look around (turn a little) and see what has changed",
-    "wander a short way and check out a new spot",
-    "stay quiet and rest",
-    "stay quiet and rest",
-];
+const LOOK: &str = "look around (turn a little) and say what you find";
+const WANDER: &str = "go for a little wander (call wander) and say what you find";
+const EXPLORE: &str =
+    "explore: call wander two or three times and comment on anything interesting you find";
+const MUSE: &str = "think out loud to yourself for a moment: a passing thought, something you \
+wondered about or noticed, as if nobody is listening";
+const REST_IN_VIEW: &str = "stay quiet for now";
+const REST: &str = "stay quiet and rest";
+
+/// How much the robot does of its own accord. Set by voice (`set_activity`) or the live view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Activity {
+    /// Speaks when spoken to; no idle chat, greetings or remarks about animals.
+    Quiet,
+    /// Idle chat now and then, mostly resting.
+    Calm,
+    #[default]
+    Normal,
+    /// Chats often and roams about.
+    Lively,
+}
+
+impl Activity {
+    pub fn name(self) -> &'static str {
+        match self {
+            Activity::Quiet => "quiet",
+            Activity::Calm => "calm",
+            Activity::Normal => "normal",
+            Activity::Lively => "lively",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Activity> {
+        [
+            Activity::Quiet,
+            Activity::Calm,
+            Activity::Normal,
+            Activity::Lively,
+        ]
+        .into_iter()
+        .find(|a| a.name().eq_ignore_ascii_case(s.trim()))
+    }
+
+    /// Multiplier on the configured waits between idle nudges.
+    fn pace(self) -> f64 {
+        match self {
+            Activity::Quiet => 6.0,
+            Activity::Calm => 2.5,
+            Activity::Normal => 1.0,
+            Activity::Lively => 0.4,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "nudge", rename_all = "snake_case")]
@@ -82,6 +128,7 @@ struct State {
     heard: Option<(String, bool, Instant)>,
     battery: Option<(u32, bool, Instant)>,
     session_started: Instant,
+    activity: Activity,
     rng: u64,
 }
 
@@ -108,6 +155,7 @@ impl Life {
             heard: None,
             battery: None,
             session_started: Instant::now(),
+            activity: cfg.activity,
             rng: seed,
         };
         reschedule(&cfg, &mut state);
@@ -126,6 +174,16 @@ impl Life {
     pub fn activity(&self) {
         let mut s = self.state.lock().unwrap();
         s.last_activity = Instant::now();
+        reschedule(&self.cfg, &mut s);
+    }
+
+    pub fn activity_level(&self) -> Activity {
+        self.state.lock().unwrap().activity
+    }
+
+    pub fn set_activity_level(&self, a: Activity) {
+        let mut s = self.state.lock().unwrap();
+        s.activity = a;
         reschedule(&self.cfg, &mut s);
     }
 
@@ -244,6 +302,7 @@ impl Life {
             reschedule(&self.cfg, &mut s);
             return Some(Nudge::Poked);
         }
+        // Quiet: only what someone did to it, or asked for, gets through (above and below).
         if focused {
             return None;
         }
@@ -271,6 +330,9 @@ impl Life {
                 plugged_in,
             });
         }
+        if s.activity == Activity::Quiet {
+            return None;
+        }
         s.arrivals.retain(|(_, at)| at.elapsed() < ARRIVAL_FRESH);
         if let Some((name, _)) = s.arrivals.pop_front() {
             s.last_activity = Instant::now();
@@ -292,31 +354,78 @@ impl Life {
         if quiet < due {
             return None;
         }
-        let suggestion = if anyone_in_view {
-            // Something they care about, twice as often as any one other idea.
-            let news = |rng: &mut u64| match self.cfg.interests.as_slice() {
-                [] => "share something interesting you read about recently".to_string(),
-                topics => format!(
-                    "tell them about an interesting recent development in {} (look it up with web_search first)",
-                    topics[next_rand(rng) as usize % topics.len()]
-                ),
-            };
-            let n = SUGGESTIONS_IN_VIEW.len() as u64 + 2;
-            match next_rand(&mut s.rng) % n {
-                i if (i as usize) < SUGGESTIONS_IN_VIEW.len() => {
-                    SUGGESTIONS_IN_VIEW[i as usize].to_string()
-                }
-                _ => news(&mut s.rng),
-            }
-        } else {
-            SUGGESTIONS_ALONE[next_rand(&mut s.rng) as usize % SUGGESTIONS_ALONE.len()].to_string()
-        };
+        let suggestion = self.idea(&mut s, anyone_in_view);
         s.last_activity = Instant::now();
         reschedule(&self.cfg, &mut s);
         Some(Nudge::Idle {
             quiet_for_minutes: quiet.as_secs() / 60,
             suggestion,
         })
+    }
+
+    /// An idea for an idle nudge, weighted by the activity level.
+    fn idea(&self, s: &mut State, in_view: bool) -> String {
+        let pick =
+            |rng: &mut u64, list: &[&str]| list[next_rand(rng) as usize % list.len()].to_string();
+        let news = |rng: &mut u64| match self.cfg.interests.as_slice() {
+            [] => "share something interesting you read about recently".to_string(),
+            topics => format!(
+                "tell them about an interesting recent development in {} (look it up with web_search first)",
+                topics[next_rand(rng) as usize % topics.len()]
+            ),
+        };
+        let pets = (!self.cfg.pets.is_empty()).then(|| {
+            format!(
+                "go and see what {} is up to (look around for them)",
+                self.cfg.pets[next_rand(&mut s.rng) as usize % self.cfg.pets.len()]
+            )
+        });
+        // (idea, weight): chat 3, news 2, the rest by level.
+        let mut ideas: Vec<(String, u64)> = Vec::new();
+        use Activity::*;
+        if in_view {
+            ideas.push((pick(&mut s.rng, CHAT), 3));
+            ideas.push((news(&mut s.rng), 2));
+            match s.activity {
+                Quiet | Calm => ideas.extend([(REST_IN_VIEW.into(), 3), (LOOK.into(), 1)]),
+                Normal => ideas.extend([
+                    (LOOK.into(), 1),
+                    (WANDER.into(), 1),
+                    (REST_IN_VIEW.into(), 1),
+                ]),
+                Lively => ideas.extend([(LOOK.into(), 1), (WANDER.into(), 2)]),
+            }
+        } else {
+            match s.activity {
+                Quiet | Calm => ideas.extend([(REST.into(), 3), (LOOK.into(), 1)]),
+                Normal => ideas.extend([
+                    (REST.into(), 2),
+                    (LOOK.into(), 1),
+                    (WANDER.into(), 1),
+                    (MUSE.into(), 1),
+                ]),
+                Lively => {
+                    ideas.extend([
+                        (WANDER.into(), 2),
+                        (EXPLORE.into(), 1),
+                        (LOOK.into(), 1),
+                        (MUSE.into(), 2),
+                    ]);
+                    if let Some(p) = pets {
+                        ideas.push((p, 1));
+                    }
+                }
+            }
+        }
+        let total: u64 = ideas.iter().map(|(_, w)| w).sum();
+        let mut roll = next_rand(&mut s.rng) % total;
+        for (idea, w) in ideas {
+            if roll < w {
+                return idea;
+            }
+            roll -= w;
+        }
+        REST.into()
     }
 
     /// The agent's session has run long enough and nothing is going on: time for a fresh one.
@@ -338,8 +447,9 @@ fn reschedule(cfg: &LifeConfig, s: &mut State) {
         let (lo, hi) = (lo.min(hi), lo.max(hi));
         Duration::from_secs(lo + next_rand(rng) % (hi - lo + 1))
     };
-    s.wait_in_view = pick(&mut s.rng, cfg.nudge_in_view_secs);
-    s.wait_alone = pick(&mut s.rng, cfg.nudge_alone_secs);
+    let pace = s.activity.pace();
+    s.wait_in_view = pick(&mut s.rng, cfg.nudge_in_view_secs).mul_f64(pace);
+    s.wait_alone = pick(&mut s.rng, cfg.nudge_alone_secs).mul_f64(pace);
 }
 
 /// xorshift64: plenty for picking intervals and suggestions.
@@ -405,6 +515,32 @@ mod tests {
         assert_eq!(ideas.len(), 40);
         assert!(ideas.iter().any(|i| i.contains("quantum computing")));
         assert!(ideas.iter().all(|i| !i.contains("joke")));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn activity_sets_the_pace_and_quiet_only_answers() {
+        let life = Life::new(cfg([100, 100], [1000, 1000]));
+        life.set_activity_level(Activity::Lively);
+        tokio::time::advance(Duration::from_secs(41)).await;
+        assert!(
+            matches!(life.poll(true), Some(Nudge::Idle { .. })),
+            "lively: 0.4 x 100 s"
+        );
+
+        life.set_activity_level(Activity::Quiet);
+        life.arrived("Justin");
+        tokio::time::advance(Duration::from_secs(7000)).await;
+        assert!(
+            life.poll(true).is_none(),
+            "quiet: no greetings or idle chat"
+        );
+        life.poked();
+        assert!(
+            matches!(life.poll(true), Some(Nudge::Poked)),
+            "but a poke gets an answer"
+        );
+        assert_eq!(Activity::parse(" Lively "), Some(Activity::Lively));
+        assert_eq!(Activity::parse("hyper"), None);
     }
 
     #[tokio::test(start_paused = true)]

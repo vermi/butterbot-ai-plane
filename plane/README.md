@@ -168,7 +168,8 @@ stays below about -42 dBFS are skipped as room noise; louder ones are levelled f
 robot's microphone is quiet. Nothing is heard while the robot speaks (the mic is muted then).
 
 When one of the `notice` sounds scores at least `threshold`, `hear` returns a `heard` nudge, at
-most once per sound per `cooldown_secs`. Alarms (smoke, fire) come through focus mode. `status`
+most once per sound per `cooldown_secs`. Alarms (smoke, fire) are not in the list by default (people
+hear those themselves); added, they must last about 1.5 s and come through focus mode. `status`
 lists the most recent sounds of any kind, with scores, for tuning.
 
 ## Listening
@@ -229,7 +230,9 @@ default_tools_approval_mode = "approve"
 - `arrived`: an enrolled person came into view after 30 minutes away;
 - `noticed`: an animal came into view (see [Object detection](#object-detection));
 - `idle`: nobody has talked to the robot for a random 2–5 minutes while someone is around (in
-  view, or talking nearby), or 15–30 minutes while nobody is. It may carry a suggestion.
+  view, or talking nearby), or 15–30 minutes while nobody is (at the normal activity level;
+  quiet x6 with no idle nudges at all, calm x2.5, lively x0.4). It carries a suggestion weighted
+  by the level: chat, news about `interests`, look around, `wander`, think out loud, or rest.
 
 **Memory.** `remember` keeps a fact (at most 100, oldest dropped first) in
 `<data_dir>/memory.json`; every new session's instructions list them, so the agent knows what it
@@ -313,8 +316,8 @@ notice_cooldown_secs = 600
 
 [sounds]
 enabled = true           # recognise sounds in AI mode (downloads a 16 MB model on first use)
-notice = ["Bark", "Doorbell", "Ding-dong", "Knock", "Beep, bleep", "Smoke detector, smoke alarm",
-          "Fire alarm", "Alarm", "Baby cry, infant cry", "Shatter", "Meow"]   # AudioSet names
+notice = ["Bark", "Doorbell", "Ding-dong", "Knock", "Beep, bleep", "Baby cry, infant cry",
+          "Shatter", "Meow"]   # AudioSet names; alarms can be added (they come through focus mode)
 threshold = 0.3
 cooldown_secs = 300
 
@@ -328,6 +331,7 @@ follow_up_secs = 5       # after an answer, start talking within this long to ca
 enabled = true           # nudges for the agent
 owner = ""               # enrolled name whose requests come first
 pets = []                # e.g. ["Biscuit, a beagle"]: an animal it sees is probably one of them
+activity = "normal"      # quiet, calm, normal or lively; changed by voice and kept across restarts
 interests = []           # e.g. ["astronomy", "cooking"]: idle chat brings up recent news in these
 nudge_in_view_secs = [120, 300]    # random wait between idle nudges with someone around
 nudge_alone_secs = [900, 1800]     # ...and with nobody around

@@ -239,6 +239,7 @@ async fn agent_status(State(r): State<Robot>) -> Json<Value> {
     let mut v = r.agent.status_json(r.hub.config.agent.enabled);
     v["kind"] = serde_json::to_value(r.hub.config.agent.kind).unwrap_or_default();
     v["focus_minutes_left"] = r.life.focused().map(|d| d.as_secs().div_ceil(60)).into();
+    v["activity"] = r.life.activity_level().name().into();
     Json(v)
 }
 
@@ -248,6 +249,8 @@ struct AgentControl {
     paused: Option<bool>,
     /// Focus mode for this many minutes; 0 ends it.
     focus_minutes: Option<u64>,
+    /// quiet, calm, normal or lively.
+    activity: Option<String>,
 }
 
 async fn agent_control(State(r): State<Robot>, Json(b): Json<AgentControl>) -> Json<Value> {
@@ -260,6 +263,9 @@ async fn agent_control(State(r): State<Robot>, Json(b): Json<AgentControl>) -> J
         Some(0) => r.unfocus(),
         Some(m) => r.focus(std::time::Duration::from_secs(m * 60)),
         None => {}
+    }
+    if let Some(a) = b.activity.as_deref().and_then(crate::life::Activity::parse) {
+        r.set_activity(a);
     }
     agent_status(State(r)).await
 }

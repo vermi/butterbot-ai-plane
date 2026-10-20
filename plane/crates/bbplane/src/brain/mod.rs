@@ -105,6 +105,18 @@ pub fn tools() -> Vec<Value> {
         ),
         f("unfocus", "End focus mode early.", json!({}), &[]),
         f(
+            "set_activity",
+            "How much you do of your own accord, when someone asks you to be livelier, calmer or quieter: quiet (speak only when spoken to), calm, normal, lively (chat often and roam about). Focus mode is separate and temporary.",
+            json!({ "level": { "type": "string", "enum": ["quiet", "calm", "normal", "lively"] } }),
+            &["level"],
+        ),
+        f(
+            "wander",
+            "Wander a little: turn somewhere at random and drive a short hop. You get a picture of where you ended up.",
+            json!({}),
+            &[],
+        ),
+        f(
             "end_conversation",
             "The person is done talking with you (for now): after your reply you only listen to people who start with your name again. You stay on.",
             json!({}),
@@ -226,6 +238,25 @@ pub async fn run_tool(robot: &Robot, cfg: &BrainConfig, name: &str, args: &Value
                 Err(e) => Outcome::Text(format!("cannot see: {e:#}")),
             },
             "stay_quiet" => Outcome::Quiet,
+            "set_activity" => match args["level"]
+                .as_str()
+                .and_then(crate::life::Activity::parse)
+            {
+                Some(a) => {
+                    robot.set_activity(a);
+                    Outcome::Text(format!("Activity is now {}.", a.name()))
+                }
+                None => Outcome::Text("level must be quiet, calm, normal or lively".into()),
+            },
+            "wander" => {
+                let what = robot.wander().await?;
+                // A frame taken after it stopped.
+                tokio::time::sleep(Duration::from_millis(800)).await;
+                match robot.snapshot(None, 12).await {
+                    Ok(f) => Outcome::Image(what, f.jpeg),
+                    Err(_) => Outcome::Text(what),
+                }
+            }
             "web_search" => Outcome::Text(
                 text::web_search(cfg, args["query"].as_str().unwrap_or_default()).await?,
             ),

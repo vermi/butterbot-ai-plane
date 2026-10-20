@@ -100,6 +100,10 @@ input[type=text] { flex: 1; min-width: 0; }
       <div class="row" style="margin-top:8px">
         <button id="agentpause">Pause</button>
         <button id="focus">Focus 1 h</button>
+        <select id="activity" aria-label="Activity level">
+          <option value="quiet">Quiet</option><option value="calm">Calm</option>
+          <option value="normal">Normal</option><option value="lively">Lively</option>
+        </select>
       </div>
       <details><summary class="muted">Agent output</summary><pre id="agentlog"></pre></details>
     </div>
@@ -214,6 +218,7 @@ async function agentRefresh() {
   $('agentpause').textContent = agent.paused ? 'Resume' : 'Pause';
   $('agentpause').disabled = !agent.enabled;
   $('focus').textContent = agent.focus_minutes_left ? 'End focus' : 'Focus 1 h';
+  if (agent.activity && document.activeElement !== $('activity')) $('activity').value = agent.activity;
   const log = $('agentlog');
   const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
   log.textContent = (agent.log || []).join('\n');
@@ -222,6 +227,7 @@ async function agentRefresh() {
 setInterval(() => { if (!document.hidden) agentRefresh(); }, 2000); agentRefresh();
 $('agentpause').onclick = async () => { await api('/api/agent', { paused: !agent.paused }); agentRefresh(); };
 $('focus').onclick = async () => { await api('/api/agent', { focus_minutes: agent.focus_minutes_left ? 0 : 60 }); agentRefresh(); };
+$('activity').onchange = async (e) => { await api('/api/agent', { activity: e.target.value }); agentRefresh(); };
 
 // ---- faces ----
 const SVG = 'http://www.w3.org/2000/svg';

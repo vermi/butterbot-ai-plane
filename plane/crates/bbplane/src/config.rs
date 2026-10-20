@@ -204,7 +204,8 @@ pub struct SoundsConfig {
     /// Recognise sounds in AI mode (runs on this machine; the model, about 16 MB, is downloaded
     /// on first use).
     pub enabled: bool,
-    /// Sounds (AudioSet class names) that nudge the agent. Alarms come through focus mode too.
+    /// Sounds (AudioSet class names) that nudge the agent. Alarms ("Smoke detector, smoke alarm",
+    /// "Fire alarm", "Alarm"; people hear those anyway) can be added: they come through focus mode.
     pub notice: Vec<String>,
     /// Score (0..1) needed to count a sound as heard.
     pub threshold: f32,
@@ -222,9 +223,6 @@ impl Default for SoundsConfig {
                 "Ding-dong",
                 "Knock",
                 "Beep, bleep",
-                "Smoke detector, smoke alarm",
-                "Fire alarm",
-                "Alarm",
                 "Baby cry, infant cry",
                 "Shatter",
                 "Meow",
@@ -279,6 +277,9 @@ pub struct LifeConfig {
     pub nudge_in_view_secs: [u64; 2],
     /// ...and while nobody is.
     pub nudge_alone_secs: [u64; 2],
+    /// How much the robot does of its own accord at start: quiet, calm, normal or lively (it
+    /// can be changed by voice; that choice is kept across restarts).
+    pub activity: crate::life::Activity,
     /// Focus mode lasts this long unless told otherwise.
     pub default_focus_minutes: u64,
     /// Start the agent on a fresh session after this many minutes (at a quiet moment), so its
@@ -295,6 +296,7 @@ impl Default for LifeConfig {
             interests: Vec::new(),
             nudge_in_view_secs: [120, 300],
             nudge_alone_secs: [900, 1800],
+            activity: crate::life::Activity::Normal,
             default_focus_minutes: 60,
             session_minutes: 30,
         }

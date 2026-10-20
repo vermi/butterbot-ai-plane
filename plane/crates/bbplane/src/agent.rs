@@ -153,6 +153,12 @@ up something new in these (look it up first) rather than jokes.",
             interests.join(", ")
         ));
     }
+    owner_line.push_str(&format!(
+        "{}- Your activity level is {}: change it with `set_activity` when asked to be livelier, \
+calmer or quieter.",
+        if owner_line.is_empty() { "" } else { "\n" },
+        robot.life.activity_level().name()
+    ));
     let pets = &cfg.life.pets;
     if !pets.is_empty() {
         if !owner_line.is_empty() {

@@ -180,14 +180,18 @@ short-press the robot's button. From then on:
 - **"Butterbot, I need to focus"** makes it stay quiet (an hour by default, or as long as you
   say) until you call it by name. **"Butterbot, switch off"** powers it down; "goodbye" alone
   never does.
+- **Activity levels:** "Butterbot, be more lively" / "calm down" / "be quiet for a while". Quiet
+  only answers when spoken to; calm chats now and then; normal; lively chats often, wanders about
+  and thinks out loud to itself. The level is kept across restarts and shown in the live view
+  (which can set it too). Focus mode overrides all of it.
 - **It remembers.** Sessions start fresh every half hour, but what it decides is worth keeping
   ("Kiwi hates the vacuum") goes into a memory it reads at every start.
 - **Reminders and timers:** "Butterbot, remind me in 20 minutes to take the pizza out." They
   survive a restart and come through focus mode.
 - **It knows its battery:** it asks to be charged at 20% and 10%, and says thanks when plugged in.
 - **Phone calls:** with your phone paired, it tells you who is calling.
-- **It hears things:** a bark, the doorbell, a knock, beeping, a smoke alarm (that one even in
-  focus mode). Sound recognition (YAMNet) runs on your computer too.
+- **It hears things:** a bark, the doorbell, a knock, beeping. Sound recognition (YAMNet) runs on
+  your computer too.
 - **The status light** shows what it is doing; see [Status light](#status-light).
 - **The live view** shows the conversation, what the agent is doing and its token use, what it
   remembers and the reminders that are set (both can be removed there), and has Pause and Focus
@@ -218,11 +222,11 @@ The handheld controller works in AI mode too:
 | **Manual Override** | Stock RC mode, with video on the remote's screen. RC mode needs the remote's own Wi-Fi, so the robot leaves AI mode for it; when you leave RC mode it restarts itself straight back into AI mode (a few seconds; RC mode leaves too little unfragmented memory to start the home Wi-Fi again without a restart). |
 | **Shut up** | While it talks, or is about to answer: it stops at once and drops the rest. While it is quiet: focus mode. (In stock mode it still mutes.) |
 | **Poke** | It reacts, then listens for a reply without its name. |
-| **Summon** | Says "Yes?" and takes what you say next as a command, no name needed. |
+| **Summon** | A short press: says "Yes?" and takes what you say next as a command, no name needed. Held until the bar fills: comes to you (turns to find a person with the plane's object detection and drives over). |
 | **Joystick menu** | Entries the robot can run in AI mode run as in stock. Those that needed the removed on-robot models (dice, eight ball, "what's this", "who's this", dance, voice moves) and reading notifications go to the agent as requests. |
 
-When the remote sends stock's come-to-me Summon, the robot turns to look for a person with the
-plane's object detection and drives over. Entering AI mode with a phone linked, it says so.
+In RC mode the joystick mixes forward and turning continuously, so every angle curves by its own
+amount (stock snapped it to eight directions). Entering AI mode with a phone linked, it says so.
 
 ## Status light
 

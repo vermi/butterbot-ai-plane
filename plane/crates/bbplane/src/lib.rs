@@ -64,6 +64,7 @@ pub async fn start(config: config::Config) -> Result<Plane> {
             }
         }
     });
+    robot.load_activity();
     tokio::spawn(face::run(robot.clone()));
     tokio::spawn(objects::run(robot.clone()));
     tokio::spawn(sounds::run(robot.clone()));

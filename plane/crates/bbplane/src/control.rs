@@ -478,6 +478,57 @@ Ask to be unplugged first."
     }
 
     /// Stay quiet (no nudges, no follow-up listening) for `d`, until called by name.
+    /// The activity level last chosen (kept in `<data_dir>/activity.json`), applied at start.
+    pub fn load_activity(&self) {
+        let path = self.hub.config.data_dir().join("activity.json");
+        if let Some(a) = std::fs::read(&path)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+            .and_then(|v| {
+                v["activity"]
+                    .as_str()
+                    .and_then(crate::life::Activity::parse)
+            })
+        {
+            self.life.set_activity_level(a);
+        }
+    }
+
+    /// How much the robot does of its own accord, kept across restarts.
+    pub fn set_activity(&self, a: crate::life::Activity) {
+        self.life.set_activity_level(a);
+        let dir = self.hub.config.data_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        if let Err(e) = std::fs::write(
+            dir.join("activity.json"),
+            json!({ "activity": a.name() }).to_string(),
+        ) {
+            tracing::warn!("saving the activity level: {e}");
+        }
+    }
+
+    /// Wander a little of its own accord: turn somewhere at random and drive a short hop.
+    pub async fn wander(&self) -> Result<String> {
+        let mut rng = crate::hub::now_ms() | 1;
+        let mut next = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            rng
+        };
+        let degrees = (30 + next() % 120) as f64 * if next() % 2 == 0 { 1.0 } else { -1.0 };
+        self.turn(degrees, 55).await?;
+        let ms = 500 + next() % 600;
+        let out = self.drive_for(50, 50, ms).await?;
+        Ok(match out.stopped_early {
+            Some(why) => format!("Turned {degrees:.0} degrees, then stopped ({why})."),
+            None => format!(
+                "Turned {degrees:.0} degrees and drove forward for {:.1} s.",
+                ms as f64 / 1000.0
+            ),
+        })
+    }
+
     pub fn focus(&self, d: Duration) {
         self.life.focus(d);
         self.ears.set_attentive(false);
@@ -762,6 +813,7 @@ goodbye). Say bye and keep listening."
             "objects": self.objects.status_json(),
             "sounds": self.sounds.status_json(),
             "focus_minutes_left": self.life.focused().map(|d| d.as_secs().div_ceil(60)),
+            "activity": self.life.activity_level().name(),
             "agent": {
                 "enabled": self.hub.config.agent.enabled,
                 "running": self.life.agent_running.load(std::sync::atomic::Ordering::Relaxed),
