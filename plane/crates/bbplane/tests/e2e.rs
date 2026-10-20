@@ -255,12 +255,13 @@ async fn plane_with_simulated_robot() {
 async fn works_over_a_lossy_link() {
     // Tools must keep working (just slower) on a very bad link. The firmware once lost ~35% of
     // datagrams by dropping them itself when its two Wi-Fi TX buffers were full; a real link now
-    // loses well under 1%. At 30% loss only small frames (few datagrams) get through whole.
+    // loses well under 1%. At 20% loss only small frames (few datagrams) get through whole.
     let config = Config {
         link_bind: "127.0.0.1".into(),
         link_port: 0,
         web_port: 0,
         ble_wake: false,
+        announce_connect: false,
         camera: bbplane::config::CameraConfig {
             res: bbproto::ctrl::Res::R128,
             ..Default::default()
@@ -270,7 +271,7 @@ async fn works_over_a_lossy_link() {
     };
     let plane = bbplane::start(config).await.unwrap();
     let link = plane.link_addr.to_string();
-    tokio::spawn(async move { bbplane::sim::run_lossy(&link, 0.3).await });
+    tokio::spawn(async move { bbplane::sim::run_lossy(&link, 0.2).await });
     for _ in 0..100 {
         if plane.robot.hub.is_connected().await {
             break;

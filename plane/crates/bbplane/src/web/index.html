@@ -59,7 +59,7 @@ input[type=text] { flex: 1; min-width: 0; }
 <main>
   <section class="stack">
     <div class="card">
-      <div class="video"><img id="video" alt="Robot camera"><span class="none" id="novideo">No video yet</span><svg id="boxes" aria-hidden="true"></svg></div>
+      <div class="video"><img id="video" alt="Robot camera" hidden><span class="none" id="novideo">No video yet</span><svg id="boxes" aria-hidden="true"></svg></div>
       <div class="row" style="margin-top:10px">
         <select id="res" aria-label="Resolution">
           <option value="r128">128×128</option><option value="qvga" selected>320×240</option>
@@ -115,7 +115,8 @@ input[type=text] { flex: 1; min-width: 0; }
         <button id="ptt">Hold to talk</button>
         <div id="meter"><div></div></div>
       </div>
-      <p class="muted" style="margin:8px 0 0">Mic is muted on the robot while it speaks (no echo cancellation).</p>
+      <p class="muted" style="margin:8px 0 0">Mic is muted on the robot while it speaks (no echo cancellation).
+        Hold to talk with the laptop a few metres from the robot, or its speaker feeds back into your mic.</p>
     </div>
   </aside>
 </main>
@@ -214,11 +215,37 @@ $('faceform').onsubmit = async (e) => {
   showFaces(await api('/api/faces'));
 };
 
-// ---- video ----
+// ---- video: poll the newest frame. (An MJPEG <img> never reports loading in Safari and
+// silently freezes when the plane restarts; this works everywhere and recovers by itself.) ----
 const img = $('video');
-img.onload = () => { $('novideo').style.display = 'none'; };
-img.onerror = () => setTimeout(() => { img.src = '/video.mjpeg?' + Date.now(); }, 2000);
-img.src = '/video.mjpeg';
+(async function videoLoop() {
+  let seq = null, url = null;
+  for (;;) {
+    let wait = 100;
+    try {
+      if (document.hidden) {
+        wait = 500;
+      } else {
+        const r = await fetch('/frame.jpg', { cache: 'no-store' });
+        if (r.ok) {
+          const s = r.headers.get('x-frame-seq');
+          if (s !== seq) {
+            seq = s;
+            const next = URL.createObjectURL(await r.blob());
+            img.src = next;
+            if (url) URL.revokeObjectURL(url);
+            url = next;
+            img.hidden = false;
+            $('novideo').style.display = 'none';
+          }
+        } else {
+          wait = 1000;
+        }
+      }
+    } catch { wait = 1000; }
+    await new Promise(r => setTimeout(r, wait));
+  }
+})();
 $('camOn').onclick = () => api('/api/camera', { on: true, res: $('res').value, fps: +$('fps').value });
 $('camOff').onclick = () => api('/api/camera', { on: false });
 
@@ -290,14 +317,21 @@ let micStream = null, micNode = null;
 async function pttStart() {
   ensureAudio();
   try {
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+    // No automatic gain: it keeps raising the mic until the robot's speaker howls through it.
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false } });
   } catch (e) { log('! microphone: ' + e.message); return; }
   const src = ctx.createMediaStreamSource(micStream);
   micNode = ctx.createScriptProcessor(1024, 1, 1);
+  let loud = 0;
   micNode.onaudioprocess = (ev) => {
     const f = ev.inputBuffer.getChannelData(0);
     const out = new Int16Array(f.length);
-    for (let i = 0; i < f.length; i++) out[i] = Math.max(-1, Math.min(1, f[i])) * 32767;
+    let sum = 0;
+    for (let i = 0; i < f.length; i++) { out[i] = Math.max(-1, Math.min(1, f[i])) * 32767; sum += f[i] * f[i]; }
+    // Speech has gaps; a loop between this mic and the robot's speaker does not. Stop talking
+    // after ~1.3 s of continuous loud input.
+    loud = Math.sqrt(sum / f.length) > 0.2 ? loud + 1 : 0;
+    if (loud > 20) { log('! feedback between your mic and the robot speaker: stopped talking. Move the laptop away from the robot.'); pttStop(); return; }
     if (ws.readyState === 1) ws.send(out.buffer);
   };
   src.connect(micNode); micNode.connect(ctx.destination);

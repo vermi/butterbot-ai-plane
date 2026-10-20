@@ -74,6 +74,17 @@ async fn main() -> Result<()> {
         .init();
 
     match cli.cmd {
+        // Bluetooth commands run again in a child process on macOS, so a permission abort can be
+        // explained (see provision::use_child).
+        Cmd::Provision { .. } | Cmd::Wake { .. } | Cmd::Tune { .. } if provision::use_child() => {
+            let args: Vec<_> = std::env::args_os().skip(1).collect();
+            if let Err(e) = provision::run_child(&args).await {
+                if e.to_string() == provision::BLUETOOTH_BLOCKED {
+                    eprintln!("{e}");
+                }
+                std::process::exit(1);
+            }
+        }
         Cmd::Serve => {
             let plane = bbplane::start(Config::load(cli.config.as_ref())?).await?;
             eprintln!(

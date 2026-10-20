@@ -214,13 +214,14 @@ impl Hub {
             let (tx, rx) = oneshot::channel();
             self.snapshots.lock().await.insert(id, tx);
             let r = async {
-                // The robot acks once the frame is captured; the frame follows right after.
+                // The robot acks once the frame is captured; the frame follows right after, in
+                // well under a second when it arrives at all. Retry soon rather than wait long.
                 self.request_timeout(
                     ToRobot::Snapshot { id, res, quality },
                     Duration::from_secs(15),
                 )
                 .await?;
-                tokio::time::timeout(Duration::from_millis(2500), rx)
+                tokio::time::timeout(Duration::from_millis(1500), rx)
                     .await
                     .map_err(|_| anyhow!("snapshot timed out"))?
                     .map_err(|_| anyhow!("robot disconnected"))

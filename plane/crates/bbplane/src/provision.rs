@@ -21,6 +21,52 @@ pub const LINK_CONFIG_ACK: u32 = 100;
 pub const LINK_WAKE_ACK: u32 = 101;
 pub const LINK_TUNE_ACK: u32 = 102;
 
+/// Set in a child process that does the Bluetooth work for its parent.
+const CHILD_ENV: &str = "BBPLANE_BLE_CHILD";
+
+pub const BLUETOOTH_BLOCKED: &str = "macOS stopped bbplane from using Bluetooth. The app it was \
+started from (for example Warp, VS Code or another IDE terminal) does not declare Bluetooth use, \
+and macOS kills any program such an app starts as soon as it touches Bluetooth. Run bbplane from \
+Terminal.app or iTerm2 and allow Bluetooth when asked, or wake the robot with a short press of its \
+power button.";
+
+/// Whether Bluetooth work should go to a child process. On macOS a process that touches Bluetooth
+/// without permission is killed outright (SIGABRT, no error to catch); in a child that cannot take
+/// a running plane down with it, and the parent can explain what happened.
+pub fn use_child() -> bool {
+    cfg!(target_os = "macos") && std::env::var_os(CHILD_ENV).is_none()
+}
+
+/// Run this program with `args` as the Bluetooth child; its output goes to our stderr.
+pub async fn run_child(args: &[std::ffi::OsString]) -> Result<()> {
+    let exe = std::env::current_exe().context("finding the bbplane executable")?;
+    let status = tokio::process::Command::new(exe)
+        .args(args)
+        .env(CHILD_ENV, "1")
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .status()
+        .await
+        .context("starting the Bluetooth helper")?;
+    if status.success() {
+        return Ok(());
+    }
+    #[cfg(unix)]
+    if std::os::unix::process::ExitStatusExt::signal(&status) == Some(6) {
+        bail!(BLUETOOTH_BLOCKED);
+    }
+    bail!("Bluetooth helper failed ({status})")
+}
+
+/// `wake`, in a child process where that is safer (see `use_child`).
+pub async fn wake_isolated() -> Result<()> {
+    if use_child() {
+        run_child(&["wake".into()]).await
+    } else {
+        wake(None).await
+    }
+}
+
 pub struct Provision {
     pub ssid: String,
     pub password: String,

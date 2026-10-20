@@ -105,6 +105,12 @@ impl Robot {
                 }
             }
         }
+        self.apply_session_settings().await
+    }
+
+    /// Start the configured camera and microphone streams and set the safety checks. Each AI
+    /// mode session on the robot starts with all of them off.
+    pub async fn apply_session_settings(&self) -> Result<()> {
         let cfg = &self.hub.config;
         self.set_camera(
             true,
@@ -152,7 +158,7 @@ impl Robot {
         }
         let since = self.hub.last_event_seq().await;
         tracing::info!("waking the robot over Bluetooth");
-        crate::provision::wake(None).await.map_err(|e| {
+        crate::provision::wake_isolated().await.map_err(|e| {
             anyhow::anyhow!("the robot is not connected and could not be woken over Bluetooth: {e}")
         })?;
         // Joining Wi-Fi and DHCP usually take 3-10 s.
@@ -492,12 +498,10 @@ impl Robot {
     }
 }
 
-/// Say "Connected." each time the robot links up in AI mode, so whoever pressed its button
-/// knows it is ready. Spawned once by `crate::start`.
-pub async fn announce_connections(robot: Robot) {
-    if !robot.hub.config.announce_connect {
-        return;
-    }
+/// When the robot links up in AI mode, whoever started it (its button, `bbplane wake`, the AI
+/// or a restarted plane), start its streams and say "Connected." so a person who pressed the
+/// button knows it is ready. Spawned once by `crate::start`.
+pub async fn on_link_up(robot: Robot) {
     let mut cursor = robot.hub.last_event_seq().await;
     let mut linked = false;
     loop {
@@ -511,9 +515,17 @@ pub async fn announce_connections(robot: Robot) {
                 "link" => linked = e.data["connected"] == true,
                 "mode" if linked && e.data["mode"] == "remote" => {
                     linked = false;
-                    if let Err(e) = robot.say("Connected.", Some("robot"), false).await {
-                        tracing::debug!("connect announcement: {e:#}");
-                    }
+                    let robot = robot.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = robot.apply_session_settings().await {
+                            tracing::warn!("starting the robot's streams: {e:#}");
+                        }
+                        if robot.hub.config.announce_connect
+                            && let Err(e) = robot.say("Connected.", Some("robot"), false).await
+                        {
+                            tracing::debug!("connect announcement: {e:#}");
+                        }
+                    });
                 }
                 _ => {}
             }

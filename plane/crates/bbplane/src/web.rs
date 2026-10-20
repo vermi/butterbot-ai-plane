@@ -256,8 +256,13 @@ async fn frame(State(r): State<Robot>) -> Response {
     match r.hub.latest_frame().await {
         Some(f) => (
             [
-                (header::CONTENT_TYPE, "image/jpeg"),
-                (header::CACHE_CONTROL, "no-store"),
+                (header::CONTENT_TYPE, "image/jpeg".to_string()),
+                (header::CACHE_CONTROL, "no-store".to_string()),
+                // Lets a polling client skip frames it already has.
+                (
+                    header::HeaderName::from_static("x-frame-seq"),
+                    f.header.seq.to_string(),
+                ),
             ],
             f.jpeg.clone(),
         )
