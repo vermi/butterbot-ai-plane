@@ -41,6 +41,34 @@ pub struct Robot {
     wake_lock: Arc<Mutex<()>>,
     speaker: Arc<Mutex<Option<CancellationToken>>>,
     drive: Arc<Mutex<Option<CancellationToken>>>,
+    /// Camera and mic state last asked for, restored when the link comes back.
+    streams: Arc<Mutex<Streams>>,
+    /// Set while the plane itself is waking the robot: the caller is about to use it, so
+    /// `on_link_up` does not announce "Connected." over whatever that caller says.
+    plane_woke: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Streams {
+    camera_on: bool,
+    res: Res,
+    fps: u8,
+    quality: u8,
+    opts: bbproto::ctrl::CamOpts,
+    mic_on: bool,
+}
+
+impl Streams {
+    fn defaults(cfg: &crate::config::Config) -> Streams {
+        Streams {
+            camera_on: true,
+            res: cfg.camera.res,
+            fps: cfg.camera.fps,
+            quality: cfg.camera.quality,
+            opts: cfg.camera.opts,
+            mic_on: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -53,10 +81,12 @@ impl Robot {
     pub fn new(hub: Arc<Hub>) -> Robot {
         Robot {
             faces: Arc::new(crate::face::Faces::new(hub.clone())),
+            streams: Arc::new(Mutex::new(Streams::defaults(&hub.config))),
             hub,
             wake_lock: Default::default(),
             speaker: Default::default(),
             drive: Default::default(),
+            plane_woke: Default::default(),
         }
     }
 
@@ -105,22 +135,20 @@ impl Robot {
                 }
             }
         }
+        // Entering AI mode on purpose starts from the configured streams.
+        *self.streams.lock().await = Streams::defaults(&self.hub.config);
         self.apply_session_settings().await
     }
 
-    /// Start the configured camera and microphone streams and set the safety checks. Each AI
-    /// mode session on the robot starts with all of them off.
+    /// Start the camera and microphone streams as last asked for (the configured ones unless
+    /// changed since) and set the safety checks. Each AI mode session on the robot starts with
+    /// all of them off, and a re-link must not undo a "camera off".
     pub async fn apply_session_settings(&self) -> Result<()> {
         let cfg = &self.hub.config;
-        self.set_camera(
-            true,
-            cfg.camera.res,
-            cfg.camera.fps,
-            cfg.camera.quality,
-            cfg.camera.opts,
-        )
-        .await?;
-        self.set_mic(true).await?;
+        let s = *self.streams.lock().await;
+        self.set_camera(s.camera_on, s.res, s.fps, s.quality, s.opts)
+            .await?;
+        self.set_mic(s.mic_on).await?;
         let id = self.hub.next_id();
         let safety = &cfg.safety;
         self.hub
@@ -158,7 +186,11 @@ impl Robot {
         }
         let since = self.hub.last_event_seq().await;
         tracing::info!("waking the robot over Bluetooth");
+        self.plane_woke
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         crate::provision::wake_isolated().await.map_err(|e| {
+            self.plane_woke
+                .store(false, std::sync::atomic::Ordering::Relaxed);
             anyhow::anyhow!("the robot is not connected and could not be woken over Bluetooth: {e}")
         })?;
         // Joining Wi-Fi and DHCP usually take 3-10 s.
@@ -272,6 +304,11 @@ impl Robot {
             })
             .await?;
         self.hub.status.lock().await.camera_streaming = on;
+        let mut s = self.streams.lock().await;
+        s.camera_on = on;
+        if on {
+            (s.res, s.fps, s.quality, s.opts) = (res, fps, quality, opts);
+        }
         Ok(())
     }
 
@@ -287,6 +324,7 @@ impl Robot {
             })
             .await?;
         self.hub.status.lock().await.mic_streaming = on;
+        self.streams.lock().await.mic_on = on;
         Ok(())
     }
 
@@ -516,11 +554,15 @@ pub async fn on_link_up(robot: Robot) {
                 "mode" if linked && e.data["mode"] == "remote" => {
                     linked = false;
                     let robot = robot.clone();
+                    let woken_by_plane = robot
+                        .plane_woke
+                        .swap(false, std::sync::atomic::Ordering::Relaxed);
                     tokio::spawn(async move {
                         if let Err(e) = robot.apply_session_settings().await {
                             tracing::warn!("starting the robot's streams: {e:#}");
                         }
                         if robot.hub.config.announce_connect
+                            && !woken_by_plane
                             && let Err(e) = robot.say("Connected.", Some("robot"), false).await
                         {
                             tracing::debug!("connect announcement: {e:#}");

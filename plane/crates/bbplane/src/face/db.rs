@@ -102,7 +102,7 @@ impl FaceDb {
 
     /// Remove `name`; returns whether it was enrolled.
     pub fn forget(&mut self, name: &str) -> bool {
-        match self.find(name.trim()) {
+        match self.find(name) {
             Some(i) => {
                 self.people.remove(i);
                 true
@@ -130,14 +130,21 @@ impl FaceDb {
     }
 
     fn find(&self, name: &str) -> Option<usize> {
+        let name = normalize_name(name);
         self.people
             .iter()
-            .position(|p| p.name.eq_ignore_ascii_case(name))
+            .position(|p| p.name.eq_ignore_ascii_case(&name))
     }
 }
 
-fn clean_name(name: &str) -> Result<String> {
-    let name: String = name.split_whitespace().collect::<Vec<_>>().join(" ");
+/// Collapse runs of whitespace; this is the form names are stored and compared in.
+pub fn normalize_name(name: &str) -> String {
+    name.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// `name` normalized, or why it is not usable.
+pub fn clean_name(name: &str) -> Result<String> {
+    let name = normalize_name(name);
     if name.is_empty() {
         bail!("give the person a name");
     }
@@ -164,6 +171,8 @@ mod tests {
     fn enroll_match_forget() {
         let mut db = FaceDb::default();
         db.enroll("  Justin  ", vec![unit(0)]).unwrap();
+        db.enroll("Sam  Lee", vec![unit(1)]).unwrap();
+        assert!(db.forget(" sam   lee "));
         db.enroll("Sam", vec![unit(1)]).unwrap();
         db.enroll("justin", vec![unit(2)]).unwrap();
         assert_eq!(db.names(), ["Justin", "Sam"]);

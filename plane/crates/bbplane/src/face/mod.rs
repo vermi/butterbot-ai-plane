@@ -3,7 +3,7 @@
 //! While the robot streams video, a few frames a second go through face detection and
 //! recognition. People enrolled by name raise `face` events when they arrive or leave, show up
 //! in `status`, and get a spoken hello (at most once per `greet_cooldown_secs`). Nothing runs,
-//! and the models are not even downloaded, until someone is enrolled.
+//! and the models are not even downloaded, until someone is enrolled or `who_is_here` is used.
 
 pub mod db;
 pub mod engine;
@@ -36,12 +36,20 @@ const ARRIVE_HITS: u32 = 2;
 const LEAVE_AFTER: Duration = Duration::from_secs(6);
 /// `in_view` older than this is stale.
 const VIEW_FRESH: Duration = Duration::from_secs(2);
+/// After a failed model load (usually the download), wait this long before trying again.
+const LOAD_RETRY: Duration = Duration::from_secs(60);
 /// Enrollment: samples wanted, the minimum accepted, and how long to look.
 const ENROLL_SAMPLES: usize = 8;
 const ENROLL_MIN_SAMPLES: usize = 3;
 const ENROLL_TIME: Duration = Duration::from_secs(12);
 /// Smallest face width (pixels in the camera frame) accepted for enrollment.
 const ENROLL_MIN_WIDTH: f32 = 28.0;
+/// Faces narrower than this (frame pixels) are too blurry to name reliably; they are reported as
+/// unknown.
+const RECOGNIZE_MIN_WIDTH: f32 = 20.0;
+/// An enrollment sample whose median similarity to the others is below this is a bad frame
+/// (blur, a turned head) and is dropped.
+const ENROLL_CONSISTENCY: f32 = 0.4;
 /// Track key for faces that match nobody.
 const UNKNOWN: &str = "";
 
@@ -79,6 +87,8 @@ pub struct Faces {
     models_dir: PathBuf,
     db_path: PathBuf,
     engine: OnceCell<Arc<Engine>>,
+    /// When and why loading the models last failed.
+    load_failure: Mutex<Option<(Instant, String)>>,
     db: Mutex<FaceDb>,
     view: Mutex<View>,
 }
@@ -108,6 +118,7 @@ impl Faces {
             models_dir: data.join("models"),
             db_path,
             engine: OnceCell::new(),
+            load_failure: Mutex::new(None),
             db: Mutex::new(db),
             view: Mutex::new(View::default()),
             hub,
@@ -137,8 +148,20 @@ impl Faces {
 
     /// The models, loading (and on first use downloading, ~40 MB) them if needed.
     async fn engine(&self) -> Result<Arc<Engine>> {
+        if let Some(e) = self.engine.get() {
+            return Ok(e.clone());
+        }
+        if let Some((at, why)) = self.load_failure.lock().unwrap().as_ref()
+            && at.elapsed() < LOAD_RETRY
+        {
+            bail!(
+                "{why} (retrying in {}s)",
+                (LOAD_RETRY - at.elapsed()).as_secs()
+            );
+        }
         let dir = self.models_dir.clone();
-        self.engine
+        let r = self
+            .engine
             .get_or_try_init(|| async move {
                 tokio::task::spawn_blocking(move || Engine::load(&dir).map(Arc::new))
                     .await
@@ -146,7 +169,11 @@ impl Faces {
                     .context("loading the face recognition models")
             })
             .await
-            .cloned()
+            .cloned();
+        if let Err(e) = &r {
+            *self.load_failure.lock().unwrap() = Some((Instant::now(), format!("{e:#}")));
+        }
+        r
     }
 
     /// Detect faces in a frame and embed the largest few.
@@ -191,7 +218,7 @@ impl Faces {
                             closest
                         );
                     }
-                    let m = db.best_match(e, self.cfg.threshold);
+                    let m = self.name(&db, d, e);
                     Seen {
                         name: m.as_ref().map(|m| m.name.clone()),
                         score: m.map(|m| m.score),
@@ -237,6 +264,27 @@ impl Faces {
         Ok(changes)
     }
 
+    fn name(&self, db: &FaceDb, d: &Detection, embedding: &[f32]) -> Option<db::Match> {
+        if d.bbox[2] < RECOGNIZE_MIN_WIDTH {
+            return None;
+        }
+        db.best_match(embedding, self.cfg.threshold)
+    }
+
+    /// Everyone still marked present is reported gone: the video stopped (AI mode ended, link
+    /// lost), so nobody can be seen. Returns their track keys.
+    fn sweep(&self) -> Vec<String> {
+        let mut v = self.view.lock().unwrap();
+        v.faces.clear();
+        v.tracks
+            .iter_mut()
+            .filter_map(|(k, t)| {
+                t.hits = 0;
+                std::mem::take(&mut t.present).then(|| k.clone())
+            })
+            .collect()
+    }
+
     /// Mark `name` as greeted now if a greeting is due.
     fn take_greeting(&self, name: &str) -> bool {
         if !self.cfg.greet || name == UNKNOWN {
@@ -254,6 +302,9 @@ impl Faces {
 
     /// Who is in front of the camera now: the watcher's latest result, or a fresh look.
     pub async fn who_is_here(&self, robot: &Robot) -> Result<Vec<Seen>> {
+        if !self.cfg.enabled {
+            bail!("face recognition is off ([faces] enabled = false)");
+        }
         if self
             .view
             .lock()
@@ -263,13 +314,23 @@ impl Faces {
         {
             return Ok(self.in_view());
         }
-        let frame = robot.snapshot(None, 12).await?;
+        // A frame that arrives from now on: latest_frame may predate a camera change.
+        robot.ensure_remote().await?;
+        let mut rx = self.hub.video.subscribe();
+        let frame = match tokio::time::timeout(Duration::from_secs(3), rx.recv()).await {
+            Ok(Ok(f)) => (*f).clone(),
+            _ => {
+                self.hub
+                    .snapshot(self.hub.config.camera.res, self.hub.config.camera.quality)
+                    .await?
+            }
+        };
         let faces = self.analyze(&frame).await?;
         let db = self.db.lock().unwrap();
         Ok(faces
             .iter()
             .map(|(d, e)| {
-                let m = db.best_match(e, self.cfg.threshold);
+                let m = self.name(&db, d, e);
                 Seen {
                     name: m.as_ref().map(|m| m.name.clone()),
                     score: m.map(|m| m.score),
@@ -287,7 +348,7 @@ impl Faces {
             bail!("face recognition is off ([faces] enabled = false)");
         }
         // Validate the name before spending time on the camera.
-        FaceDb::default().enroll(name, Vec::new())?;
+        let name = &db::clean_name(name)?;
         robot.ensure_remote().await?;
         self.engine().await?;
         let mut rx = self.hub.video.subscribe();
@@ -314,6 +375,14 @@ impl Faces {
                 _ => several += 1,
             }
         }
+        let collected = samples.len();
+        let samples = consistent(samples, ENROLL_CONSISTENCY);
+        if collected >= ENROLL_MIN_SAMPLES && samples.len() < ENROLL_MIN_SAMPLES {
+            bail!(
+                "the {collected} frames did not agree with each other; hold still, face the camera \
+in good light, and make sure only one person is in front of the robot"
+            );
+        }
         if samples.len() < ENROLL_MIN_SAMPLES {
             let why = if several >= none.max(small) && several > 0 {
                 "more than one face was in view; make sure only the person to remember is in front of the robot"
@@ -332,7 +401,7 @@ impl Faces {
             samples
                 .iter()
                 .filter_map(|s| db.best_match(s, self.cfg.threshold))
-                .find(|m| !m.name.eq_ignore_ascii_case(name.trim()))
+                .find(|m| !m.name.eq_ignore_ascii_case(name))
                 .map(|m| m.name)
         };
         let added = samples.len();
@@ -342,8 +411,8 @@ impl Faces {
             db.save(&self.db_path)?;
             db.names()
                 .into_iter()
-                .find(|n| n.eq_ignore_ascii_case(name.trim()))
-                .unwrap_or_else(|| name.trim().to_string())
+                .find(|n| n.eq_ignore_ascii_case(name))
+                .unwrap_or_else(|| name.clone())
         };
         // They are standing right there: no greeting for the next while.
         {
@@ -365,6 +434,7 @@ impl Faces {
     }
 
     pub async fn forget(&self, name: &str) -> Result<bool> {
+        let name = &db::normalize_name(name);
         let removed = {
             let mut db = self.db.lock().unwrap();
             let removed = db.forget(name);
@@ -378,10 +448,34 @@ impl Faces {
                 .lock()
                 .unwrap()
                 .tracks
-                .retain(|k, _| !k.eq_ignore_ascii_case(name.trim()));
+                .retain(|k, _| !k.eq_ignore_ascii_case(name));
         }
         Ok(removed)
     }
+}
+
+/// The samples that resemble the rest of the batch (median similarity at least `min`).
+fn consistent(samples: Vec<Vec<f32>>, min: f32) -> Vec<Vec<f32>> {
+    let medians: Vec<f32> = samples
+        .iter()
+        .enumerate()
+        .map(|(i, a)| {
+            let mut v: Vec<f32> = samples
+                .iter()
+                .enumerate()
+                .filter(|&(j, _)| j != i)
+                .map(|(_, b)| engine::similarity_score(a, b))
+                .collect();
+            v.sort_by(f32::total_cmp);
+            v.get(v.len() / 2).copied().unwrap_or(1.0)
+        })
+        .collect();
+    samples
+        .into_iter()
+        .zip(medians)
+        .filter(|(_, m)| *m >= min)
+        .map(|(s, _)| s)
+        .collect()
 }
 
 /// Watch the live video while the robot streams it. Spawned once by `crate::start`.
@@ -392,10 +486,19 @@ pub async fn run(robot: Robot) {
     let mut last = Instant::now() - PERIOD;
     let mut last_error = String::new();
     loop {
-        match rx.recv().await {
-            Ok(_) => {}
-            Err(RecvError::Lagged(_)) => continue,
-            Err(RecvError::Closed) => return,
+        match tokio::time::timeout(LEAVE_AFTER, rx.recv()).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(RecvError::Lagged(_))) => continue,
+            Ok(Err(RecvError::Closed)) => return,
+            Err(_) => {
+                // No video for a while: whoever was here is gone as far as anyone can tell.
+                for key in faces.sweep() {
+                    let name = (key != UNKNOWN).then_some(key);
+                    hub.push_event("face", json!({ "event": "left", "name": name }))
+                        .await;
+                }
+                continue;
+            }
         }
         if !faces.cfg.enabled || faces.db.lock().unwrap().is_empty() || last.elapsed() < PERIOD {
             continue;
@@ -419,11 +522,15 @@ pub async fn run(robot: Robot) {
                 continue;
             }
         };
+        // Do not talk over the robot (or the AI) speaking; those greetings are skipped, not queued.
+        let quiet = !hub.status.lock().await.speaker_playing;
+        let mut greet_names = Vec::new();
         for (key, arrived, score) in changes {
             let name = (key != UNKNOWN).then_some(key.clone());
-            // Do not talk over the robot (or the AI) speaking; that greeting is skipped, not queued.
-            let greet =
-                arrived && !hub.status.lock().await.speaker_playing && faces.take_greeting(&key);
+            let greet = arrived && quiet && faces.take_greeting(&key);
+            if greet {
+                greet_names.push(key.clone());
+            }
             hub.push_event(
                 "face",
                 json!({
@@ -434,17 +541,58 @@ pub async fn run(robot: Robot) {
                 }),
             )
             .await;
-            if greet {
-                let robot = robot.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = robot
-                        .say(&format!("Hi, {key}!"), Some("robot"), false)
-                        .await
-                    {
-                        tracing::warn!("greeting failed: {e:#}");
-                    }
-                });
-            }
         }
+        // One utterance for everyone who arrived together; separate ones would cut each other off.
+        if !greet_names.is_empty() {
+            let text = format!("Hi, {}!", join_names(&greet_names));
+            let robot = robot.clone();
+            tokio::spawn(async move {
+                if let Err(e) = robot.say(&text, Some("robot"), false).await {
+                    tracing::warn!("greeting failed: {e:#}");
+                }
+            });
+        }
+    }
+}
+
+/// "A", "A and B", "A, B and C".
+fn join_names(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unit(v: &[f32]) -> Vec<f32> {
+        let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        v.iter().map(|x| x / n).collect()
+    }
+
+    #[test]
+    fn joins_names() {
+        let n = |v: &[&str]| join_names(&v.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert_eq!(n(&["A"]), "A");
+        assert_eq!(n(&["A", "B"]), "A and B");
+        assert_eq!(n(&["A", "B", "C"]), "A, B and C");
+    }
+
+    #[test]
+    fn drops_samples_unlike_the_rest() {
+        let good = |d: f32| unit(&[1.0, d, 0.0]);
+        let samples = vec![
+            good(0.0),
+            good(0.1),
+            good(-0.1),
+            good(0.2),
+            unit(&[0.0, 0.0, 1.0]),
+        ];
+        let kept = consistent(samples, 0.4);
+        assert_eq!(kept.len(), 4);
+        assert!(kept.iter().all(|s| s[2] == 0.0));
     }
 }

@@ -167,8 +167,14 @@ fn fetch(dir: &Path, m: &ModelFile) -> Result<PathBuf> {
     }
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     tracing::info!("downloading {}", m.url);
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_connect(Some(std::time::Duration::from_secs(15)))
+        .timeout_global(Some(std::time::Duration::from_secs(300)))
+        .build()
+        .into();
     let mut bytes = Vec::new();
-    ureq::get(m.url)
+    agent
+        .get(m.url)
         .call()
         .with_context(|| format!("downloading {}", m.url))?
         .into_body()

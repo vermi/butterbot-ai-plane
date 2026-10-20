@@ -37,17 +37,30 @@ pub fn use_child() -> bool {
     cfg!(target_os = "macos") && std::env::var_os(CHILD_ENV).is_none()
 }
 
-/// Run this program with `args` as the Bluetooth child; its output goes to our stderr.
+/// Run this program with `args` as the Bluetooth child. Its output is passed on to our stderr;
+/// if it fails, the error is the one it reported.
 pub async fn run_child(args: &[std::ffi::OsString]) -> Result<()> {
+    use tokio::io::AsyncBufReadExt;
     let exe = std::env::current_exe().context("finding the bbplane executable")?;
-    let status = tokio::process::Command::new(exe)
+    let mut child = tokio::process::Command::new(exe)
         .args(args)
         .env(CHILD_ENV, "1")
         .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
-        .status()
-        .await
+        .spawn()
         .context("starting the Bluetooth helper")?;
+    let mut last_error = None;
+    if let Some(err) = child.stderr.take() {
+        let mut lines = tokio::io::BufReader::new(err).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            eprintln!("{line}");
+            if let Some(e) = line.strip_prefix("Error: ") {
+                last_error = Some(e.to_string());
+            }
+        }
+    }
+    let status = child.wait().await?;
     if status.success() {
         return Ok(());
     }
@@ -55,7 +68,10 @@ pub async fn run_child(args: &[std::ffi::OsString]) -> Result<()> {
     if std::os::unix::process::ExitStatusExt::signal(&status) == Some(6) {
         bail!(BLUETOOTH_BLOCKED);
     }
-    bail!("Bluetooth helper failed ({status})")
+    match last_error {
+        Some(e) => bail!("{e}"),
+        None => bail!("Bluetooth helper failed ({status})"),
+    }
 }
 
 /// `wake`, in a child process where that is safer (see `use_child`).

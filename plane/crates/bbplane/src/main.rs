@@ -79,6 +79,7 @@ async fn main() -> Result<()> {
         Cmd::Provision { .. } | Cmd::Wake { .. } | Cmd::Tune { .. } if provision::use_child() => {
             let args: Vec<_> = std::env::args_os().skip(1).collect();
             if let Err(e) = provision::run_child(&args).await {
+                // The child printed its own error already; only explain a macOS kill.
                 if e.to_string() == provision::BLUETOOTH_BLOCKED {
                     eprintln!("{e}");
                 }

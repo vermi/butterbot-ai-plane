@@ -199,6 +199,9 @@ void RemoteState::onRequest(LinkRequest req){
 
 		case T::ExitRemote:
 			link->ack(req.id);
+			// Speaking blocks this thread (no watchdog, no obstacle stop): stop moving first.
+			base->stopMotors();
+			driving = false;
 			speak("A I mode off.", true);
 			sm->transitionTo<IdleState>();
 			break;

@@ -147,6 +147,8 @@ impl Hub {
             let _ = tx.send(Err("robot disconnected".into()));
         }
         self.snapshots.lock().await.clear();
+        // A frame from before the link dropped must not pass for what the camera sees now.
+        *self.latest_frame.lock().await = None;
         self.push_event("link", json!({ "connected": false })).await;
     }
 
@@ -324,6 +326,9 @@ impl Hub {
                         s.camera_streaming = false;
                         s.mic_streaming = false;
                     }
+                }
+                if mode != "remote" {
+                    *self.latest_frame.lock().await = None;
                 }
                 self.push_event("mode", json!({ "mode": mode })).await;
             }

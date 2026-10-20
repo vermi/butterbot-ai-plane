@@ -49,23 +49,30 @@ def main() -> int:
     build = os.path.abspath(a.build)
     with open(os.path.join(build, "flash_args")) as f:
         lines = [l.split() for l in f.read().splitlines() if l.strip()]
-    options = lines[0]  # --flash_mode dio --flash_freq 80m --flash_size 16MB
+    args = lines[0]  # --flash_mode dio --flash_freq 80m --flash_size 16MB
     images = [(addr, path) for addr, path in lines[1:]]
     if not a.all:
         images = [(addr, path) for addr, path in images if addr == "0x10000"]
-    args = [x.replace("_", "-") if x.startswith("--") else x for x in options]
     for addr, path in images:
         args += [addr, path]
 
+    # Underscore spellings: ESP-IDF 5.5 installs esptool 4.x, which only knows these; esptool 5
+    # still accepts them. Check esptool runs before touching the robot.
+    esptool = [sys.executable, "-m", "esptool"]
+    if subprocess.call(esptool + ["version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) != 0:
+        print(f"esptool is not available to {sys.executable}; run `. ~/esp/esp-idf/export.sh` or `pip install esptool`.")
+        return 1
+
     reset(a.port, bootloader=True)
-    cmd = [sys.executable, "-m", "esptool", "--chip", "esp32s3", "-p", a.port, "-b", str(a.baud),
-           "--before", "no-reset", "--after", "no-reset", "write-flash", *args]
+    cmd = esptool + ["--chip", "esp32s3", "-p", a.port, "-b", str(a.baud),
+                     "--before", "no_reset", "--after", "no_reset", "write_flash", *args]
     print(" ".join(cmd), flush=True)
     rc = subprocess.call(cmd, cwd=build)
+    # Leave the ROM bootloader either way, or the robot sits there with the light off.
+    reset(a.port, bootloader=False)
     if rc != 0:
         print("\nFlashing failed. If the robot switched off while flashing, hold its power button and run this again.")
         return rc
-    reset(a.port, bootloader=False)
     print("\nDone. The robot switches itself off now; turn it on as usual (hold the button for a second).")
     return 0
 

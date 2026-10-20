@@ -509,10 +509,16 @@ void LinkService::onGotIP(uint32_t ip){
 	gotIP = ip != 0;
 	if(gotIP){
 		CMF_LOG(LinkService, LogLevel::Info, "got IP " IPSTR, IP2STR(reinterpret_cast<esp_ip4_addr_t*>(&ip)));
+		// Remember the channel for a fast join next time, but only with a good signal: a fast
+		// scan takes the first match on that channel, so a weak one would stick forever. Without
+		// it the next join scans everything and picks the strongest access point.
 		wifi_ap_record_t ap{};
-		if(esp_wifi_sta_get_ap_info(&ap) == ESP_OK && ap.primary != lastChannel){
-			lastChannel = ap.primary;
-			channelChanged = true; // stored by persist() on the state machine thread
+		if(esp_wifi_sta_get_ap_info(&ap) == ESP_OK){
+			const uint8_t channel = ap.rssi >= -70 ? ap.primary : 0;
+			if(channel != lastChannel){
+				lastChannel = channel;
+				channelChanged = true; // stored by persist() on the state machine thread
+			}
 		}
 	}
 }

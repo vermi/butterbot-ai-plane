@@ -313,13 +313,20 @@ function ensureAudio() {
 }
 $('listen').onclick = () => { ensureAudio(); listening = !listening; $('listen').classList.toggle('active', listening); $('listen').textContent = listening ? 'Stop listening' : 'Listen live'; };
 
-let micStream = null, micNode = null;
+let micStream = null, micNode = null, pttWanted = false, pttPress = 0;
 async function pttStart() {
+  if (pttWanted) return;
+  pttWanted = true;
+  const press = ++pttPress;
   ensureAudio();
+  let stream;
   try {
     // No automatic gain: it keeps raising the mic until the robot's speaker howls through it.
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false } });
-  } catch (e) { log('! microphone: ' + e.message); return; }
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false } });
+  } catch (e) { pttWanted = false; log('! microphone: ' + e.message); return; }
+  // Released (or pressed again) while the browser was still granting the mic: do not start.
+  if (!pttWanted || press !== pttPress) { stream.getTracks().forEach(t => t.stop()); return; }
+  micStream = stream;
   const src = ctx.createMediaStreamSource(micStream);
   micNode = ctx.createScriptProcessor(1024, 1, 1);
   let loud = 0;
@@ -340,9 +347,10 @@ async function pttStart() {
   $('ptt').classList.add('active');
 }
 function pttStop() {
+  pttWanted = false;
   if (!micStream) return;
   micNode.disconnect(); micStream.getTracks().forEach(t => t.stop()); micStream = null;
-  ws.send(JSON.stringify({ ptt: false }));
+  if (ws.readyState === 1) ws.send(JSON.stringify({ ptt: false }));
   $('ptt').classList.remove('active');
 }
 $('ptt').addEventListener('pointerdown', (e) => { $('ptt').setPointerCapture(e.pointerId); pttStart(); });
