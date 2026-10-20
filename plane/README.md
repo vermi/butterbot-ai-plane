@@ -201,6 +201,7 @@ default_tools_approval_mode = "approve"
 
 **Nudges.** `hear` and `reply` also return nudges, so the agent can act on its own:
 
+- `call`: the paired phone is ringing (with the caller's name);
 - `reminder`: a reminder it set with `remind` is due (in focus mode too; with no agent to pass
   it on within a minute, the robot says it itself);
 - `handled`: someone picked it up, put it down, shook it or dropped it;

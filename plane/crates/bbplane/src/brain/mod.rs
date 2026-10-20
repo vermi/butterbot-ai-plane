@@ -400,6 +400,10 @@ pub fn describe(ev: &crate::control::AgentEvent) -> Option<(String, Option<Bytes
                     "[{} just came into view. In view: {in_view}.]",
                     info["name"].as_str().unwrap_or("someone")
                 ),
+                Some("call") => format!(
+                    "[The phone paired with you is ringing: {} is calling. Tell your person, briefly.]",
+                    info["from"].as_str().unwrap_or("someone")
+                ),
                 Some("reminder") => format!(
                     "[Reminder (set at {}): {}. Tell the person now, briefly.]",
                     info["set_at"].as_str().unwrap_or("earlier"),

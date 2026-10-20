@@ -863,6 +863,12 @@ pub async fn on_body(robot: Robot) {
                         _ => None,
                     }
                 }
+                "phone_call" => {
+                    let from = e.data["from"].as_str().unwrap_or("someone");
+                    tracing::info!("the phone is ringing: telling the agent");
+                    robot.life.call(from);
+                    None
+                }
                 "battery" => {
                     let percent = e.data["pct"].as_f64().unwrap_or(100.0).round() as u32;
                     let plugged_in = e.data["charging"]

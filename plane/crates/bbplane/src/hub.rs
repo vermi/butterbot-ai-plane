@@ -374,6 +374,9 @@ impl Hub {
                 self.push_event("drive_stopped", json!({ "reason": reason }))
                     .await
             }
+            FromRobot::PhoneCall { from } => {
+                self.push_event("phone_call", json!({ "from": from })).await
+            }
             FromRobot::Wifi {
                 rssi,
                 ram_free,

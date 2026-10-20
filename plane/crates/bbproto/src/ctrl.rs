@@ -331,6 +331,10 @@ pub enum FromRobot {
         #[serde(default)]
         underruns: u32,
     },
+    /// The paired phone is ringing (AI mode only).
+    PhoneCall {
+        from: String,
+    },
     /// Wi-Fi signal strength, reported every few seconds while connected.
     Wifi {
         rssi: i32,

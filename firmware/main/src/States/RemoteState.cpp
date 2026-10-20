@@ -73,6 +73,9 @@ RemoteState::RemoteState(BBStateMachine* sm) : State(sm){
 	if(audio){
 		sm->bindState(audio->OnAudioStatusChanged, this, &RemoteState::onAudioStatus);
 	}
+	if(auto* phone = app->getService<Phone>()){
+		sm->bindState(phone->onNotifEvent, this, &RemoteState::onPhoneNotif);
+	}
 
 	if(audio){
 		savedGain = audio->getGain();
@@ -459,6 +462,28 @@ void RemoteState::speak(const char* text, bool wait){
 	if(wait){
 		audio->waitEnd(pdMS_TO_TICKS(5000));
 	}
+}
+
+// A ringing phone is passed to the plane, so the agent can tell its person who is calling.
+void RemoteState::onPhoneNotif(Phone::NotifEvent event){
+	if(event.action != Phone::NotifEvent::Added || link == nullptr){
+		return;
+	}
+	auto* phone = Application::getApp()->getService<Phone>();
+	if(phone == nullptr){
+		return;
+	}
+	const Notif notif = phone->getNotif(event.id);
+	if(notif.category != Notif::Category::IncomingCall){
+		return;
+	}
+	std::string from = notif.title.empty() ? notif.message : notif.title;
+	size_t n = std::min<size_t>(from.size(), 80);
+	while(n > 0 && n < from.size() && (static_cast<uint8_t>(from[n]) & 0xC0) == 0x80){
+		n--; // not in the middle of a UTF-8 character
+	}
+	from.resize(n);
+	link->sendJson("{\"t\":\"phone_call\",\"from\":\"" + LinkService::escape(from) + "\"}");
 }
 
 void RemoteState::onAudioStatus(bool playing){

@@ -183,6 +183,7 @@ Then run `bbplane serve` and short-press the robot's button. From then on:
 - **Reminders and timers:** "Butterbot, remind me in 20 minutes to take the pizza out." They
   survive a restart and come through focus mode.
 - **It knows its battery:** it asks to be charged at 20% and 10%, and says thanks when plugged in.
+- **Phone calls:** with your phone paired, it tells you who is calling.
 - **The status light** shows what it is doing; see [Status light](#status-light).
 - **The live view** shows the conversation, what the agent is doing and its token use, what it
   remembers and the reminders that are set (both can be removed there), and has Pause and Focus

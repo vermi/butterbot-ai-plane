@@ -7,6 +7,7 @@
 #include "Services/BaseBoard.h"
 #include "Services/ISRButtonInput.h"
 #include "Services/LEDRhythm.h"
+#include "Phone/Phone.h"
 
 /**
  * AI mode: the laptop control plane drives the robot over the link. Autonomy is off.
@@ -73,6 +74,7 @@ private:
 	void onProximityReading(ProxState f, ProxState b);
 	void onButton(int button, ISRButtonInput::Action action);
 	void onAudioStatus(bool playing);
+	void onPhoneNotif(Phone::NotifEvent event);
 
 	void drive(const LinkRequest& req);
 	void stopDriving(const char* reason);

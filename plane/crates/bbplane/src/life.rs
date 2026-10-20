@@ -19,6 +19,8 @@ use crate::config::LifeConfig;
 const ARRIVAL_FRESH: Duration = Duration::from_secs(60);
 /// Being picked up or shaken not reacted to within this long is old news.
 const HANDLED_FRESH: Duration = Duration::from_secs(20);
+/// A phone rings for about this long.
+const CALL_FRESH: Duration = Duration::from_secs(25);
 /// A battery warning not passed on within this long waits for the next one.
 const BATTERY_FRESH: Duration = Duration::from_secs(300);
 /// Someone keeps talking: do not end a session in the middle of a conversation.
@@ -43,6 +45,8 @@ const SUGGESTIONS_ALONE: &[&str] = &[
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "nudge", rename_all = "snake_case")]
 pub enum Nudge {
+    /// The paired phone is ringing.
+    Call { from: String },
     /// Someone handled the robot: `pickup`, `putdown`, `shake`, `fall` or `upside_down`.
     Handled { how: String },
     /// The battery is low (`plugged_in` false: ask to be charged), or the robot was just plugged
@@ -67,6 +71,7 @@ struct State {
     arrivals: VecDeque<(String, Instant)>,
     noticed: VecDeque<(String, Instant)>,
     handled: Option<(String, Instant)>,
+    call: Option<(String, Instant)>,
     battery: Option<(u32, bool, Instant)>,
     session_started: Instant,
     rng: u64,
@@ -90,6 +95,7 @@ impl Life {
             arrivals: VecDeque::new(),
             noticed: VecDeque::new(),
             handled: None,
+            call: None,
             battery: None,
             session_started: Instant::now(),
             rng: seed,
@@ -120,6 +126,7 @@ impl Life {
         s.arrivals.clear();
         s.noticed.clear();
         s.handled = None;
+        s.call = None;
         s.battery = None;
     }
 
@@ -164,6 +171,14 @@ impl Life {
         self.state.lock().unwrap().handled = Some((how.to_string(), Instant::now()));
     }
 
+    /// The paired phone is ringing.
+    pub fn call(&self, from: &str) {
+        if !self.cfg.enabled || self.focused().is_some() {
+            return;
+        }
+        self.state.lock().unwrap().call = Some((from.to_string(), Instant::now()));
+    }
+
     /// Tell the agent about the battery (see `Nudge::Battery`).
     pub fn battery(&self, percent: u32, plugged_in: bool) {
         if !self.cfg.enabled || self.focused().is_some() {
@@ -188,6 +203,13 @@ impl Life {
             return None;
         }
         let mut s = self.state.lock().unwrap();
+        if let Some((from, at)) = s.call.take()
+            && at.elapsed() < CALL_FRESH
+        {
+            s.last_activity = Instant::now();
+            reschedule(&self.cfg, &mut s);
+            return Some(Nudge::Call { from });
+        }
         if let Some((how, at)) = s.handled.take()
             && at.elapsed() < HANDLED_FRESH
         {
