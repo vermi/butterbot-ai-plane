@@ -3,6 +3,7 @@
 pub mod audio;
 pub mod config;
 pub mod control;
+pub mod face;
 pub mod hub;
 pub mod link;
 pub mod mcp;
@@ -47,6 +48,8 @@ pub async fn start(config: config::Config) -> Result<Plane> {
             }
         }
     });
+    tokio::spawn(face::run(robot.clone()));
+    tokio::spawn(control::announce_connections(robot.clone()));
     tokio::spawn({
         let robot = robot.clone();
         async move {

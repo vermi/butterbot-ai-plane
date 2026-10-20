@@ -20,10 +20,14 @@ pub struct Config {
     pub auto_enter_remote: bool,
     /// Wake the robot over Bluetooth when it is not connected. The robot only runs Wi-Fi in AI mode.
     pub ble_wake: bool,
+    /// Have the robot say "Connected." when it links up in AI mode (it says "A I mode on" when
+    /// AI mode starts, before joining Wi-Fi).
+    pub announce_connect: bool,
     pub camera: CameraConfig,
     pub mic: MicConfig,
     pub tts: TtsConfig,
     pub safety: SafetyConfig,
+    pub faces: FacesConfig,
     /// Where `listen` recordings and snapshots are saved.
     pub data_dir: Option<PathBuf>,
 }
@@ -106,10 +110,12 @@ impl Default for Config {
             allowed_hosts: Vec::new(),
             auto_enter_remote: true,
             ble_wake: true,
+            announce_connect: true,
             camera: CameraConfig::default(),
             mic: MicConfig::default(),
             tts: TtsConfig::default(),
             safety: SafetyConfig::default(),
+            faces: FacesConfig::default(),
             data_dir: None,
         }
     }
@@ -122,6 +128,30 @@ pub struct SafetyConfig {
     pub tilt: bool,
     /// Stop driving forward when the front sensor is covered.
     pub obstacle: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FacesConfig {
+    /// Recognise enrolled people in AI mode (runs on this machine; idle until someone is enrolled).
+    pub enabled: bool,
+    /// Say hello when an enrolled person arrives.
+    pub greet: bool,
+    /// Greet the same person at most this often.
+    pub greet_cooldown_secs: u64,
+    /// Similarity (0..1) needed to name someone. Higher means fewer mix-ups but more misses.
+    pub threshold: f32,
+}
+
+impl Default for FacesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            greet: true,
+            greet_cooldown_secs: 600,
+            threshold: 0.40,
+        }
+    }
 }
 
 impl Default for SafetyConfig {

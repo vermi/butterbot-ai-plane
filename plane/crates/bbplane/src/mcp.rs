@@ -27,7 +27,10 @@ Call `exit_ai_mode` to give it back.
 - `look` returns what the camera sees now (320x240 live frame); `snapshot` takes a 640x480 still.
 - `listen` returns microphone audio as WAV plus loudness stats.
 - `say` speaks through the robot (on-robot voice by default).
-- `events` long-polls robot events (sensors, battery, button, scenario progress).";
+- `events` long-polls robot events (sensors, battery, button, scenario progress, faces).
+- Face recognition runs on this machine. People enrolled with `remember_face` are recognized \
+in AI mode: `face` events report arrivals and departures, `who_is_here` and `status` show who is \
+in view, and the robot says hello to them. Only enroll someone who has agreed to it.";
 
 #[derive(Clone)]
 pub struct BotServer {
@@ -131,6 +134,12 @@ pub struct ListenArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct FaceNameArgs {
+    /// The person's name, as the robot should say it.
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SayArgs {
     /// What to say.
     pub text: String,
@@ -206,6 +215,52 @@ impl BotServer {
     async fn enter_ai_mode(&self) -> Result<CallToolResult, McpError> {
         tryt!(self.robot.enter_remote().await);
         ok_text("AI mode on")
+    }
+
+    #[tool(
+        description = "Learn the face of the one person in front of the camera under a name, so the robot \
+recognizes and greets them. Takes 5-12 s: ask them to face the robot from about an arm's length, alone \
+in view. Enrolling the same name again adds to what it knows. The first use downloads the face models \
+(about 40 MB). Only enroll someone who agreed to it."
+    )]
+    async fn remember_face(
+        &self,
+        Parameters(a): Parameters<FaceNameArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let r = tryt!(self.robot.faces.remember(&self.robot, &a.name).await);
+        let mut msg = format!("Remembered {} ({} new samples).", r.name, r.samples_added);
+        if let Some(other) = r.resembles {
+            msg.push_str(&format!(
+                " Note: some samples also resemble {other}; if they are different people, \
+recognition may mix them up."
+            ));
+        }
+        ok_text(msg)
+    }
+
+    #[tool(description = "Forget a person enrolled with remember_face (deletes their face data).")]
+    async fn forget_face(
+        &self,
+        Parameters(a): Parameters<FaceNameArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        if tryt!(self.robot.faces.forget(&a.name).await) {
+            ok_text(format!("Forgot {}.", a.name.trim()))
+        } else {
+            fail(format!(
+                "Nobody called {} is enrolled. Known: {}",
+                a.name.trim(),
+                self.robot.faces.known().join(", ")
+            ))
+        }
+    }
+
+    #[tool(
+        description = "Who is in front of the camera right now: enrolled people by name (with a 0..1 \
+similarity score), anyone else as unknown, plus everyone enrolled."
+    )]
+    async fn who_is_here(&self) -> Result<CallToolResult, McpError> {
+        let seen = tryt!(self.robot.faces.who_is_here(&self.robot).await);
+        ok_json(serde_json::json!({ "in_view": seen, "known": self.robot.faces.known() }))
     }
 
     #[tool(description = "Leave AI mode and give the robot back its own behavior.")]

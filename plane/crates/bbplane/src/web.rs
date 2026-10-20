@@ -47,6 +47,9 @@ pub fn router(robot: Robot) -> Router {
         .route("/api/stop", post(stop))
         .route("/api/say", post(say))
         .route("/api/camera", post(camera))
+        .route("/api/faces", get(faces))
+        .route("/api/faces/remember", post(remember_face))
+        .route("/api/faces/forget", post(forget_face))
         .nest_service("/mcp", mcp)
         .layer(middleware::from_fn(move |req, next| {
             guard(allowed.clone(), req, next)
@@ -222,6 +225,29 @@ async fn camera(State(r): State<Robot>, Json(b): Json<CameraBody>) -> Response {
         .await
     {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+async fn faces(State(r): State<Robot>) -> Json<Value> {
+    Json(r.faces.status_json())
+}
+
+#[derive(Deserialize)]
+struct FaceBody {
+    name: String,
+}
+
+async fn remember_face(State(r): State<Robot>, Json(b): Json<FaceBody>) -> Response {
+    match r.faces.remember(&r, &b.name).await {
+        Ok(e) => Json(json!({ "ok": true, "enrolled": e })).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+async fn forget_face(State(r): State<Robot>, Json(b): Json<FaceBody>) -> Response {
+    match r.faces.forget(&b.name).await {
+        Ok(removed) => Json(json!({ "ok": true, "removed": removed })).into_response(),
         Err(e) => err(e),
     }
 }

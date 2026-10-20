@@ -24,8 +24,14 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; pa
 @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
 .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
-.video { aspect-ratio: 4 / 3; background: #000; border-radius: 8px; overflow: hidden; display: grid; place-items: center; }
+.video { position: relative; aspect-ratio: 4 / 3; background: #000; border-radius: 8px; overflow: hidden; display: grid; place-items: center; }
 .video img { width: 100%; height: 100%; object-fit: contain; }
+.video svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.video svg rect { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.video svg text { font: 600 12px system-ui, sans-serif; paint-order: stroke; stroke: #000; stroke-width: 3px; }
+.known { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
+.known li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.known button { padding: 2px 8px; font-size: 12px; }
 .video .none { color: #888; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .stack { display: grid; gap: 12px; align-content: start; }
@@ -53,7 +59,7 @@ input[type=text] { flex: 1; min-width: 0; }
 <main>
   <section class="stack">
     <div class="card">
-      <div class="video"><img id="video" alt="Robot camera"><span class="none" id="novideo">No video yet</span></div>
+      <div class="video"><img id="video" alt="Robot camera"><span class="none" id="novideo">No video yet</span><svg id="boxes" aria-hidden="true"></svg></div>
       <div class="row" style="margin-top:10px">
         <select id="res" aria-label="Resolution">
           <option value="r128">128×128</option><option value="qvga" selected>320×240</option>
@@ -77,6 +83,16 @@ input[type=text] { flex: 1; min-width: 0; }
         <button class="primary" id="enter">Enter AI mode</button>
         <button id="exit">Exit</button>
       </div>
+    </div>
+    <div class="card">
+      <h2>Faces</h2>
+      <div id="inview" class="muted">Nobody in view</div>
+      <form class="row" id="faceform" style="margin-top:8px">
+        <input type="text" id="facename" placeholder="Your name" autocomplete="off" maxlength="40">
+        <button class="primary" id="remember">Remember me</button>
+      </form>
+      <p class="muted" id="facemsg" style="margin:6px 0 0">Face the robot from about an arm's length, alone in view.</p>
+      <ul class="known" id="known"></ul>
     </div>
     <div class="card">
       <h2>Drive <span class="muted">(hold, or W A S D)</span></h2>
@@ -140,6 +156,63 @@ setInterval(refresh, 2000); refresh();
     } catch { await new Promise(r => setTimeout(r, 2000)); }
   }
 })();
+
+// ---- faces ----
+const SVG = 'http://www.w3.org/2000/svg';
+function svgEl(tag, attrs, text) {
+  const el = document.createElementNS(SVG, tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  if (text !== undefined) el.textContent = text;
+  return el;
+}
+let knownShown = '';
+function showFaces(f) {
+  if (!f) return;
+  const seen = f.in_view || [];
+  $('inview').textContent = seen.length
+    ? 'In view: ' + seen.map(s => s.name ? `${s.name} (${s.score.toFixed(2)})` : 'unknown').join(', ')
+    : 'Nobody in view';
+  // Boxes in frame pixels; the SVG viewBox matches the frame so they line up with object-fit: contain.
+  const svg = $('boxes');
+  svg.replaceChildren();
+  if (seen.length) svg.setAttribute('viewBox', `0 0 ${seen[0].frame_width} ${seen[0].frame_height}`);
+  for (const s of seen) {
+    const [x, y, w, h] = s.bbox;
+    const color = s.name ? '#3ccf6e' : '#f0c419';
+    svg.append(svgEl('rect', { x, y, width: w, height: h, stroke: color }));
+    svg.append(svgEl('text', { x, y: Math.max(10, y - 3), fill: color }, s.name || 'unknown'));
+  }
+  const names = (f.known || []).join('\n');
+  if (names === knownShown) return;
+  knownShown = names;
+  const ul = $('known');
+  ul.replaceChildren();
+  for (const name of f.known || []) {
+    const li = document.createElement('li');
+    const span = document.createElement('span'); span.textContent = name;
+    const b = document.createElement('button'); b.textContent = 'Forget'; b.type = 'button';
+    b.onclick = async () => {
+      if (!confirm(`Forget ${name}'s face?`)) return;
+      await api('/api/faces/forget', { name });
+      showFaces(await api('/api/faces'));
+    };
+    li.append(span, b); ul.append(li);
+  }
+}
+setInterval(async () => { if (!document.hidden) showFaces(await api('/api/faces')); }, 700);
+$('faceform').onsubmit = async (e) => {
+  e.preventDefault();
+  const name = $('facename').value.trim();
+  if (!name) { $('facemsg').textContent = 'Type your name first.'; return; }
+  $('remember').disabled = true;
+  $('facemsg').textContent = 'Looking at you… hold still for a few seconds.';
+  const j = await api('/api/faces/remember', { name });
+  $('remember').disabled = false;
+  $('facemsg').textContent = j.ok
+    ? `Remembered ${j.enrolled.name} (${j.enrolled.samples_added} samples).` + (j.enrolled.resembles ? ` Also resembles ${j.enrolled.resembles}.` : '')
+    : (j.error || 'Failed.');
+  showFaces(await api('/api/faces'));
+};
 
 // ---- video ----
 const img = $('video');

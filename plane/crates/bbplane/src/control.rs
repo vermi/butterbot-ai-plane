@@ -36,6 +36,7 @@ const SPK_LEAD: Duration = Duration::from_millis(200);
 #[derive(Clone)]
 pub struct Robot {
     pub hub: Arc<Hub>,
+    pub faces: Arc<crate::face::Faces>,
     /// Serialises wake attempts: many tool calls / clicks share one BLE wake.
     wake_lock: Arc<Mutex<()>>,
     speaker: Arc<Mutex<Option<CancellationToken>>>,
@@ -51,6 +52,7 @@ pub struct DriveOutcome {
 impl Robot {
     pub fn new(hub: Arc<Hub>) -> Robot {
         Robot {
+            faces: Arc::new(crate::face::Faces::new(hub.clone())),
             hub,
             wake_lock: Default::default(),
             speaker: Default::default(),
@@ -481,7 +483,41 @@ impl Robot {
             .latest_frame()
             .await
             .map(|f| json!({ "width": f.width, "height": f.height, "seq": f.header.seq }));
-        json!({ "robot": s, "latest_frame": latest, "last_event_seq": self.hub.last_event_seq().await })
+        json!({
+            "robot": s,
+            "latest_frame": latest,
+            "faces": self.faces.status_json(),
+            "last_event_seq": self.hub.last_event_seq().await,
+        })
+    }
+}
+
+/// Say "Connected." each time the robot links up in AI mode, so whoever pressed its button
+/// knows it is ready. Spawned once by `crate::start`.
+pub async fn announce_connections(robot: Robot) {
+    if !robot.hub.config.announce_connect {
+        return;
+    }
+    let mut cursor = robot.hub.last_event_seq().await;
+    let mut linked = false;
+    loop {
+        for e in robot
+            .hub
+            .events_since(cursor, Duration::from_secs(60))
+            .await
+        {
+            cursor = e.seq;
+            match e.kind.as_str() {
+                "link" => linked = e.data["connected"] == true,
+                "mode" if linked && e.data["mode"] == "remote" => {
+                    linked = false;
+                    if let Err(e) = robot.say("Connected.", Some("robot"), false).await {
+                        tracing::debug!("connect announcement: {e:#}");
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 }
 
