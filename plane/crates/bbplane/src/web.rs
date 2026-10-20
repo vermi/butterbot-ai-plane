@@ -260,7 +260,9 @@ async fn agent_control(State(r): State<Robot>, Json(b): Json<AgentControl>) -> J
 }
 
 async fn faces(State(r): State<Robot>) -> Json<Value> {
-    Json(r.faces.status_json())
+    let mut v = r.faces.status_json();
+    v["objects"] = serde_json::to_value(r.objects.in_view()).unwrap_or_default();
+    Json(v)
 }
 
 #[derive(Deserialize)]

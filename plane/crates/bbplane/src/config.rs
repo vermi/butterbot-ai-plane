@@ -28,6 +28,7 @@ pub struct Config {
     pub tts: TtsConfig,
     pub safety: SafetyConfig,
     pub faces: FacesConfig,
+    pub objects: ObjectsConfig,
     pub stt: SttConfig,
     pub life: LifeConfig,
     pub agent: AgentConfig,
@@ -120,6 +121,7 @@ impl Default for Config {
             tts: TtsConfig::default(),
             safety: SafetyConfig::default(),
             faces: FacesConfig::default(),
+            objects: ObjectsConfig::default(),
             stt: SttConfig::default(),
             life: LifeConfig::default(),
             agent: AgentConfig::default(),
@@ -161,6 +163,31 @@ impl Default for FacesConfig {
             greet: true,
             greet_cooldown_secs: 600,
             threshold: 0.40,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ObjectsConfig {
+    /// Detect everyday objects in AI mode (runs on this machine; the model, about 36 MB, is
+    /// downloaded on first use). People seen without a face count as company for idle nudges.
+    pub enabled: bool,
+    /// Kinds of things (COCO class names) whose coming into view nudges the agent.
+    pub notice: Vec<String>,
+    /// Detection confidence (0..1) needed to count something as seen.
+    pub threshold: f32,
+    /// Notice the same kind of thing at most this often.
+    pub notice_cooldown_secs: u64,
+}
+
+impl Default for ObjectsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            notice: ["cat", "dog", "bird"].map(String::from).to_vec(),
+            threshold: 0.4,
+            notice_cooldown_secs: 600,
         }
     }
 }

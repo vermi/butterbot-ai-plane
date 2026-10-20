@@ -13,6 +13,7 @@ pub mod light;
 pub mod link;
 pub mod mcp;
 pub mod models;
+pub mod objects;
 pub mod provision;
 pub mod sim;
 pub mod stt;
@@ -59,6 +60,7 @@ pub async fn start(config: config::Config) -> Result<Plane> {
         }
     });
     tokio::spawn(face::run(robot.clone()));
+    tokio::spawn(objects::run(robot.clone()));
     tokio::spawn(ears::run(robot.clone()));
     tokio::spawn(agent::run(robot.clone()));
     tokio::spawn(control::on_link_up(robot.clone()));

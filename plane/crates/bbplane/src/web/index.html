@@ -227,13 +227,21 @@ let knownShown = '';
 function showFaces(f) {
   if (!f) return;
   const seen = f.in_view || [];
-  $('inview').textContent = seen.length
+  const things = f.objects || [];
+  const kinds = [...new Set(things.map(o => o.class))];
+  $('inview').textContent = (seen.length
     ? 'In view: ' + seen.map(s => s.name ? `${s.name} (${s.score.toFixed(2)})` : 'unknown').join(', ')
-    : 'Nobody in view';
+    : 'Nobody in view') + (kinds.length ? ' · Things: ' + kinds.join(', ') : '');
   // Boxes in frame pixels; the SVG viewBox matches the frame so they line up with object-fit: contain.
   const svg = $('boxes');
   svg.replaceChildren();
-  if (seen.length) svg.setAttribute('viewBox', `0 0 ${seen[0].frame_width} ${seen[0].frame_height}`);
+  const any = seen[0] || things[0];
+  if (any) svg.setAttribute('viewBox', `0 0 ${any.frame_width} ${any.frame_height}`);
+  for (const o of things) {
+    const [x, y, w, h] = o.bbox;
+    svg.append(svgEl('rect', { x, y, width: w, height: h, stroke: '#5aa9ff', 'stroke-dasharray': '4 3' }));
+    svg.append(svgEl('text', { x: x + 2, y: y + h - 4, fill: '#5aa9ff' }, o.class));
+  }
   for (const s of seen) {
     const [x, y, w, h] = s.bbox;
     const color = s.name ? '#3ccf6e' : '#f0c419';

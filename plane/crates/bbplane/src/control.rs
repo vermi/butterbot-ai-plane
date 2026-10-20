@@ -39,6 +39,7 @@ const SPK_LEAD: Duration = Duration::from_millis(200);
 pub struct Robot {
     pub hub: Arc<Hub>,
     pub faces: Arc<crate::face::Faces>,
+    pub objects: Arc<crate::objects::Objects>,
     pub ears: Arc<crate::ears::Ears>,
     pub life: Arc<crate::life::Life>,
     pub agent: Arc<crate::agent::AgentState>,
@@ -87,6 +88,7 @@ impl Robot {
     pub fn new(hub: Arc<Hub>) -> Robot {
         Robot {
             faces: Arc::new(crate::face::Faces::new(hub.clone())),
+            objects: Arc::new(crate::objects::Objects::new(hub.clone())),
             ears: Arc::new(crate::ears::Ears::new(hub.clone())),
             life: Arc::new(crate::life::Life::new(hub.config.life.clone())),
             agent: Default::default(),
@@ -618,6 +620,7 @@ goodbye). Say bye and keep listening."
             "robot": s,
             "latest_frame": latest,
             "faces": self.faces.status_json(),
+            "objects": self.objects.status_json(),
             "focus_minutes_left": self.life.focused().map(|d| d.as_secs().div_ceil(60)),
             "agent": {
                 "enabled": self.hub.config.agent.enabled,
@@ -687,8 +690,11 @@ impl Robot {
                 return Ok(AgentEvent::EndSession);
             }
             let seen = self.faces.in_view();
-            // The camera sits low and often misses faces; people talking nearby count too.
-            let company = !seen.is_empty() || self.ears.heard_speech_within(COMPANY);
+            // The camera sits low and often misses faces: people seen without one, or talking
+            // nearby, count too.
+            let company = !seen.is_empty()
+                || self.objects.person_in_view()
+                || self.ears.heard_speech_within(COMPANY);
             if let Some(n) = self.life.poll(company) {
                 tracing::info!(
                     "nudge for the agent: {} (company: {company}, faces in view: {})",

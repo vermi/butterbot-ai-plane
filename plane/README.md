@@ -134,6 +134,22 @@ second are checked:
 `<data_dir>/models` and checked against pinned SHA-256 hashes. People are stored in
 `<data_dir>/faces.json`: names and embeddings, no images, mode 0600.
 
+## Object detection
+
+With `[objects] enabled` (the default), about one frame a second goes through YOLOX-S (COCO's 80
+everyday classes, 0.15 s a frame on an Apple Silicon CPU, with tract). The model (36 MB,
+Apache-2.0) is downloaded into `<data_dir>/models` on first use and checked against a pinned
+hash.
+
+- **Noticing:** when one of the `notice` kinds (cat, dog, bird) has been in view for two frames,
+  `hear` returns a `noticed` nudge with a picture, at most once per `notice_cooldown_secs`. The
+  detector mixes animals up at this resolution, so they count as one kind, and the agent is told
+  "an animal, maybe a cat" and checks the picture.
+- **Company:** a person in view counts as company for idle nudges, even when the low camera
+  sees no face.
+- `status`, `who_is_here` and the live view (dashed blue boxes) show what else it detects. These
+  are not passed to the built-in brains, which see the picture instead.
+
 ## Listening
 
 With `[stt] enabled` (the default), the plane transcribes the robot's microphone while it is in AI
@@ -181,6 +197,7 @@ default_tools_approval_mode = "approve"
 **Nudges.** `hear` and `reply` also return nudges, so the agent can act on its own:
 
 - `arrived`: an enrolled person came into view;
+- `noticed`: an animal came into view (see [Object detection](#object-detection));
 - `idle`: nobody has talked to the robot for a random 2–5 minutes while someone is around (in
   view, or talking nearby), or 15–30 minutes while nobody is. It may carry a suggestion.
 
@@ -252,6 +269,12 @@ threshold = 0.40         # 0..1 similarity needed to name someone; higher = fewe
 engine = "robot"         # or "command" for laptop TTS streamed to the robot
 command = []             # e.g. ["piper", "--model", "en_US-amy-medium.onnx", "--output_file", "{out}"]
 text_on_stdin = false    # true for piper
+
+[objects]
+enabled = true           # detect objects in AI mode (downloads a 36 MB model on first use)
+notice = ["cat", "dog", "bird"]   # COCO classes whose arrival nudges the agent
+threshold = 0.4          # detection confidence needed
+notice_cooldown_secs = 600
 
 [stt]
 enabled = true           # transcribe the microphone in AI mode

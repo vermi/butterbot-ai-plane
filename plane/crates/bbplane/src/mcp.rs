@@ -35,7 +35,9 @@ times out just means nobody spoke; call it again.
 - `events` long-polls robot events (sensors, battery, button, scenario progress, faces).
 - Face recognition runs on this machine. People enrolled with `remember_face` are recognized \
 in AI mode: `face` events report arrivals and departures, `who_is_here` and `status` show who is \
-in view, and the robot says hello to them. Only enroll someone who has agreed to it.";
+in view, and the robot says hello to them. Only enroll someone who has agreed to it.
+- Object detection also runs on this machine: `hear` returns a `noticed` nudge when a cat, dog or \
+bird comes into view, and `who_is_here` and `status` list its guesses at what else is in view.";
 
 #[derive(Clone)]
 pub struct BotServer {
@@ -292,11 +294,16 @@ recognition may mix them up."
 
     #[tool(
         description = "Who is in front of the camera right now: enrolled people by name (with a 0..1 \
-similarity score), anyone else as unknown, plus everyone enrolled."
+similarity score), anyone else as unknown, plus everyone enrolled, and the detector's guesses at \
+objects in view (COCO's 80 everyday classes, so a fireplace may come out as an oven)."
     )]
     async fn who_is_here(&self) -> Result<CallToolResult, McpError> {
         let seen = tryt!(self.robot.faces.who_is_here(&self.robot).await);
-        ok_json(serde_json::json!({ "in_view": seen, "known": self.robot.faces.known() }))
+        ok_json(serde_json::json!({
+            "in_view": seen,
+            "known": self.robot.faces.known(),
+            "things": self.robot.objects.kinds_in_view(),
+        }))
     }
 
     #[tool(description = "Leave AI mode and give the robot back its own behavior.")]

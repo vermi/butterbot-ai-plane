@@ -1,7 +1,7 @@
 //! The robot's own initiative while an agent runs it.
 //!
-//! Between commands, `hear` and `reply` also return *nudges*: someone familiar arrived, or it has
-//! been quiet for a while. The agent decides what to do with them (look around, wander, start some
+//! Between commands, `hear` and `reply` also return *nudges*: someone familiar arrived, an animal
+//! came into view, or it has been quiet for a while. The agent decides what to do with them (look around, wander, start some
 //! chit-chat, or rest). Nudges come every few minutes while someone is in view and rarely when the
 //! room is empty. In focus mode there are none until the robot is called by name or the focus time
 //! runs out.
@@ -41,6 +41,8 @@ const SUGGESTIONS_ALONE: &[&str] = &[
 pub enum Nudge {
     /// A recognised person came into view.
     Arrived { name: String },
+    /// Something worth noticing (a cat, a dog...) came into view.
+    Noticed { what: String },
     /// Nobody has said anything to the robot for a while.
     Idle {
         quiet_for_minutes: u64,
@@ -54,6 +56,7 @@ struct State {
     wait_in_view: Duration,
     wait_alone: Duration,
     arrivals: VecDeque<(String, Instant)>,
+    noticed: VecDeque<(String, Instant)>,
     session_started: Instant,
     rng: u64,
 }
@@ -74,6 +77,7 @@ impl Life {
             wait_in_view: Duration::ZERO,
             wait_alone: Duration::ZERO,
             arrivals: VecDeque::new(),
+            noticed: VecDeque::new(),
             session_started: Instant::now(),
             rng: seed,
         };
@@ -101,6 +105,7 @@ impl Life {
         let mut s = self.state.lock().unwrap();
         s.focus_until = Some(Instant::now() + d);
         s.arrivals.clear();
+        s.noticed.clear();
     }
 
     pub fn unfocus(&self) {
@@ -136,6 +141,16 @@ impl Life {
         s.arrivals.push_back((name.to_string(), Instant::now()));
     }
 
+    /// Something worth noticing came into view.
+    pub fn noticed(&self, what: &str) {
+        if !self.cfg.enabled || self.focused().is_some() {
+            return;
+        }
+        let mut s = self.state.lock().unwrap();
+        s.noticed.retain(|(w, _)| w != what);
+        s.noticed.push_back((what.to_string(), Instant::now()));
+    }
+
     /// A nudge that is due now. `anyone_in_view`: a face (known or not) is in front of the camera.
     pub fn poll(&self, anyone_in_view: bool) -> Option<Nudge> {
         if !self.cfg.enabled || self.focused().is_some() {
@@ -147,6 +162,12 @@ impl Life {
             s.last_activity = Instant::now();
             reschedule(&self.cfg, &mut s);
             return Some(Nudge::Arrived { name });
+        }
+        s.noticed.retain(|(_, at)| at.elapsed() < ARRIVAL_FRESH);
+        if let Some((what, _)) = s.noticed.pop_front() {
+            s.last_activity = Instant::now();
+            reschedule(&self.cfg, &mut s);
+            return Some(Nudge::Noticed { what });
         }
         let quiet = s.last_activity.elapsed();
         let due = if anyone_in_view {

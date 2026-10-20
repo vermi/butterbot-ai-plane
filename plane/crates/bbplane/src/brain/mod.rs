@@ -102,7 +102,7 @@ pub fn tools() -> Vec<Value> {
         ),
         f(
             "who_is_here",
-            "Who is in front of your camera right now.",
+            "Who (known faces) is in front of your camera right now.",
             json!({}),
             &[],
         ),
@@ -231,10 +231,14 @@ pub fn describe(ev: &crate::control::AgentEvent) -> Option<(String, Option<Bytes
                 })
                 .unwrap_or_default();
             who.dedup();
-            let prefix = if who.is_empty() {
-                String::new()
-            } else {
-                format!("({} in view) ", who.join(", "))
+            // Faces only say who is in front of the camera, not who spoke.
+            let prefix = match who.as_slice() {
+                [] => String::new(),
+                [one] => format!("({one} is in view, so probably the one talking) "),
+                many => format!(
+                    "({} are in view; you can't tell which of them is talking) ",
+                    many.join(", ")
+                ),
             };
             Some((format!("{prefix}{text}"), image.clone()))
         }
@@ -254,6 +258,18 @@ pub fn describe(ev: &crate::control::AgentEvent) -> Option<(String, Option<Bytes
                     "[{} just came into view. In view: {in_view}.]",
                     info["name"].as_str().unwrap_or("someone")
                 ),
+                Some("noticed") => {
+                    let what = info["what"].as_str().unwrap_or("something");
+                    // At the robot's resolution a dog can come out as a cat.
+                    let seen = if crate::objects::is_animal(what) {
+                        format!("An animal (maybe a {what}; look at the picture to tell)")
+                    } else {
+                        format!("Something that looks like a {what}")
+                    };
+                    format!(
+                        "[{seen} just came into view. In view: {in_view}. React if you like, or call stay_quiet.]"
+                    )
+                }
                 _ => format!(
                     "[Quiet for {} minutes. In view: {in_view}. Idea: {}. Do something, or call stay_quiet.]",
                     info["quiet_for_minutes"].as_u64().unwrap_or(0),

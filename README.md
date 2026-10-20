@@ -27,7 +27,7 @@ stock features had to go to make room for Wi-Fi; see [what was removed](#design-
 | **Hear** | `hear` waits for the next thing someone says to the robot (transcribed on your computer), or for a nudge to do something. `reply` speaks, then does the same. `listen` returns microphone audio and a transcript. |
 | **Talk** | `say` in the robot's own voice, or in a laptop TTS voice streamed to its speaker. `play_audio`, `set_volume` |
 | **Sense** | `events`: front and bottom IR sensors, motion (shake, pick-up, fall), battery, button |
-| **Recognize** | `remember_face`, `who_is_here`, `forget_face`. Enrolled people are greeted by name and reported as `face` events. |
+| **Recognize** | `remember_face`, `who_is_here`, `forget_face`. Enrolled people are greeted by name and reported as `face` events. Animals coming into view (a cat, a dog, a bird) are noticed too. |
 | **Behave** | `focus` (stay quiet for a while), `end_conversation`, `power_off` |
 | **Extras** | `led`, `run_scenario` (jokes, facts, time, add-on modules), `ir_list`, `ir_send`, `read_modules` |
 
@@ -167,8 +167,8 @@ Then run `bbplane serve` and short-press the robot's button. From then on:
 
 - **Talk to it by name:** "Butterbot, turn around." For 30 s after it answers, you can carry on
   without the name. "Goodbye" ends the conversation; it goes back to waiting for its name.
-- **It has a life of its own.** When it sees someone it knows, or nobody has spoken to it for a
-  while, the agent gets a nudge. It decides for itself whether to greet, chat, look around or stay
+- **It has a life of its own.** When it sees someone it knows or an animal, or nobody has spoken
+  to it for a while, the agent gets a nudge. It decides for itself whether to greet, chat, look around or stay
   quiet. It chats more when someone is around.
 - **"Butterbot, I need to focus"** makes it stay quiet (an hour by default, or as long as you
   say) until you call it by name. **"Butterbot, switch off"** powers it down; "goodbye" alone
@@ -177,8 +177,9 @@ Then run `bbplane serve` and short-press the robot's button. From then on:
 - **The live view** shows the conversation, what the agent is doing and its token use, and has
   Pause and Focus buttons.
 
-Speech is transcribed on your computer with Whisper (about 150 MB of models, downloaded once and
-checked against pinned hashes). The agent can be:
+Speech is transcribed on your computer with Whisper, and objects are detected there with YOLOX-S
+(about 190 MB of models in all, downloaded once and checked against pinned hashes). When several
+known people are in view, the agent is told it cannot tell which of them is talking. The agent can be:
 
 | `[agent] kind` | What | Speed |
 |---|---|---|
@@ -239,7 +240,7 @@ The safety rules copy what the stock firmware does in the same situation:
   requests from other origins. This blocks cross-site WebSockets and DNS rebinding.
 - **The robot only accepts link traffic from the provisioned plane address.** The link is not
   encrypted, so use a network you trust.
-- **Speech is transcribed on your computer.** Only what follows the robot's name (or is said in
+- **Speech is transcribed, and objects detected, on your computer.** Only what follows the robot's name (or is said in
   a conversation with it) goes to the agent, as text. With the built-in brain that text, the
   replies and an occasional camera frame go to OpenAI. The API key is read from the file you
   name and is never logged.
@@ -302,6 +303,9 @@ These are the lessons that shaped the firmware. Most of them came from the hardw
   cannot interrupt it. The S3's microphone input has no hardware high-pass filter; the firmware
   removes the rumble and DC offset in software.
 - **Movement:** open loop (no wheel encoders), so `turn` estimates angles from time.
+- **Object detection** knows COCO's 80 everyday classes: a fireplace comes out as an oven. At
+  320×240 it misses small or still animals (a dog asleep across the room); at 640×480
+  (`[camera] res = "vga"`) it finds them, but the stream drops from about 6 to about 2 fps.
 - **Removed scenarios:** those that needed the removed features (dice, eight ball, face
   detection, "what's this", phone controls, dance) are not available.
 

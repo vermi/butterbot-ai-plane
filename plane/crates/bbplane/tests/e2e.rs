@@ -88,8 +88,12 @@ async fn plane_with_simulated_robot() {
         link_port: 0,
         web_port: 0,
         data_dir: Some(data.clone()),
-        // No speech model downloads in tests.
+        // No speech or object model downloads in tests.
         stt: bbplane::config::SttConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        objects: bbplane::config::ObjectsConfig {
             enabled: false,
             ..Default::default()
         },
@@ -272,8 +276,12 @@ async fn works_over_a_lossy_link() {
             ..Default::default()
         },
         data_dir: Some(std::env::temp_dir().join(format!("bbplane-lossy-{}", std::process::id()))),
-        // No speech model downloads in tests.
+        // No speech or object model downloads in tests.
         stt: bbplane::config::SttConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        objects: bbplane::config::ObjectsConfig {
             enabled: false,
             ..Default::default()
         },
