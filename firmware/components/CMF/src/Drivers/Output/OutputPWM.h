@@ -66,7 +66,8 @@ private:
 
 	static constexpr uint32_t DefaultFreq = 5000;    //placeholder, usually changed before attaching to a channel or pin
 
-	static constexpr ledc_timer_bit_t DRAM_ATTR DutyResDefault = LEDC_TIMER_10_BIT;
+	// 13 bits at 5 kHz: fine steps for soft fades near zero (10 bits steps visibly there).
+	static constexpr ledc_timer_bit_t DRAM_ATTR DutyResDefault = LEDC_TIMER_13_BIT;
 	static constexpr uint32_t DRAM_ATTR FullDuty = 1 << DutyResDefault;
 
 	static constexpr ledc_mode_t getSpeedMode(int port){

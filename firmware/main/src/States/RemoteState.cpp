@@ -155,6 +155,11 @@ RemoteState::~RemoteState(){
 		ServiceLocator::LEDControlInstance->suspend(false);
 		ServiceLocator::LEDControlInstance->startIdle();
 	}
+	if(cardIn){
+		if(LEDModuleControl* leds = Application::getApp()->getService<LEDModuleControl>()){
+			leds->turnLedOff(); // the glow belongs to AI mode
+		}
+	}
 }
 
 int64_t RemoteState::getDynamicTickInterval() const{
@@ -178,6 +183,7 @@ void RemoteState::tick(float deltaTime){
 		link->persist();
 	}
 	showLed();
+	showCard();
 
 	if(abortRequested || (linkDeadline != 0 && millis() > linkDeadline)){
 		// Without this the robot just went back to idle, and nobody could tell a short press had
@@ -304,6 +310,10 @@ void RemoteState::onRequest(LinkRequest req){
 
 		case T::StatusLight:
 			planeLed = req.rhythm;
+			break;
+
+		case T::CardLight:
+			planeGlow = req.glow;
 			break;
 
 		case T::Scenario:
@@ -530,6 +540,44 @@ void RemoteState::showLed(){
 	ledService->set(MonoLED::Status, std::make_unique<LEDRhythmFunction<MonoLED>>(want));
 	shownLed = want;
 	ledShown = true;
+}
+
+void RemoteState::showCard(){
+	if(link == nullptr){
+		return;
+	}
+	const uint64_t now = millis();
+	if(now >= cardCheckAt){
+		cardCheckAt = now + 500;
+		auto* modules = Application::getApp()->getService<ModuleService>();
+		const bool in = modules != nullptr && modules->getInserted() == Modules::Type::RM_LED;
+		if(in != cardIn){
+			cardIn = in;
+			glowShown = false;
+			// Let the module service finish setting the card up (it starts it dark) first.
+			return;
+		}
+	}
+	if(!cardIn){
+		return;
+	}
+	const LEDGlow want = link->isOnline() ? planeGlow : LEDGlow{};
+	if(glowShown && want == shownGlow){
+		return;
+	}
+	auto* ledService = Application::getApp()->getService<LED<MonoLED, RGBLED>>();
+	if(ledService == nullptr){
+		return;
+	}
+	if(!want.steady()){
+		ledService->set(MonoLED::Module, std::make_unique<LEDGlowFunction<MonoLED>>(want));
+	}else if(want.high > 0.0f){
+		ledService->on(MonoLED::Module, want.high);
+	}else{
+		ledService->off(MonoLED::Module);
+	}
+	shownGlow = want;
+	glowShown = true;
 }
 
 void RemoteState::startScenario(const LinkRequest& req){

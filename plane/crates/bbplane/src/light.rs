@@ -1,12 +1,14 @@
 //! The status LED in AI mode: what the robot is up to, at a glance. The robot itself shows when it
 //! is talking (bright), connecting and when it cannot reach the plane; the plane picks the rest
-//! from the agent, the ears and focus mode. The LED has three levels: off, dim and bright.
+//! from the agent, the ears and focus mode. The LED is off, dim or bright, and its dim (a pull-up
+//! glow) is faint, so states differ by blink rhythm and dim is only a background hint. The LED
+//! add-on card, when inserted, can really dim: it adds a soft glow for each state.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use bbproto::ctrl::{Rhythm, ToRobot};
+use bbproto::ctrl::{Glow, Rhythm, ToRobot};
 
 use crate::control::Robot;
 
@@ -17,15 +19,15 @@ const THINKING_MAX: Duration = Duration::from_secs(90);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
-    /// Waiting for its name: steady dim.
+    /// Waiting for its name: faint glow, a short bright tick every 3 s.
     Listening,
-    /// In a conversation, no name needed: bright, with a short dim wink every 2 s.
+    /// In a conversation, no name needed: bright, with a short wink off every 2 s.
     Attentive,
-    /// Heard a command, the agent is working on it: quick bright flicker over dim.
+    /// Heard a command, the agent is working on it: quick flicker.
     Thinking,
-    /// Focus mode: off, with a soft dim glow every 6 s.
+    /// Focus mode: faint glow, a brief tick every 10 s.
     Focus,
-    /// AI mode without an agent (paused, not running): two dim blips every 4 s.
+    /// AI mode without an agent (paused, not running): two quick ticks every 4 s.
     NoBrain,
 }
 
@@ -40,11 +42,27 @@ impl State {
             flash,
         };
         match self {
-            State::Listening => Rhythm::steady(Rhythm::DIM),
-            State::Attentive => r(150, 0, 1, 2000, Rhythm::BRIGHT, Rhythm::DIM),
-            State::Thinking => r(100, 0, 1, 200, Rhythm::DIM, Rhythm::BRIGHT),
-            State::Focus => r(1500, 0, 1, 6000, Rhythm::OFF, Rhythm::DIM),
-            State::NoBrain => r(150, 200, 2, 4000, Rhythm::OFF, Rhythm::DIM),
+            State::Listening => r(80, 0, 1, 3000, Rhythm::DIM, Rhythm::BRIGHT),
+            State::Attentive => r(150, 0, 1, 2000, Rhythm::BRIGHT, Rhythm::OFF),
+            State::Thinking => r(100, 0, 1, 200, Rhythm::OFF, Rhythm::BRIGHT),
+            State::Focus => r(40, 0, 1, 10000, Rhythm::DIM, Rhythm::BRIGHT),
+            State::NoBrain => r(60, 200, 2, 4000, Rhythm::OFF, Rhythm::BRIGHT),
+        }
+    }
+
+    /// The LED card's glow (duty; its stock "on" of 0.1 is already flashlight-bright).
+    pub fn glow(self) -> Glow {
+        let breathe = |low, high, period_ms| Glow {
+            low,
+            high,
+            period_ms,
+        };
+        match self {
+            State::Listening => breathe(0.002, 0.02, 5000),
+            State::Attentive => Glow::steady(0.03),
+            State::Thinking => breathe(0.01, 0.08, 800),
+            State::Focus => breathe(0.0, 0.008, 6000),
+            State::NoBrain => Glow::OFF,
         }
     }
 }
@@ -132,7 +150,11 @@ pub async fn run(robot: Robot) {
         if shown == Some(s) {
             continue;
         }
-        match robot.hub.send(ToRobot::StatusLight(s.rhythm())).await {
+        let sent = async {
+            robot.hub.send(ToRobot::StatusLight(s.rhythm())).await?;
+            robot.hub.send(ToRobot::CardLight(s.glow())).await
+        };
+        match sent.await {
             Ok(()) => {
                 tracing::debug!("status light: {s:?}");
                 shown = Some(s);

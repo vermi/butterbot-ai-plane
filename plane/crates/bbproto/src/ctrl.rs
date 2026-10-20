@@ -130,6 +130,28 @@ impl Rhythm {
     }
 }
 
+/// A soft glow for the LED add-on card, which has real dimming: breathes between `low` and `high`
+/// (PWM duty, 0..1) once every `period_ms`, or stays at `high` when `period_ms` is 0. The card is
+/// very bright: its stock "on" is 0.1.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Glow {
+    pub low: f32,
+    pub high: f32,
+    pub period_ms: u16,
+}
+
+impl Glow {
+    pub const OFF: Glow = Glow::steady(0.0);
+
+    pub const fn steady(level: f32) -> Glow {
+        Glow {
+            low: level,
+            high: level,
+            period_ms: 0,
+        }
+    }
+}
+
 fn yes() -> bool {
     true
 }
@@ -212,6 +234,9 @@ pub enum ToRobot {
     /// What the status LED shows in AI mode, unless the robot is talking (bright) or cannot reach
     /// the plane (it shows those itself). Not acknowledged.
     StatusLight(Rhythm),
+    /// What the LED add-on card shows in AI mode, if it is inserted (dark while the robot cannot
+    /// reach the plane). Not acknowledged.
+    CardLight(Glow),
     /// Run a stock scenario routine (`BB::Action::Scenario` value + `ScenarioData.raw`).
     Scenario {
         id: u32,
@@ -256,9 +281,14 @@ impl ToRobot {
             | IrSend { id, .. }
             | Modules { id }
             | Safety { id, .. } => Some(*id),
-            Hello | Drive { .. } | Stop | SpkEnd | SpkAbort | Volume { .. } | StatusLight(_) => {
-                None
-            }
+            Hello
+            | Drive { .. }
+            | Stop
+            | SpkEnd
+            | SpkAbort
+            | Volume { .. }
+            | StatusLight(_)
+            | CardLight(_) => None,
         }
     }
 }
@@ -415,6 +445,17 @@ mod tests {
         assert_eq!(
             v,
             json!({"t":"status_light","on_ms":100,"off_ms":0,"count":1,"period_ms":200,"base":0.25,"flash":1.0})
+        );
+        assert_eq!(serde_json::from_value::<ToRobot>(v).unwrap(), m);
+        let m = ToRobot::CardLight(Glow {
+            low: 0.0,
+            high: 0.5,
+            period_ms: 6000,
+        });
+        let v = serde_json::to_value(&m).unwrap();
+        assert_eq!(
+            v,
+            json!({"t":"card_light","low":0.0,"high":0.5,"period_ms":6000})
         );
         assert_eq!(serde_json::from_value::<ToRobot>(v).unwrap(), m);
     }

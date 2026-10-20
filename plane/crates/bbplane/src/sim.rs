@@ -281,7 +281,7 @@ async fn handle(s: &mut Sim, f: Frame, tx: &mpsc::Sender<Frame>) -> Result<()> {
             tx.send(ack(id, Value::Null)).await?;
         }
         ToRobot::Led { id, .. } => tx.send(ack(id, Value::Null)).await?,
-        ToRobot::StatusLight(_) => {}
+        ToRobot::StatusLight(_) | ToRobot::CardLight(_) => {}
         ToRobot::Scenario { id, scenario, .. } => {
             tx.send(ctrl(
                 json!({"t":"bb","state":2,"action":scenario,"data":""}),

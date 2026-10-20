@@ -80,6 +80,11 @@ void ShutdownService::PowerOff(){
 		vTaskDelay(pdMS_TO_TICKS(10));
 	}
 
+	// On USB the chip and any add-on card stay powered after this. The LED card lights up fully
+	// when its pin floats, as it does when this runs from the power-on check before the card is
+	// set up; a pull-up keeps it dark and is harmless to cards that drive the pin themselves.
+	gpio_set_pull_mode(static_cast<gpio_num_t>(CTRL_1), GPIO_PULLUP_ONLY);
+
 	gpio_set_level(static_cast<gpio_num_t>(PIN_PWDN), 0);
 	static constexpr gpio_config_t pwdnConfig = {
 		.pin_bit_mask = 1ULL << PIN_PWDN,
