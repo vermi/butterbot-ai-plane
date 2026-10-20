@@ -287,6 +287,10 @@ pub enum FromRobot {
         #[serde(default)]
         underruns: u32,
     },
+    /// Wi-Fi signal strength, reported every few seconds while connected.
+    Wifi {
+        rssi: i32,
+    },
     /// Power button press while in remote mode, etc.
     Button {
         action: String,

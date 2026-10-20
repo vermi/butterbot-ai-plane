@@ -1053,13 +1053,16 @@ void LinkService::setSpeakerSink(SpeakerSink sink){
 	speakerSink = std::move(sink);
 }
 
-bool LinkService::sendRaw(const uint8_t* data, size_t len){
+bool LinkService::sendRaw(const uint8_t* data, size_t len, uint32_t waitMs){
 	std::lock_guard lock(sockMutex);
 	if(sock < 0){
 		return false;
 	}
-	// Fire and forget. With few Wi-Fi TX buffers sendto() can report ENOMEM; retry briefly, then drop.
-	for(int attempt = 0; attempt < 5; attempt++){
+	// Wi-Fi has only CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM (2) TX buffers, so sendto() reports
+	// ENOMEM as soon as two datagrams are in flight. Wait for one to free up rather than drop:
+	// giving up after a few ms lost the tail of nearly every multi-datagram video frame.
+	const uint64_t deadline = millis() + waitMs;
+	for(;;){
 		const int n = ::sendto(sock, data, len, 0, reinterpret_cast<const sockaddr*>(&target), sizeof(target));
 		if(n == (int) len){
 			return true;
@@ -1067,12 +1070,14 @@ bool LinkService::sendRaw(const uint8_t* data, size_t len){
 		if(errno != ENOMEM && errno != EAGAIN && errno != EWOULDBLOCK){
 			return false;
 		}
-		vTaskDelay(pdMS_TO_TICKS(2));
+		if(millis() >= deadline){
+			return false;
+		}
+		vTaskDelay(1);
 	}
-	return false;
 }
 
-void LinkService::sendVideoDatagrams(const Buf* buf){
+void LinkService::sendVideoDatagrams(const Buf* buf, bool interleaveCtrl){
 	// buf->data: seq u32, ts u32, w u16, h u16, JPEG. Each datagram repeats that header plus
 	// frag/frags, so the plane can reassemble and drop incomplete frames.
 	static constexpr size_t Chunk = LinkProto::MaxDatagramPayload - LinkProto::VideoHeaderLen;
@@ -1089,9 +1094,25 @@ void LinkService::sendVideoDatagrams(const Buf* buf){
 		LinkProto::putU16(p + 12, i);
 		LinkProto::putU16(p + 14, frags);
 		memcpy(p + LinkProto::VideoHeaderLen, jpeg + off, n);
-		if(!sendRaw(dgram, LinkProto::HeaderLen + LinkProto::VideoHeaderLen + n)){
+		if(!sendRaw(dgram, LinkProto::HeaderLen + LinkProto::VideoHeaderLen + n, 100)){
 			return; // the plane drops the incomplete frame
 		}
+		// A frame is a dozen datagrams now; do not hold request acks back behind all of them.
+		if(interleaveCtrl){
+			sendPendingCtrl();
+		}
+	}
+}
+
+void LinkService::sendPendingCtrl(){
+	Buf* buf = nullptr;
+	while(xQueueReceive(ctrlQueue, &buf, 0) == pdTRUE){
+		if(buf->video){
+			sendVideoDatagrams(buf, false); // a snapshot: sent whole, like any control reply
+		}else{
+			sendRaw(buf->data, buf->len);
+		}
+		freeBuf(buf);
 	}
 }
 

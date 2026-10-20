@@ -218,6 +218,8 @@ impl VideoFragment {
 #[derive(Default)]
 pub struct VideoAssembler {
     partial: std::collections::HashMap<(u32, bool), Partial>,
+    /// Frames given up on because some of their fragments never arrived.
+    pub dropped: u64,
 }
 
 struct Partial {
@@ -234,10 +236,13 @@ impl VideoAssembler {
         let key = (f.header.seq, f.snapshot);
         // Live frames are numbered upwards: anything older than this one is stale.
         if !f.snapshot {
+            let before = self.partial.len();
             self.partial
                 .retain(|(seq, snap), _| *snap || seq.wrapping_sub(f.header.seq) as i32 >= -8);
+            self.dropped += (before - self.partial.len()) as u64;
         }
         if self.partial.len() > 16 {
+            self.dropped += self.partial.len() as u64;
             self.partial.clear();
         }
         let p = self.partial.entry(key).or_insert_with(|| Partial {

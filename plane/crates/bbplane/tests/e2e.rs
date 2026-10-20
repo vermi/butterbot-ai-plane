@@ -173,7 +173,7 @@ async fn plane_with_simulated_robot() {
         .find(|c| c["type"] == "image")
         .expect("image content");
     assert_eq!(img["mimeType"], "image/jpeg");
-    assert!(text_of(&r).contains("128x128"), "{}", text_of(&r));
+    assert!(text_of(&r).contains("320x240"), "{}", text_of(&r));
 
     let r = c.tool("snapshot", json!({"resolution":"qxga"})).await;
     assert!(text_of(&r).contains("2048x1536"), "{}", text_of(&r));
@@ -253,12 +253,18 @@ async fn plane_with_simulated_robot() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn works_over_a_lossy_link() {
-    // The real robot's Wi-Fi lost ~35% of packets; tools must still work (just slower).
+    // Tools must keep working (just slower) on a very bad link. The firmware once lost ~35% of
+    // datagrams by dropping them itself when its two Wi-Fi TX buffers were full; a real link now
+    // loses well under 1%. At 30% loss only small frames (few datagrams) get through whole.
     let config = Config {
         link_bind: "127.0.0.1".into(),
         link_port: 0,
         web_port: 0,
         ble_wake: false,
+        camera: bbplane::config::CameraConfig {
+            res: bbproto::ctrl::Res::R128,
+            ..Default::default()
+        },
         data_dir: Some(std::env::temp_dir().join(format!("bbplane-lossy-{}", std::process::id()))),
         ..Config::default()
     };

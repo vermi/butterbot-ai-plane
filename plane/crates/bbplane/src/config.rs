@@ -29,7 +29,7 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, from = "RawCameraConfig")]
 pub struct CameraConfig {
     pub res: Res,
     pub fps: u8,
@@ -37,6 +37,41 @@ pub struct CameraConfig {
     /// encoder ("sw" or "sensor"), xclk_mhz, psram_dma.
     #[serde(flatten)]
     pub opts: bbproto::ctrl::CamOpts,
+}
+
+/// `CameraConfig` as written in the file. serde leaves flattened fields that are missing at
+/// `None` instead of taking them from `Default`, so they are filled in here.
+#[derive(Deserialize)]
+#[serde(default)]
+struct RawCameraConfig {
+    res: Res,
+    fps: u8,
+    quality: u8,
+    #[serde(flatten)]
+    opts: bbproto::ctrl::CamOpts,
+}
+
+impl Default for RawCameraConfig {
+    fn default() -> Self {
+        let d = CameraConfig::default();
+        Self {
+            res: d.res,
+            fps: d.fps,
+            quality: d.quality,
+            opts: bbproto::ctrl::CamOpts::default(),
+        }
+    }
+}
+
+impl From<RawCameraConfig> for CameraConfig {
+    fn from(r: RawCameraConfig) -> Self {
+        Self {
+            res: r.res,
+            fps: r.fps,
+            quality: r.quality,
+            opts: r.opts.or(CameraConfig::default().opts),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,14 +135,16 @@ impl Default for SafetyConfig {
 
 impl Default for CameraConfig {
     fn default() -> Self {
-        // 128x128 is the size the stock firmware streams; larger frames come back corrupted on this
-        // board (camera DMA cannot keep up while Wi-Fi is busy).
+        // At the board's default 27 MHz sensor clock, frames larger than the stock 128x128 lose
+        // lines in the camera DMA and come back corrupted. 20 MHz gives clean QVGA (and VGA) with
+        // headroom; the robot's CPU JPEG encoder caps QVGA at about 5-6 fps either way.
         Self {
-            res: Res::R128,
-            fps: 15,
+            res: Res::Qvga,
+            fps: 10,
             quality: 12,
             opts: bbproto::ctrl::CamOpts {
                 encoder: Some(bbproto::ctrl::Encoder::Sw),
+                xclk_mhz: Some(20),
                 ..Default::default()
             },
         }
@@ -172,7 +209,13 @@ mod tests {
         let c: Config = toml::from_str("web_port = 9000\n[camera]\nres = \"vga\"\n").unwrap();
         assert_eq!(c.web_port, 9000);
         assert_eq!(c.camera.res, Res::Vga);
-        assert_eq!(c.camera.fps, 15);
+        assert_eq!(c.camera.fps, 10);
+        assert_eq!(c.camera.opts.xclk_mhz, Some(20));
+
+        let c: Config = toml::from_str("[camera]\nxclk_mhz = 16\n").unwrap();
+        assert_eq!(c.camera.opts.xclk_mhz, Some(16));
+        assert_eq!(c.camera.opts.encoder, Some(bbproto::ctrl::Encoder::Sw));
+        assert_eq!(c.camera.res, Res::Qvga);
         assert_eq!(c.link_port, 7531);
         assert!(c.mic.gate);
     }

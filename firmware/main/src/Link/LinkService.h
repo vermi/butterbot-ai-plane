@@ -209,7 +209,8 @@ private:
 		bool video;    // whole JPEG frame (seq, ts, w, h, data): split into datagrams when sent
 		uint8_t flags;
 	};
-	void sendVideoDatagrams(const Buf* buf);
+	/** `interleaveCtrl`: send queued control messages between fragments (not for snapshots sent from there). */
+	void sendVideoDatagrams(const Buf* buf, bool interleaveCtrl = true);
 
 	// Replies by request id, so retransmitted requests run once and get their reply again.
 	enum class ReplyState : uint8_t { Unknown, Pending, Done };
@@ -231,7 +232,10 @@ private:
 	SemaphoreHandle_t txWake = nullptr;
 	std::unique_ptr<Threaded> txThread;
 	void txLoop();
-	bool sendRaw(const uint8_t* data, size_t len);
+	/** Send queued control messages; video sending calls this between fragments. */
+	void sendPendingCtrl();
+	/** Send one datagram, waiting up to `waitMs` for a free Wi-Fi TX buffer. */
+	bool sendRaw(const uint8_t* data, size_t len, uint32_t waitMs = 20);
 	static Buf* makeBuf(size_t len);
 	static void freeBuf(Buf* buf);
 	void enqueue(QueueHandle_t queue, Buf* buf);

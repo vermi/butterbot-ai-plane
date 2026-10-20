@@ -155,15 +155,21 @@ These are the lessons that shaped the firmware. Most of them came from the hardw
   control, on-robot voice commands, and face and object detection. The robot's own speech
   (flite), idle behaviours, scenarios, IR, add-on modules and RC mode remain. Free internal RAM
   went from about 27 KB to about 100 KB.
-- **UDP, like the stock video feed.** The robot's 2.4 GHz link loses a lot of packets with
-  Bluetooth sharing the radio. TCP stalled and died on that; UDP just skips lost packets.
+- **UDP, like the stock video feed.** TCP stalled and died on the robot's busy 2.4 GHz link
+  (Bluetooth shares the radio); UDP just skips lost packets.
   - **Video** is split into datagrams of at most 1400 bytes and reassembled on the computer;
     incomplete frames are dropped.
+  - **The robot has only two Wi-Fi TX buffers**, so `sendto()` fails as soon as two datagrams
+    are in flight. The sender waits for a free buffer instead of dropping; dropping lost the
+    tail of nearly every multi-datagram frame and looked like heavy radio loss. Real loss is
+    well under 1%. `status` reports `video_dropped` and `wifi_rssi`.
   - **Control requests** are retransmitted until acknowledged, and the robot runs each request
     only once.
-- **The camera streams 128×128, like the stock RC feed.** Larger frames come back corrupted on
-  this board while Wi-Fi is busy. Frames are captured as RGB565 and JPEG-encoded on the CPU, the
-  same path stock uses.
+- **The camera streams 320×240 at about 5 fps, with a 640×480 `snapshot`.** At the board's
+  default 27 MHz sensor clock, frames larger than the stock 128×128 lose lines in the camera DMA
+  and come back corrupted. AI mode runs the sensor at 20 MHz, which gives clean frames.
+  Frames are captured as RGB565 and JPEG-encoded on the CPU, the same path stock uses; that
+  encoder limits the frame rate.
 - **Bluetooth goes into the stock low-power mode during AI mode** (slow advertising), which
   leaves airtime for Wi-Fi.
 - **The link protocol** is a single frame format: `magic | type | flags | len | payload`.
@@ -172,7 +178,9 @@ These are the lessons that shaped the firmware. Most of them came from the hardw
 
 ## Limitations
 
-- **Camera:** 128×128. Larger snapshot sizes are selectable but experimental.
+- **Camera:** about 5 fps live at 320×240, and slower at larger sizes. Sizes above 640×480 are
+  experimental and may not fit in memory next to Wi-Fi. The sensor's own JPEG mode
+  (`encoder = "sensor"`) stalls after a frame or two.
 - **Network:** 2.4 GHz Wi-Fi only (an ESP32 limitation). Expect some lost audio and video on a
   busy network.
 - **Microphone:** quiet, with no echo cancellation; it is muted while the robot speaks.

@@ -44,7 +44,11 @@ pub struct RobotStatus {
     pub camera_streaming: bool,
     pub mic_streaming: bool,
     pub video_frames: u64,
+    /// Video frames lost in transit (some datagrams never arrived).
+    pub video_dropped: u64,
     pub mic_chunks: u64,
+    /// Robot's Wi-Fi signal strength in dBm.
+    pub wifi_rssi: Option<i32>,
 }
 
 struct Conn {
@@ -246,7 +250,12 @@ impl Hub {
             },
             FrameType::Video => match bbproto::VideoFragment::parse(&frame) {
                 Ok(f) => {
-                    let done = self.video_assembler.lock().await.push(f);
+                    let (done, dropped) = {
+                        let mut a = self.video_assembler.lock().await;
+                        let done = a.push(f);
+                        (done, a.dropped)
+                    };
+                    self.status.lock().await.video_dropped = dropped;
                     if let Some(v) = done {
                         self.handle_video(v).await;
                     }
@@ -356,6 +365,7 @@ impl Hub {
                 self.push_event("drive_stopped", json!({ "reason": reason }))
                     .await
             }
+            FromRobot::Wifi { rssi } => self.status.lock().await.wifi_rssi = Some(rssi),
             FromRobot::Button { action } => {
                 self.push_event("button", json!({ "action": action })).await
             }

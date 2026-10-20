@@ -137,9 +137,10 @@ auto_enter_remote = true
 ble_wake = true          # wake the robot over Bluetooth when it is not connected
 
 [camera]
-res = "r128"             # r128, qvga, vga, svga, xga, hd, uxga, qxga
-fps = 15
+res = "qvga"             # r128, qvga, vga, svga, xga, hd, uxga, qxga
+fps = 10                 # the robot reaches about 5-6 fps at qvga
 quality = 12             # 4..63, lower is better
+xclk_mhz = 20            # sensor clock; the board default (27) corrupts frames above 128x128
 
 [mic]
 gate = true              # mute the mic while the robot speaks (no echo cancellation)

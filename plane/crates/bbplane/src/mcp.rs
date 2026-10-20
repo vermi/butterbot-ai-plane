@@ -24,7 +24,7 @@ Controls a ButterBot toy robot (two-wheel drive, camera, microphone, speaker).
 driving forward when something is in front, and reports `drive_stopped` events.
 - Using a control tool switches the robot into AI mode (its own autonomy pauses). \
 Call `exit_ai_mode` to give it back.
-- `look` returns what the camera sees now (128x128, the size this robot captures reliably).
+- `look` returns what the camera sees now (320x240 live frame); `snapshot` takes a 640x480 still.
 - `listen` returns microphone audio as WAV plus loudness stats.
 - `say` speaks through the robot (on-robot voice by default).
 - `events` long-polls robot events (sensors, battery, button, scenario progress).";
@@ -97,8 +97,8 @@ pub struct TurnArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SnapshotArgs {
-    /// Default r128 (128x128), the only size that captures reliably on this robot. Larger sizes
-    /// (qvga, vga, ...) are experimental and often come back corrupted.
+    /// Default vga (640x480). Up to vga is reliable; larger sizes (svga and up) are experimental
+    /// and may not fit in the robot's memory while Wi-Fi is on.
     pub resolution: Option<Res>,
     /// JPEG quality 4..63, lower is better (default 10).
     pub quality: Option<u8>,
@@ -271,13 +271,13 @@ impl BotServer {
     }
 
     #[tool(
-        description = "Take a still photo (128x128 by default; larger sizes are experimental). Slower than `look`."
+        description = "Take a still photo (640x480 by default). Sharper than `look`, but takes a second or two."
     )]
     async fn snapshot(
         &self,
         Parameters(a): Parameters<SnapshotArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let res = a.resolution.unwrap_or(Res::R128);
+        let res = a.resolution.unwrap_or(Res::Vga);
         let f = tryt!(
             self.robot
                 .snapshot(Some(res), a.quality.unwrap_or(10))
