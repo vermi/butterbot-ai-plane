@@ -35,6 +35,8 @@ pub struct AgentState {
     starts: AtomicU32,
     last_exit: Mutex<Option<String>>,
     log: Mutex<VecDeque<String>>,
+    /// Token counts reported by the built-in brains, summed per kind (input_audio, ...).
+    usage: Mutex<std::collections::BTreeMap<String, u64>>,
 }
 
 impl AgentState {
@@ -58,7 +60,32 @@ impl AgentState {
         }
     }
 
-    fn log(&self, line: String) {
+    /// Add a Realtime/Responses API `usage` object to the totals.
+    pub fn add_usage(&self, usage: &Value) {
+        let mut u = self.usage.lock().unwrap();
+        let mut add = |k: &str, v: &Value| {
+            if let Some(n) = v.as_u64() {
+                *u.entry(k.to_string()).or_default() += n;
+            }
+        };
+        add("input", &usage["input_tokens"]);
+        add("output", &usage["output_tokens"]);
+        for side in ["input", "output"] {
+            for kind in ["text", "audio", "image", "cached"] {
+                let key = if kind == "cached" {
+                    "cached_tokens".to_string()
+                } else {
+                    format!("{kind}_tokens")
+                };
+                add(
+                    &format!("{side}_{kind}"),
+                    &usage[format!("{side}_token_details")][&key],
+                );
+            }
+        }
+    }
+
+    pub fn log(&self, line: String) {
         let mut l = self.log.lock().unwrap();
         l.push_back(line);
         while l.len() > LOG_LINES {
@@ -73,6 +100,7 @@ impl AgentState {
             "paused": self.paused.load(Ordering::Relaxed),
             "sessions": self.starts.load(Ordering::Relaxed),
             "last_exit": self.last_exit.lock().unwrap().clone(),
+            "usage": *self.usage.lock().unwrap(),
             "log": self.log.lock().unwrap().iter().rev().take(80).rev().cloned().collect::<Vec<_>>(),
         })
     }
@@ -83,15 +111,23 @@ async fn robot_ready(robot: &Robot) -> bool {
     s.connected && s.mode.as_deref() == Some("remote")
 }
 
-/// The persona with the owner filled in, plus a recap of recent conversation.
+/// The MCP agent's prompt: the persona with context (see `with_context`).
 async fn prompt(robot: &Robot) -> String {
-    let cfg = &robot.hub.config;
-    let persona = cfg
+    let persona = robot
+        .hub
+        .config
         .agent
         .persona
         .as_ref()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .unwrap_or_else(|| PERSONA.to_string());
+    with_context(robot, &persona).await
+}
+
+/// `persona` with the owner filled in (`{owner}`), the faces it knows and a recap of recent
+/// conversation.
+pub async fn with_context(robot: &Robot, persona: &str) -> String {
+    let cfg = &robot.hub.config;
     let owner = &cfg.life.owner;
     let owner_line = if owner.is_empty() {
         String::new()
@@ -133,7 +169,13 @@ async fn prompt(robot: &Robot) -> String {
 /// Supervise the agent. Spawned once by `crate::start`.
 pub async fn run(robot: Robot) {
     let cfg = robot.hub.config.agent.clone();
-    if !cfg.enabled || cfg.command.is_empty() {
+    if !cfg.enabled {
+        return;
+    }
+    if cfg.kind != crate::config::AgentKind::Command {
+        return run_brain(robot, cfg.kind).await;
+    }
+    if cfg.command.is_empty() {
         return;
     }
     let state = robot.agent.clone();
@@ -238,6 +280,75 @@ pub async fn run(robot: Robot) {
             backoff = (backoff * 2).min(Duration::from_secs(300));
         } else {
             backoff = Duration::from_secs(5);
+        }
+    }
+}
+
+/// Supervise a built-in brain (see `crate::brain`): same rules as for an agent process.
+async fn run_brain(robot: Robot, kind: crate::config::AgentKind) {
+    let state = robot.agent.clone();
+    let mut backoff = Duration::from_secs(5);
+    loop {
+        if state.paused.load(Ordering::Relaxed) || !robot_ready(&robot).await {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            continue;
+        }
+        let session = state.starts.fetch_add(1, Ordering::Relaxed) + 1;
+        tracing::info!("brain session {session} started ({kind:?})");
+        state.log(format!("--- session {session} ---"));
+        state.running.store(true, Ordering::Relaxed);
+        robot.life.agent_running.store(true, Ordering::Relaxed);
+        robot.life.session_started();
+        let started = Instant::now();
+        // In its own task, so a panic ends this session, not the supervisor.
+        let mut run = {
+            let (robot, state) = (robot.clone(), state.clone());
+            tokio::spawn(async move {
+                match kind {
+                    crate::config::AgentKind::Text => {
+                        crate::brain::text::session(&robot, &state).await
+                    }
+                    _ => crate::brain::realtime::session(&robot, &state).await,
+                }
+            })
+        };
+        let exit = tokio::select! {
+            r = &mut run => match r {
+                Ok(Ok(why)) => why,
+                Ok(Err(e)) => format!("error: {e:#}"),
+                Err(e) => format!("crashed: {e}"),
+            },
+            why = until_stopped(&robot, &state) => {
+                run.abort();
+                why
+            }
+        };
+        tracing::info!("brain session {session} ended: {exit}");
+        state.log(format!("--- session {session} ended: {exit} ---"));
+        *state.last_exit.lock().unwrap() = Some(exit);
+        state.running.store(false, Ordering::Relaxed);
+        robot.life.agent_running.store(false, Ordering::Relaxed);
+        if started.elapsed() < Duration::from_secs(60) {
+            tokio::time::sleep(backoff).await;
+            backoff = (backoff * 2).min(Duration::from_secs(300));
+        } else {
+            backoff = Duration::from_secs(5);
+        }
+    }
+}
+
+/// Resolves when the agent should stop: paused, or the robot out of AI mode for a while.
+async fn until_stopped(robot: &Robot, state: &AgentState) -> String {
+    let mut offline_since: Option<Instant> = None;
+    loop {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        if state.paused.load(Ordering::Relaxed) {
+            return "paused from the live view".into();
+        }
+        if robot_ready(robot).await {
+            offline_since = None;
+        } else if offline_since.get_or_insert_with(Instant::now).elapsed() > OFFLINE_GRACE {
+            return "robot left AI mode".into();
         }
     }
 }

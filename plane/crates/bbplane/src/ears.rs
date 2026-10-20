@@ -101,6 +101,10 @@ pub struct Ears {
     attentive: AtomicBool,
     /// When anyone last spoke near the robot (to it or not): someone is around.
     last_speech: Mutex<Option<Instant>>,
+    /// The last command handed to the agent, for sanity checks such as `power_off`.
+    last_command_text: Mutex<String>,
+    /// The conversation was ended ("goodbye"): no follow-up window until the next command.
+    ended: AtomicBool,
 }
 
 impl Ears {
@@ -121,6 +125,8 @@ impl Ears {
             name_until: Mutex::new(None),
             attentive: AtomicBool::new(true),
             last_speech: Mutex::new(None),
+            last_command_text: Mutex::new(String::new()),
+            ended: AtomicBool::new(false),
         }
     }
 
@@ -212,10 +218,31 @@ impl Ears {
         let mut q = self.commands.lock().unwrap();
         while let Some(c) = q.pop_front() {
             if c.heard_at.is_some_and(|t| t.elapsed() <= max_age) {
+                *self.last_command_text.lock().unwrap() = c.text.clone();
                 return Some(c);
             }
         }
         None
+    }
+
+    /// Whether the last command asked the robot to switch itself off. Models have taken a
+    /// plain "goodbye" for it.
+    pub fn asked_to_power_off(&self) -> bool {
+        let t = self.last_command_text.lock().unwrap().to_lowercase();
+        [
+            "turn off",
+            "turn yourself off",
+            "switch off",
+            "switch yourself off",
+            "shut down",
+            "shutdown",
+            "power off",
+            "power down",
+            "turn it off",
+            "go to sleep",
+        ]
+        .iter()
+        .any(|p| t.contains(p))
     }
 
     /// Wait up to `d` for a command to arrive (it is then fetched with `take_command`).
@@ -275,6 +302,14 @@ impl Ears {
         }
     }
 
+    /// End the conversation: from now on only speech that starts with the robot's name is for
+    /// it (until the next such command). Its goodbye does not reopen the window.
+    pub fn end_conversation(&self) {
+        self.ended.store(true, Ordering::Relaxed);
+        *self.open_until.lock().unwrap() = None;
+        *self.name_until.lock().unwrap() = None;
+    }
+
     /// The robot stopped speaking: if that was (likely) an answer, keep listening for a reply.
     fn speech_ended(&self) {
         let recent = self
@@ -282,13 +317,24 @@ impl Ears {
             .lock()
             .unwrap()
             .is_some_and(|t| t.elapsed() < CONVERSATION);
-        if recent {
+        if recent && !self.ended.load(Ordering::Relaxed) {
             self.open_for(Duration::from_secs(self.cfg.follow_up_secs));
         }
     }
 
     fn push(&self, c: Command) {
         *self.last_command.lock().unwrap() = Some(Instant::now());
+        // "Goodbye" ends the conversation; anything else (re)starts one.
+        let bye = crate::stt::is_goodbye(&c.text);
+        self.ended.store(bye, Ordering::Relaxed);
+        if bye {
+            *self.open_until.lock().unwrap() = None;
+            let mut q = self.commands.lock().unwrap();
+            q.push_back(c);
+            drop(q);
+            self.arrived.notify_waiters();
+            return;
+        }
         // Also open the window now, in case the agent answers without speaking.
         self.open_for(Duration::from_secs(self.cfg.follow_up_secs));
         let mut q = self.commands.lock().unwrap();

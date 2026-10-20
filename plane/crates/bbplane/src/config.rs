@@ -31,6 +31,7 @@ pub struct Config {
     pub stt: SttConfig,
     pub life: LifeConfig,
     pub agent: AgentConfig,
+    pub brain: BrainConfig,
     /// Where `listen` recordings and snapshots are saved.
     pub data_dir: Option<PathBuf>,
 }
@@ -122,6 +123,7 @@ impl Default for Config {
             stt: SttConfig::default(),
             life: LifeConfig::default(),
             agent: AgentConfig::default(),
+            brain: BrainConfig::default(),
             data_dir: None,
         }
     }
@@ -225,6 +227,10 @@ impl Default for LifeConfig {
 pub struct AgentConfig {
     /// Run the agent while the robot is in AI mode (started and restarted by `bbplane serve`).
     pub enabled: bool,
+    /// `realtime`: the built-in brain on OpenAI's Realtime API (fastest, speaks with an OpenAI
+    /// voice). `text`: the built-in brain on a text model, speaking sentence by sentence.
+    /// `command`: an external MCP agent (`command`, Codex by default). See [brain].
+    pub kind: AgentKind,
     /// The agent's command. `{prompt}` is replaced by the persona plus a recap of recent
     /// conversation. The agent must have this plane's MCP server configured.
     pub command: Vec<String>,
@@ -236,6 +242,7 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            kind: AgentKind::Realtime,
             command: [
                 "codex",
                 "--search",
@@ -257,6 +264,68 @@ impl Default for AgentConfig {
             .to_vec(),
             persona: None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentKind {
+    Realtime,
+    Text,
+    Command,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BrainConfig {
+    /// File holding the OpenAI API key (default: the OPENAI_API_KEY environment variable).
+    pub api_key_file: Option<PathBuf>,
+    pub realtime_model: String,
+    /// `robot`: the robot's own voice, each sentence spoken as soon as it is written (both
+    /// brains). Or an OpenAI voice (alloy, ash, ballad, cedar, coral, echo, marin, sage, shimmer,
+    /// verse): realtime audio, or `tts_model` for the text brain.
+    pub voice: String,
+    pub text_model: String,
+    /// Reasoning effort for the text model (`none` is fastest where the model allows it).
+    pub text_reasoning: String,
+    pub tts_model: String,
+    /// Model used for the web_search tool.
+    pub search_model: String,
+}
+
+impl Default for BrainConfig {
+    fn default() -> Self {
+        Self {
+            api_key_file: None,
+            realtime_model: "gpt-realtime-2.1".into(),
+            voice: "robot".into(),
+            text_model: "gpt-5.6-terra".into(),
+            text_reasoning: "none".into(),
+            tts_model: "gpt-4o-mini-tts".into(),
+            search_model: "gpt-5.6-terra".into(),
+        }
+    }
+}
+
+impl BrainConfig {
+    /// The API key, from `api_key_file` or OPENAI_API_KEY. Never logged.
+    pub fn api_key(&self) -> Result<String> {
+        if let Some(p) = &self.api_key_file {
+            let p = expand_home(p);
+            let k = std::fs::read_to_string(&p)
+                .with_context(|| format!("reading the API key from {}", p.display()))?;
+            return Ok(k.trim().to_string());
+        }
+        std::env::var("OPENAI_API_KEY")
+            .map(|k| k.trim().to_string())
+            .context("no API key: set [brain] api_key_file or OPENAI_API_KEY")
+    }
+}
+
+fn expand_home(p: &std::path::Path) -> PathBuf {
+    match (p.strip_prefix("~"), std::env::var_os("HOME")) {
+        (Ok(rest), Some(home)) => PathBuf::from(home).join(rest),
+        _ => p.to_path_buf(),
     }
 }
 

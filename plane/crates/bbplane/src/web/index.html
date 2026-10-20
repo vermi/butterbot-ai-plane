@@ -196,9 +196,12 @@ async function agentRefresh() {
   agent = await api('/api/agent');
   let st = !agent.enabled ? 'Off (enable [agent] in the config)'
     : agent.paused ? 'Paused'
-    : agent.running ? `Running (session ${agent.sessions})`
+    : agent.running ? `Running: ${agent.kind} brain, session ${agent.sessions}`
     : 'Waiting for the robot to be in AI mode';
   if (agent.focus_minutes_left) st += ` · focus mode, ${agent.focus_minutes_left} min left`;
+  const u = agent.usage || {};
+  const k = (n) => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n || 0);
+  if (u.input || u.output) st += ` · tokens in ${k(u.input)} (audio ${k(u.input_audio)}, images ${k(u.input_image)}, cached ${k(u.input_cached)}), out ${k(u.output)} (audio ${k(u.output_audio)})`;
   $('agentstate').textContent = st;
   $('agentpause').textContent = agent.paused ? 'Resume' : 'Pause';
   $('agentpause').disabled = !agent.enabled;

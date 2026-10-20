@@ -414,6 +414,21 @@ Ask to be unplugged first."
         r
     }
 
+    /// Record that the robot said `text` (spoken some other way than `say`, such as a built-in
+    /// brain's streamed voice).
+    pub async fn note_said(&self, text: &str) {
+        self.life.activity();
+        self.hub
+            .push_event("said", serde_json::json!({ "text": text }))
+            .await;
+    }
+
+    /// Speak in the robot's own voice and wait, without recording it (the caller records the
+    /// whole reply with `note_said`).
+    pub async fn say_quietly(&self, text: &str) -> Result<()> {
+        self.say_inner(text, Some("robot"), true).await.map(|_| ())
+    }
+
     /// Stay quiet (no nudges, no follow-up listening) for `d`, until called by name.
     pub fn focus(&self, d: Duration) {
         self.life.focus(d);
@@ -425,8 +440,15 @@ Ask to be unplugged first."
         self.ears.set_attentive(true);
     }
 
-    /// Run the stock shutdown routine: the robot says so and switches itself off.
+    /// Run the stock shutdown routine: the robot says so and switches itself off. Refused unless
+    /// the last thing said to it asked for that.
     pub async fn power_off(&self) -> Result<()> {
+        if !self.ears.asked_to_power_off() {
+            bail!(
+                "not switching off: nobody asked you to turn off (\"goodbye\" just means \
+goodbye). Say bye and keep listening."
+            );
+        }
         self.ensure_remote().await?;
         let scenario = bbproto::bb::scenario_id("shutdown")
             .ok_or_else(|| anyhow::anyhow!("no shutdown scenario"))?;
@@ -829,6 +851,10 @@ impl Robot {
     }
 }
 
+/// Audio collected before a stream starts playing: streamed speech arrives in bursts, and the
+/// speaker running dry crackles.
+const STREAM_PREBUFFER: usize = (RATE as usize * 3) / 10;
+
 /// Send queued 16 kHz audio to the robot about SPK_LEAD ahead of playback, as it arrives.
 async fn pace_stream(
     hub: Arc<Hub>,
@@ -844,7 +870,8 @@ async fn pace_stream(
         while let Ok(more) = rx.try_recv() {
             buf.extend(more);
         }
-        if buf.is_empty() {
+        let waiting_to_start = start.is_none() && open && buf.len() < STREAM_PREBUFFER;
+        if buf.is_empty() || waiting_to_start {
             if !open {
                 break;
             }

@@ -232,6 +232,7 @@ async fn camera(State(r): State<Robot>, Json(b): Json<CameraBody>) -> Response {
 
 async fn agent_status(State(r): State<Robot>) -> Json<Value> {
     let mut v = r.agent.status_json(r.hub.config.agent.enabled);
+    v["kind"] = serde_json::to_value(r.hub.config.agent.kind).unwrap_or_default();
     v["focus_minutes_left"] = r.life.focused().map(|d| d.as_secs().div_ceil(60)).into();
     Json(v)
 }

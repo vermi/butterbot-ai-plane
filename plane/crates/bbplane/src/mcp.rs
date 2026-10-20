@@ -486,6 +486,15 @@ quiet."
         ))
     }
 
+    #[tool(
+        description = "The person is done talking (for now): after your reply only speech that \
+starts with the robot's name counts again. A plain goodbye does this by itself."
+    )]
+    async fn end_conversation(&self) -> Result<CallToolResult, McpError> {
+        self.robot.ears.end_conversation();
+        ok_text("Conversation ended.")
+    }
+
     #[tool(description = "End focus mode early.")]
     async fn unfocus(&self) -> Result<CallToolResult, McpError> {
         self.robot.unfocus();

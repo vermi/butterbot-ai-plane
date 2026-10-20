@@ -2,6 +2,7 @@
 
 pub mod agent;
 pub mod audio;
+pub mod brain;
 pub mod config;
 pub mod control;
 pub mod ears;
@@ -30,6 +31,9 @@ pub struct Plane {
 
 /// Bind both listeners and spawn their tasks.
 pub async fn start(config: config::Config) -> Result<Plane> {
+    // Both rustls backends end up compiled in (through different dependencies), and rustls then
+    // refuses to pick one: choose ring for the whole process.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let link = tokio::net::UdpSocket::bind((config.link_bind.as_str(), config.link_port))
         .await
         .with_context(|| {

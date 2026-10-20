@@ -156,6 +156,50 @@ pub fn addressed<'a>(text: &'a str, name: &str) -> Option<&'a str> {
     None
 }
 
+/// Whether someone is ending the conversation ("goodbye", "that's all", ...). Only short
+/// utterances that are nothing but a farewell count.
+pub fn is_goodbye(text: &str) -> bool {
+    let t: String = text
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '\'' {
+                c
+            } else {
+                ' '
+            }
+        })
+        .collect();
+    let t = t.split_whitespace().collect::<Vec<_>>().join(" ");
+    let t = ["ok ", "okay ", "alright ", "well ", "thanks ", "thank you "]
+        .iter()
+        .fold(t.as_str(), |t, p| t.strip_prefix(p).unwrap_or(t))
+        .to_string();
+    [
+        "goodbye",
+        "good bye",
+        "bye",
+        "bye bye",
+        "bye now",
+        "see you",
+        "see ya",
+        "see you later",
+        "later",
+        "that's all",
+        "that is all",
+        "that's it",
+        "i'm done",
+        "we're done",
+        "stop listening",
+        "goodnight",
+        "good night",
+        "talk later",
+        "talk to you later",
+    ]
+    .iter()
+    .any(|g| t == *g || t == format!("{g} butterbot") || t == format!("{g} buddy"))
+}
+
 /// Whether a request is (probably) about what the robot can see.
 pub fn about_seeing(text: &str) -> bool {
     let t = format!(
@@ -224,6 +268,16 @@ mod tests {
         assert_eq!(clean(" One, two, three."), "One, two, three.");
         assert_eq!(clean(" ♪♪ "), "");
         assert_eq!(clean("..."), "");
+    }
+
+    #[test]
+    fn goodbyes() {
+        assert!(is_goodbye("Goodbye."));
+        assert!(is_goodbye("Okay, bye!"));
+        assert!(is_goodbye("Thanks, that's all."));
+        assert!(is_goodbye("See you later, Butterbot"));
+        assert!(!is_goodbye("Say goodbye to Tommy for me"));
+        assert!(!is_goodbye("What's the weather later?"));
     }
 
     #[test]
