@@ -19,6 +19,7 @@
 #include "Services/LEDModuleControl.h"
 #include "Services/MotionService.h"
 #include "Link/RemoteSession.h"
+#include "Phone/Phone.h"
 #include "BLE/ConMan.h"
 #include <Periphery/WiFi.h>
 
@@ -94,9 +95,9 @@ RemoteState::RemoteState(BBStateMachine* sm) : State(sm){
 	// Wi-Fi only ever runs in this state (like RC mode): autonomy is off, so its internal RAM fits.
 	// The camera stays as initialised at boot (128x128 RGB565) until the plane asks for a stream;
 	// larger sizes need a slower sensor clock than the board's 27 MHz (the plane sends one).
-	// Wi-Fi and BLE share one radio. Use the stock low-power BLE mode (slow advertising and
-	// connection intervals, ConManager::goLowPow) while the Wi-Fi link is in use; the BLE wake
-	// still works, just with more latency.
+	// Wi-Fi and BLE share one radio. Use the low-power BLE mode (slower advertising and connection
+	// intervals, ConManager::goLowPow) while the Wi-Fi link is in use; the BLE wake and a phone
+	// connecting still work.
 	ConMan.goLowPow();
 
 	// The radio is started here, on the state machine thread (internal-RAM stack), like RCState.
@@ -320,6 +321,10 @@ void RemoteState::onRequest(LinkRequest req){
 
 		case T::Modules:
 			modules(req.id);
+			break;
+
+		case T::Phone:
+			phone(req);
 			break;
 
 		case T::Safety:
@@ -613,6 +618,87 @@ void RemoteState::irSend(const LinkRequest& req){
 	const IRCommand& cmd = ServiceLocator::IRStorageInstance->getCommand(req.index);
 	ir->sendIR(cmd.frame, cmd.frameCount, cmd.sendCount, cmd.periodUs, cmd.carrierHz, cmd.carrierDutyPct);
 	link->ack(req.id);
+}
+
+namespace {
+	const char* categoryName(Notif::Category c){
+		switch(c){
+			case Notif::Category::IncomingCall: return "incoming_call";
+			case Notif::Category::MissedCall: return "missed_call";
+			case Notif::Category::Voicemail: return "voicemail";
+			case Notif::Category::Social: return "social";
+			case Notif::Category::Schedule: return "schedule";
+			case Notif::Category::Email: return "email";
+			case Notif::Category::News: return "news";
+			case Notif::Category::HealthAndFitness: return "health";
+			case Notif::Category::BusinessAndFinance: return "business";
+			case Notif::Category::Location: return "location";
+			case Notif::Category::Entertainment: return "entertainment";
+			case Notif::Category::OutgoingCall: return "outgoing_call";
+			default: return "other";
+		}
+	}
+
+	/** At most `max` bytes of `s`, cut at a character boundary, as a JSON string. */
+	std::string jsonText(const std::string& s, size_t max){
+		size_t n = std::min(s.size(), max);
+		while(n > 0 && n < s.size() && (static_cast<uint8_t>(s[n]) & 0xC0) == 0x80){
+			n--;
+		}
+		return "\"" + LinkService::escape(s.substr(0, n)) + "\"";
+	}
+}
+
+// The phone link, for the agent: state and notifications as data (it reads them out in its own
+// words), and music controls. Replies fit one datagram, so notifications come a page at a time.
+void RemoteState::phone(const LinkRequest& req){
+	Phone* phone = Application::getApp()->getService<Phone>();
+	if(phone == nullptr){
+		link->error(req.id, "the phone link is not available");
+		return;
+	}
+	const std::string& action = req.text;
+	if(action == "play"){
+		phone->doMediaPlay();
+	}else if(action == "pause"){
+		phone->doMediaPause();
+	}else if(action == "next"){
+		phone->doMediaNext();
+	}else if(action == "previous"){
+		phone->doMediaPrev();
+	}else if(action == "notifications"){
+		const std::vector<Notif> notifs = phone->getReadableNotifs();
+		std::string items;
+		size_t i = req.index;
+		for(; i < notifs.size(); i++){
+			const Notif& n = notifs[i];
+			std::string item = std::string("{\"app\":") + jsonText(n.appID, 40) + ",\"title\":" + jsonText(n.title, 80) +
+							   ",\"message\":" + jsonText(n.message, 240) + ",\"category\":\"" + categoryName(n.category) + "\"}";
+			if(items.size() + item.size() > 1000 && !items.empty()){
+				break;
+			}
+			items += (items.empty() ? "" : ",") + item;
+		}
+		link->ack(req.id, "{\"connected\":" + std::string(phone->isConnected() ? "true" : "false") +
+						  ",\"total\":" + std::to_string(notifs.size()) +
+						  ",\"next\":" + (i < notifs.size() ? std::to_string(i) : "null") +
+						  ",\"notifications\":[" + items + "]}");
+		return;
+	}else if(!action.empty() && action != "status"){
+		link->error(req.id, "unknown phone action");
+		return;
+	}
+
+	const char* type = phone->getPhoneType() == Phone::PhoneType::IPhone ? "\"iphone\""
+					 : phone->getPhoneType() == Phone::PhoneType::Android ? "\"android\"" : "null";
+	const MediaState state = phone->getMediaState();
+	const char* playing = state == MediaState::Playing ? "playing" : state == MediaState::Paused ? "paused" : "stopped";
+	const MediaInfo& media = phone->getMedia();
+	link->ack(req.id, "{\"connected\":" + std::string(phone->isConnected() ? "true" : "false") + ",\"phone\":" + type +
+					  ",\"notifications\":" + std::to_string(phone->getReadableNotifs().size()) +
+					  ",\"media\":{\"state\":\"" + playing + "\",\"title\":" + jsonText(media.title, 120) +
+					  ",\"artist\":" + jsonText(media.artist, 120) + ",\"album\":" + jsonText(media.album, 120) +
+					  ",\"app\":" + jsonText(media.appID, 60) + "}}");
 }
 
 void RemoteState::modules(uint32_t id){

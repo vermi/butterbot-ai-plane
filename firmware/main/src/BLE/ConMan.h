@@ -67,9 +67,13 @@ private:
 	void onAdvStartComplete(bool success);
 	void onAdvStopComplete(bool success);
 
+	// Low power: used in AI mode, when Wi-Fi shares the radio. Gentler than stock's 1285 ms adverts
+	// and ~1 s connection events, which an already set-up phone survived but a new one did not:
+	// pairing and pulling Apple's notification service take dozens of round trips, and iOS gave up
+	// (connection timeout). Both stay within Apple's accessory guidelines.
 	static constexpr esp_ble_adv_params_t AdvLowPow = {
-			.adv_int_min        = 2056, // 1285ms = 2056 * 0.625ms
-			.adv_int_max        = 2056, // Apple: Interval should be 20ms. After 30 seconds of no connection, feel free to switch to 1285ms
+			.adv_int_min        = 338, // 211.25ms = 338 * 0.625ms, one of Apple's recommended intervals
+			.adv_int_max        = 338,
 			.adv_type           = ADV_TYPE_IND,
 			.own_addr_type      = BLE_ADDR_TYPE_PUBLIC,
 			.channel_map        = ADV_CHNL_ALL,
@@ -86,10 +90,10 @@ private:
 	};
 
 	static constexpr esp_ble_conn_update_params_t ConLowPow = {
-			.min_int = 720, // min_int = 720*1.25ms = 900ms
-			.max_int = 960, // max_int = 960*1.25ms = 1125ms
+			.min_int = 48, // min_int = 48*1.25ms = 60ms
+			.max_int = 72, // max_int = 72*1.25ms = 90ms
 			.latency = 0,
-			.timeout = 600 // timeout = 500*10ms = 5000ms
+			.timeout = 600 // timeout = 600*10ms = 6000ms
 	};
 
 	static constexpr esp_ble_conn_update_params_t ConHiPow = {

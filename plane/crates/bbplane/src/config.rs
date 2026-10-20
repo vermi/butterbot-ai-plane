@@ -213,7 +213,7 @@ impl Default for SttConfig {
             enabled: true,
             wake_word: "Butterbot".into(),
             command_max_age_secs: 60,
-            follow_up_secs: 30,
+            follow_up_secs: 5,
         }
     }
 }

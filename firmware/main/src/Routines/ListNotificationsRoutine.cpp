@@ -111,7 +111,9 @@ Routine::TickingState ListNotificationsRoutine::tick(float deltaTime){
     Com* com = app->getService<Com>();
     Phone* phone = app->getService<Phone>();
 
-    if(!audio || !ServiceLocator::SpeechAudioGenInstance || !ServiceLocator::SpeechGenInstance || !com || !af || !phone){
+    // `af` (on-robot speech recognition) is optional: the AI build has none, and then reads them all
+    // without asking whether to go on.
+    if(!audio || !ServiceLocator::SpeechAudioGenInstance || !ServiceLocator::SpeechGenInstance || !com || !phone){
         CMF_LOG(ListNotificationsRoutine, LogLevel::Error, "Missing required service(s)");
         return TickingState::Done;
     }
@@ -129,36 +131,7 @@ Routine::TickingState ListNotificationsRoutine::tick(float deltaTime){
                 return TickingState::Done;
             }
 
-            // Izbacivanje duplikata - TODO: ovo je fix za Phone razred i dupliciranje, imamo task na Jiri
-            notifs = phone->getNotifs();
-            size_t write = 0;
-            for(size_t read = 0; read < notifs.size(); ++read){
-                const Notif& candidate = notifs[read];
-
-                // IncomingCall and OutgoingCall are not real notifications — skip them entirely.
-                if(candidate.category == Notif::Category::IncomingCall) continue;
-                if(candidate.category == Notif::Category::OutgoingCall) continue;
-
-                // MissedCall and Voicemail carry no message body — exempt them from the
-                // empty-message filter that otherwise skips Android group-summary / badge-only entries.
-                const bool isCallCategory = candidate.category == Notif::Category::MissedCall
-                                         || candidate.category == Notif::Category::Voicemail;
-                if(candidate.message.empty() && !isCallCategory) continue;
-
-                const bool duplicate = std::any_of(notifs.cbegin(), notifs.cbegin() + write, [&candidate](const Notif& existing){
-                    return existing.appID == candidate.appID
-                           && existing.title == candidate.title
-                           && existing.message == candidate.message;
-                });
-                if(duplicate) continue;
-
-                if(write != read){
-                    notifs[write] = std::move(notifs[read]);
-                }
-                ++write;
-            }
-            notifs.erase(notifs.begin() + write, notifs.end());
-            ///////////// Izbacivanje duplikata //////////////
+            notifs = phone->getReadableNotifs();
             count = static_cast<uint8_t>(notifs.size() > 255 ? 255 : notifs.size());
 
             if(count == 0){
@@ -189,7 +162,7 @@ Routine::TickingState ListNotificationsRoutine::tick(float deltaTime){
             playText(audio, formatNotifText(notif));
 
             // Every 5 notifications, ask if the user wants to continue.
-            if(remaining > 0 && (index + 1) % 5 == 0){
+            if(af != nullptr && remaining > 0 && (index + 1) % 5 == 0){
                 const int16_t continueId = Phrases::get(Phrase::PhoneAskContinue);
                 if(continueId >= 0){
                     sendListNotifsState(com, PhoneListNotifsData::Phase::AskContinue, static_cast<uint8_t>(continueId), count, remaining);

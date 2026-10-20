@@ -219,6 +219,13 @@ pub struct LedArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct PhoneArgs {
+    /// `status` (connected, notification count, what is playing), `notifications` (all of them),
+    /// or a music control: `play`, `pause`, `next`, `previous`.
+    pub action: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ScenarioArgs {
     /// Stock behavior to run, e.g. joke, fact, current_time, pass_the_butter, temp_hum_module,
     /// led_strobe, phone_whats_playing. See `scenarios`.
@@ -621,6 +628,17 @@ by hand."
     #[tool(description = "Read inserted add-on modules (temperature/humidity, CO2, motion, ...).")]
     async fn read_modules(&self) -> Result<CallToolResult, McpError> {
         ok_json(tryt!(self.robot.modules().await))
+    }
+
+    #[tool(
+        description = "The phone paired with the robot over Bluetooth (iPhone, or Android with the CircuitMess app): \
+its status and what is playing, its notifications, or music controls. Read notifications only when someone asks."
+    )]
+    async fn phone(
+        &self,
+        Parameters(a): Parameters<PhoneArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        ok_json(tryt!(self.robot.phone(&a.action).await))
     }
 }
 

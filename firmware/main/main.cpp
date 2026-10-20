@@ -268,13 +268,15 @@ protected:
 
 		auto bt = new Bluetooth();
 		auto gap = new BLE::GAP();
-		// AI build: no BLE client / phone integration (notifications, music, time sync). The robot no
-		// longer opens a GATT client link to every peer that connects.
+		// The phone link (notifications, music, clock): the client pulls Apple's notification, media
+		// and time services from an iPhone; Android phones use the CircuitMess app's service.
+		auto client = new BLE::Client(gap);
 		auto server = new BLE::Server(gap);
 
 		srand(esp_random());
 
 		auto com = registerService<Com>(server, /*internalStack=*/false);
+		registerService<Phone>(server, client);
 
 		com->OnConnStatus.bind(this, &Butterbot::onConnStatus);
 		com->OnCommand.bind(this, &Butterbot::onCommand);

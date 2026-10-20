@@ -229,6 +229,14 @@ pub enum ToRobot {
     Modules {
         id: u32,
     },
+    /// The phone link: `status`, a page of `notifications` from `index`, or a music control
+    /// (`play`, `pause`, `next`, `previous`).
+    Phone {
+        id: u32,
+        action: String,
+        #[serde(default)]
+        index: u8,
+    },
     /// Drive safety checks: refuse to start moving when tipped over; stop forward driving when
     /// the front sensor is covered.
     Safety {
@@ -255,6 +263,7 @@ impl ToRobot {
             | IrList { id }
             | IrSend { id, .. }
             | Modules { id }
+            | Phone { id, .. }
             | Safety { id, .. } => Some(*id),
             Hello | Drive { .. } | Stop | SpkEnd | SpkAbort | Volume { .. } | StatusLight(_) => {
                 None
@@ -325,6 +334,11 @@ pub enum FromRobot {
     /// Wi-Fi signal strength, reported every few seconds while connected.
     Wifi {
         rssi: i32,
+        /// Free internal RAM in bytes, and the largest free block.
+        #[serde(default)]
+        ram_free: Option<u32>,
+        #[serde(default)]
+        ram_block: Option<u32>,
     },
     /// Power button press while in remote mode, etc.
     Button {

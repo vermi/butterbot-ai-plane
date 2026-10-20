@@ -78,6 +78,7 @@ namespace {
 		{ "mic", LinkRequest::Type::Mic },
 		{ "led", LinkRequest::Type::Led },
 		{ "status_light", LinkRequest::Type::StatusLight },
+		{ "phone", LinkRequest::Type::Phone },
 		{ "scenario", LinkRequest::Type::Scenario },
 		{ "ir_list", LinkRequest::Type::IrList },
 		{ "ir_send", LinkRequest::Type::IrSend },
@@ -366,8 +367,11 @@ void LinkService::tick(float deltaTime) noexcept{
 					}
 				}
 				if(have){
-					char json[48];
-					snprintf(json, sizeof(json), "{\"t\":\"wifi\",\"rssi\":%d}", rssi);
+					// Internal RAM is what runs out first (Wi-Fi, Bluetooth and DMA need it).
+					char json[112];
+					snprintf(json, sizeof(json), "{\"t\":\"wifi\",\"rssi\":%d,\"ram_free\":%u,\"ram_block\":%u}", rssi,
+							 (unsigned) heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA),
+							 (unsigned) heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
 					sendJson(json);
 				}
 			}
@@ -784,7 +788,7 @@ void LinkService::handleCtrl(const char* json, size_t len){
 			(float) std::clamp<double>(num(root, "flash", 1), 0, 1),
 		}.sane();
 	}
-	if(const char* text = str(root, "text")){
+	if(const char* text = str(root, req.type == T::Phone ? "action" : "text")){
 		req.text = text;
 	}
 	cJSON_Delete(root);
@@ -798,7 +802,7 @@ void LinkService::sendHelloDatagram(){
 	char json[256];
 	const int len = snprintf(json, sizeof(json),
 			 "{\"t\":\"hello\",\"proto\":%lu,\"fw\":\"%s\",\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
-			 "\"caps\":[\"camera\",\"mic\",\"speaker\",\"drive\",\"tts\",\"scenarios\",\"ir\",\"modules\"]}",
+			 "\"caps\":[\"camera\",\"mic\",\"speaker\",\"drive\",\"tts\",\"scenarios\",\"ir\",\"modules\",\"phone\"]}",
 			 LinkProto::Version, LinkProto::FirmwareName, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 	uint8_t dgram[LinkProto::HeaderLen + 256];
 	LinkProto::putHeader(dgram, LinkProto::FrameType::Ctrl, 0, len);
@@ -812,7 +816,7 @@ void LinkService::sendHello(){
 	char json[256];
 	snprintf(json, sizeof(json),
 			 "{\"t\":\"hello\",\"proto\":%lu,\"fw\":\"%s\",\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
-			 "\"caps\":[\"camera\",\"mic\",\"speaker\",\"drive\",\"tts\",\"scenarios\",\"ir\",\"modules\"]}",
+			 "\"caps\":[\"camera\",\"mic\",\"speaker\",\"drive\",\"tts\",\"scenarios\",\"ir\",\"modules\",\"phone\"]}",
 			 LinkProto::Version, LinkProto::FirmwareName, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 	sendJson(json);
 }

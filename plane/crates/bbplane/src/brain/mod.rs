@@ -107,6 +107,18 @@ pub fn tools() -> Vec<Value> {
             &[],
         ),
         f(
+            "phone",
+            "The phone paired with you over Bluetooth: `status` (connected, what is playing), `notifications` (then tell the person briefly, in your own words), or music controls.",
+            json!({ "action": { "type": "string", "enum": ["status", "notifications", "play", "pause", "next", "previous"] } }),
+            &["action"],
+        ),
+        f(
+            "body",
+            "Your body's state: battery, whether you are plugged in, on the floor, and any add-on card.",
+            json!({}),
+            &[],
+        ),
+        f(
             "set_volume",
             "Set your speaker volume.",
             json!({ "level": { "type": "number", "description": "0.0 to 1.0" } }),
@@ -202,6 +214,33 @@ pub async fn run_tool(robot: &Robot, cfg: &BrainConfig, name: &str, args: &Value
             "who_is_here" => {
                 let seen = robot.faces.who_is_here(robot).await?;
                 Outcome::Text(serde_json::to_string(&seen)?)
+            }
+            "phone" => {
+                let action = args["action"].as_str().unwrap_or("status");
+                Outcome::Text(robot.phone(action).await?.to_string())
+            }
+            "body" => {
+                let s = robot.hub.status.lock().await.clone();
+                let battery = s.battery.unwrap_or_default();
+                let cards = robot
+                    .modules()
+                    .await
+                    .map(|m| m["modules"].clone())
+                    .unwrap_or_default();
+                Outcome::Text(
+                    json!({
+                        "battery_percent": battery["pct"],
+                        "plugged_in": battery["charging"].as_str().map(|c| c != "unplugged"),
+                        "charging": battery["charging"],
+                        "on_the_floor": s
+                            .proximity
+                            .as_ref()
+                            .and_then(|p| p["bottom"].as_str())
+                            .map(|b| b == "covered"),
+                        "add_on_cards": cards,
+                    })
+                    .to_string(),
+                )
             }
             "set_volume" => {
                 robot

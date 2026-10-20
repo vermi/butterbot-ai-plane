@@ -49,6 +49,9 @@ pub struct RobotStatus {
     pub mic_chunks: u64,
     /// Robot's Wi-Fi signal strength in dBm.
     pub wifi_rssi: Option<i32>,
+    /// Robot's free internal RAM and its largest free block, in bytes.
+    pub ram_free: Option<u32>,
+    pub ram_block: Option<u32>,
 }
 
 struct Conn {
@@ -371,7 +374,16 @@ impl Hub {
                 self.push_event("drive_stopped", json!({ "reason": reason }))
                     .await
             }
-            FromRobot::Wifi { rssi } => self.status.lock().await.wifi_rssi = Some(rssi),
+            FromRobot::Wifi {
+                rssi,
+                ram_free,
+                ram_block,
+            } => {
+                let mut s = self.status.lock().await;
+                s.wifi_rssi = Some(rssi);
+                s.ram_free = ram_free.or(s.ram_free);
+                s.ram_block = ram_block.or(s.ram_block);
+            }
             FromRobot::Button { action } => {
                 self.push_event("button", json!({ "action": action })).await
             }

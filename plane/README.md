@@ -98,7 +98,7 @@ that streams a test card, a 440 Hz tone and fake events.
 
 | Tool | What it does |
 |---|---|
-| `status` | Connection, mode, battery, sensors and stream state |
+| `status` | Connection, mode, battery, sensors, stream state and free RAM (`ram_free`) |
 | `enter_ai_mode` / `exit_ai_mode` | Pause or resume the robot's own behavior. Control tools enter AI mode automatically. |
 | `move`, `turn`, `drive`, `stop` | Timed movement. The robot stops by itself when the time runs out, the link drops, or a safety check trips. |
 | `look` | Latest live camera frame (320x240 image) |
@@ -114,6 +114,7 @@ that streams a test card, a 440 Hz tone and fake events.
 | `play_audio`, `stop_audio`, `set_volume` | Speaker control |
 | `events` | Long-poll robot events: proximity, motion, battery, button, scenario progress, faces |
 | `remember_face`, `forget_face`, `who_is_here` | Face recognition, run on this machine (see below) |
+| `phone` | The paired phone: `status` (what is playing), `notifications`, `play`, `pause`, `next`, `previous` |
 | `led`, `run_scenario`, `scenarios`, `ir_list`, `ir_send`, `read_modules` | Stock features and add-on modules |
 
 **Resources:** `butterbot://camera/latest` and `butterbot://status`.
@@ -158,8 +159,8 @@ Silicon) transcribes it, typically in about 0.1 s. The models (about 150 MB) are
 `<data_dir>/models` on first use and checked against pinned SHA-256 hashes.
 
 - **Only speech addressed to the robot becomes a command:** it starts with the wake word
-  (`Butterbot`, matched loosely because Whisper spells it many ways), or comes within
-  `follow_up_secs` after the robot answered. Saying only the name opens an 8 s window for the
+  (`Butterbot`, matched loosely because Whisper spells it many ways), or starts within
+  `follow_up_secs` (5 s) of the robot finishing an answer. Saying only the name opens an 8 s window for the
   command.
 - **"Goodbye"** ends the conversation: the robot says bye and listens for its name again.
 - Commands not picked up within `command_max_age_secs` are dropped.
@@ -180,7 +181,9 @@ a fresh session every `session_minutes` at a quiet moment, with a recap of recen
   `{prompt}` becomes the persona (see `src/persona.md`, or `[agent] persona`) plus the recap.
 
 The built-in brains need an OpenAI API key, from `[brain] api_key_file` or `OPENAI_API_KEY`. They
-have the robot's tools plus web search. With `voice = "robot"` (the default) the model writes
+have the robot's tools (including `body`, its battery, plug and floor state, and `phone`) plus web
+search. Their instructions describe the body: tracks, a camera low at the front, the sensors, the
+battery, and no hands. With `voice = "robot"` (the default) the model writes
 text and the robot speaks each sentence in its own voice as soon as it is complete, which is
 quick and costs no audio tokens. With an OpenAI voice the realtime model speaks itself and the
 audio is streamed to the robot.
@@ -280,7 +283,7 @@ notice_cooldown_secs = 600
 enabled = true           # transcribe the microphone in AI mode
 wake_word = "Butterbot"  # empty: everything said is a command
 command_max_age_secs = 60
-follow_up_secs = 30      # after an answer, carry on without the name for this long
+follow_up_secs = 5       # after an answer, start talking within this long to carry on without the name
 
 [life]
 enabled = true           # nudges for the agent

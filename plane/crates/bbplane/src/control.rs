@@ -625,6 +625,47 @@ goodbye). Say bye and keep listening."
         self.hub.request(ToRobot::IrSend { id, index }).await
     }
 
+    /// The phone link: `status` (connection, notification count, what is playing),
+    /// `notifications` (all of them), or a music control: `play`, `pause`, `next`, `previous`.
+    pub async fn phone(&self, action: &str) -> Result<Value> {
+        self.ensure_remote().await?;
+        if action != "notifications" {
+            let id = self.hub.next_id();
+            return self
+                .hub
+                .request(ToRobot::Phone {
+                    id,
+                    action: action.into(),
+                    index: 0,
+                })
+                .await;
+        }
+        // A reply fits one datagram, so they come a page at a time.
+        let mut all = Vec::new();
+        let mut index = 0;
+        loop {
+            let id = self.hub.next_id();
+            let page = self
+                .hub
+                .request(ToRobot::Phone {
+                    id,
+                    action: action.into(),
+                    index,
+                })
+                .await?;
+            all.extend(
+                page["notifications"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default(),
+            );
+            match page["next"].as_u64() {
+                Some(n) if n > index as u64 && n < 256 && all.len() < 64 => index = n as u8,
+                _ => return Ok(json!({ "connected": page["connected"], "notifications": all })),
+            }
+        }
+    }
+
     pub async fn modules(&self) -> Result<Value> {
         self.ensure_remote().await?;
         let id = self.hub.next_id();

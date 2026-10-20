@@ -269,20 +269,20 @@ impl Ears {
         }
     }
 
-    /// Whether speech now counts as a command without the wake word.
-    fn is_open(&self) -> bool {
-        let now = Instant::now();
+    /// Whether speech that started at `at` counts as a command without the wake word. The
+    /// window only has to be open when someone starts talking, not when they finish.
+    fn is_open_at(&self, at: Instant) -> bool {
         if self
             .name_until
             .lock()
             .unwrap()
-            .take_if(|t| now < *t)
+            .take_if(|t| at < *t)
             .is_some()
         {
             return true;
         }
         self.attentive.load(Ordering::Relaxed)
-            && self.open_until.lock().unwrap().is_some_and(|t| now < t)
+            && self.open_until.lock().unwrap().is_some_and(|t| at < t)
     }
 
     /// Whether speech now counts as a command without the wake word. Unlike `is_open` it does not
@@ -546,6 +546,10 @@ pub async fn run(robot: Robot) {
 /// Transcribe an utterance and, if it is for the robot, queue it as a command.
 fn handle_utterance(ears: Arc<Ears>, robot: Robot, utterance: Vec<i16>) {
     let secs = utterance.len() as f32 / RATE;
+    // When the person started talking (the utterance ends about now).
+    let spoke_at = Instant::now()
+        .checked_sub(Duration::from_secs_f32(secs))
+        .unwrap_or_else(Instant::now);
     tokio::spawn(async move {
         let started = Instant::now();
         let said = match ears.transcribe(utterance).await {
@@ -574,7 +578,7 @@ fn handle_utterance(ears: Arc<Ears>, robot: Robot, utterance: Vec<i16>) {
                 return;
             }
             Some(t) => (t.to_string(), false),
-            None if ears.is_open() => (said.clone(), true),
+            None if ears.is_open_at(spoke_at) => (said.clone(), true),
             None => {
                 // Not for the robot: forget it.
                 tracing::info!("{secs:.1} s of speech not addressed to the robot, ignored");

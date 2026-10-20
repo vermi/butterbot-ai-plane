@@ -1,4 +1,5 @@
 #include "Phone.h"
+#include <algorithm>
 #include <functional>
 #include <esp_log.h>
 
@@ -52,6 +53,38 @@ Notif Phone::getNotif(uint32_t uid){
 
 std::vector<Notif> Phone::getNotifs(){
 	return std::vector<Notif>(notifs.cbegin(), notifs.cend());
+}
+
+std::vector<Notif> Phone::getReadableNotifs(){
+	std::vector<Notif> notifs = getNotifs();
+	size_t write = 0;
+	for(size_t read = 0; read < notifs.size(); ++read){
+		const Notif& candidate = notifs[read];
+
+		// IncomingCall and OutgoingCall are not real notifications — skip them entirely.
+		if(candidate.category == Notif::Category::IncomingCall) continue;
+		if(candidate.category == Notif::Category::OutgoingCall) continue;
+
+		// MissedCall and Voicemail carry no message body — exempt them from the
+		// empty-message filter that otherwise skips Android group-summary / badge-only entries.
+		const bool isCallCategory = candidate.category == Notif::Category::MissedCall
+								 || candidate.category == Notif::Category::Voicemail;
+		if(candidate.message.empty() && !isCallCategory) continue;
+
+		const bool duplicate = std::any_of(notifs.cbegin(), notifs.cbegin() + write, [&candidate](const Notif& existing){
+			return existing.appID == candidate.appID
+				   && existing.title == candidate.title
+				   && existing.message == candidate.message;
+		});
+		if(duplicate) continue;
+
+		if(write != read){
+			notifs[write] = std::move(notifs[read]);
+		}
+		++write;
+	}
+	notifs.erase(notifs.begin() + write, notifs.end());
+	return notifs;
 }
 
 uint32_t Phone::getNotifsCount() const{

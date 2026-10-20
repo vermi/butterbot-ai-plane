@@ -60,6 +60,8 @@ public:
 
 	Notif getNotif(uint32_t uid);
 	std::vector<Notif> getNotifs();
+	/** Notifications worth reading out: no calls in progress, no empty summaries, no duplicates. */
+	std::vector<Notif> getReadableNotifs();
 	uint32_t getNotifsCount() const;
 
 	Notif getCall();

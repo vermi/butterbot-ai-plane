@@ -47,8 +47,8 @@ namespace {
 		RoutineFactory factory;
 	};
 
-	// AI build: scenarios needing speech recognition, face/object detection or the phone link are
-	// removed (dice/eight ball/IR train+forget listen for speech, dance listens for music).
+	// AI build: scenarios needing on-robot speech recognition or face/object detection are removed
+	// (dice/eight ball/IR train+forget listen for speech, dance listens for music).
 	const ScenarioRoutineMapping Mappings[] = {
 		{ { BB::Action::Scenario::Fact, {} }, &makeRoutine<FactRoutine> },
 		{ { BB::Action::Scenario::Joke, {} }, &makeRoutine<JokeRoutine> },
@@ -72,6 +72,12 @@ namespace {
 		{ { BB::Action::Scenario::Shutdown, {} }, &makeRoutine<PowerOffRoutine> },
 		{ { BB::Action::Scenario::IR_list, {} }, &makeRoutine<IRListRoutine> },
 		{ { BB::Action::Scenario::IR_action, {} }, &makeRoutine<IRActionRoutine> },
+		{ { BB::Action::Scenario::PhoneListNotifs, {} }, &makeRoutine<ListNotificationsRoutine> },
+		{ { BB::Action::Scenario::PhoneWhatsPlaying, {} }, &makeRoutine<WhatsPlayingRoutine> },
+		{ { BB::Action::Scenario::PhoneNextSong, {} }, &makeRoutine<MediaNextRoutine> },
+		{ { BB::Action::Scenario::PhonePrevSong, {} }, &makeRoutine<MediaPrevRoutine> },
+		{ { BB::Action::Scenario::PhonePlayMusic, {} }, &makeRoutine<MediaPlayRoutine> },
+		{ { BB::Action::Scenario::PhoneStopMusic, {} }, &makeRoutine<MediaStopRoutine> },
 		{ { BB::Action::Scenario::VoiceControl, VoiceScenarioData{ VoiceScenarioData::Direction::Forward } }, &makeRoutine<VoiceForwardRoutine> },
 		{ { BB::Action::Scenario::VoiceControl, VoiceScenarioData{ VoiceScenarioData::Direction::Backward } }, &makeRoutine<VoiceBackwardRoutine> },
 		{ { BB::Action::Scenario::VoiceControl, VoiceScenarioData{ VoiceScenarioData::Direction::Rotate } }, &makeRoutine<VoiceTurn180Routine> },

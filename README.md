@@ -15,8 +15,9 @@ mode. The agent is either its built-in brain on OpenAI's APIs or any MCP agent y
 Codex. You talk to it by name ("Butterbot, what's the weather?"), it answers out loud, and when
 nobody is talking to it, it does things of its own accord. See [Let it run itself](#6-let-it-run-itself-optional).
 
-The handheld controller, RC mode, the idle behaviours and the robot's own voice keep working. Some
-stock features had to go to make room for Wi-Fi; see [what was removed](#design-notes).
+The handheld controller, RC mode, the idle behaviours, the phone link and the robot's own voice
+keep working. Some stock features had to go to make room for Wi-Fi; see
+[what was removed](#design-notes).
 
 ## What an AI can do with it
 
@@ -29,6 +30,7 @@ stock features had to go to make room for Wi-Fi; see [what was removed](#design-
 | **Sense** | `events`: front and bottom IR sensors, motion (shake, pick-up, fall), battery, button |
 | **Recognize** | `remember_face`, `who_is_here`, `forget_face`. Enrolled people are greeted by name and reported as `face` events. Animals coming into view (a cat, a dog, a bird) are noticed too. |
 | **Behave** | `focus` (stay quiet for a while), `end_conversation`, `power_off` |
+| **Phone** | `phone`: the paired phone's notifications, what's playing, and play, pause, next, previous |
 | **Extras** | `led`, `run_scenario` (jokes, facts, time, add-on modules), `ir_list`, `ir_send`, `read_modules` |
 
 ## How it works
@@ -165,11 +167,11 @@ owner = "Sam"             # your enrolled name: your requests come first
 
 Then run `bbplane serve` and short-press the robot's button. From then on:
 
-- **Talk to it by name:** "Butterbot, turn around." For 30 s after it answers, you can carry on
+- **Talk to it by name:** "Butterbot, turn around." If you answer within 5 s, you can carry on
   without the name. "Goodbye" ends the conversation; it goes back to waiting for its name.
-- **It has a life of its own.** When it sees someone it knows or an animal, or nobody has spoken
-  to it for a while, the agent gets a nudge. It decides for itself whether to greet, chat, look around or stay
-  quiet. It chats more when someone is around.
+- **It has a life of its own.** When it sees someone it knows or an animal, is picked up or
+  shaken, or nobody has spoken to it for a while, the agent gets a nudge. It decides for itself
+  whether to greet, chat, look around or stay quiet. It chats more when someone is around.
 - **"Butterbot, I need to focus"** makes it stay quiet (an hour by default, or as long as you
   say) until you call it by name. **"Butterbot, switch off"** powers it down; "goodbye" alone
   never does.
@@ -240,6 +242,8 @@ The safety rules copy what the stock firmware does in the same situation:
   requests from other origins. This blocks cross-site WebSockets and DNS rebinding.
 - **The robot only accepts link traffic from the provisioned plane address.** The link is not
   encrypted, so use a network you trust.
+- **Phone notifications** reach the agent only when someone asks for them, and with the
+  built-in brain they then go to OpenAI like anything else it is told.
 - **Speech is transcribed, and objects detected, on your computer.** Only what follows the robot's name (or is said in
   a conversation with it) goes to the agent, as text. With the built-in brain that text, the
   replies and an occasional camera frame go to OpenAI. The API key is read from the file you
@@ -264,13 +268,16 @@ These are the lessons that shaped the firmware. Most of them came from the hardw
   - on-robot voice commands (a short press of the power button now enters AI mode instead);
   - face and object detection: "who's this", remember/forget face, "what's this", and the idle
     "notice a person" and "observe" behaviours;
-  - the phone link: notifications, music control and clock sync. Without clock sync the "current
-    time" scenario cannot know the time;
   - dice, eight ball, IR learning/forgetting and dance, which needed speech or music input.
 
   The robot's own speech (flite), the other idle behaviours and scenarios, IR sending, add-on
   modules and RC mode remain. Free internal RAM went from about 27 KB to about 100 KB. Face
   recognition is back in AI mode, running on the computer instead (see step 5).
+- **The phone link is back** (it was removed at first too): notifications, music control and
+  clock sync from an iPhone, or an Android phone with the CircuitMess app. In AI mode, with Wi-Fi
+  and a phone connected, about 25 KB of internal RAM stays free (`status` reports `ram_free`).
+  The agent gets notifications as data and sums them up; the stock "read my notifications"
+  routine reads them all without asking whether to go on, since it cannot listen for the answer.
 - **UDP, like the stock video feed.** TCP stalled and died on the robot's busy 2.4 GHz link
   (Bluetooth shares the radio); UDP just skips lost packets.
   - **Video** is split into datagrams of at most 1400 bytes and reassembled on the computer;
@@ -286,8 +293,10 @@ These are the lessons that shaped the firmware. Most of them came from the hardw
   and come back corrupted. AI mode runs the sensor at 20 MHz, which gives clean frames.
   Frames are captured as RGB565 and JPEG-encoded on the CPU, the same path stock uses; that
   encoder limits the frame rate.
-- **Bluetooth goes into the stock low-power mode during AI mode** (slow advertising), which
-  leaves airtime for Wi-Fi.
+- **Bluetooth slows down during AI mode** (advertising every 211 ms, connection events every
+  60–90 ms), which leaves airtime for Wi-Fi. Stock's own low-power settings (1.3 s and about 1 s)
+  were too slow for a phone to connect: iOS gave up while setting up the notification service.
+  Video loss with a phone connected stays about 1%.
 - **The link protocol** is a single frame format: `magic | type | flags | len | payload`.
   - Rust side: [`plane/crates/bbproto`](plane/crates/bbproto).
   - C++ side: [`firmware/main/src/Link/LinkProto.h`](firmware/main/src/Link/LinkProto.h).
@@ -307,7 +316,10 @@ These are the lessons that shaped the firmware. Most of them came from the hardw
   320×240 it misses small or still animals (a dog asleep across the room); at 640×480
   (`[camera] res = "vga"`) it finds them, but the stream drops from about 6 to about 2 fps.
 - **Removed scenarios:** those that needed the removed features (dice, eight ball, face
-  detection, "what's this", phone controls, dance) are not available.
+  detection, "what's this", dance) are not available.
+- **Phone:** music controls act on whatever app the phone is playing from (open Spotify once to
+  control Spotify); the robot cannot pick the app. It cannot reply to messages: Apple's
+  notification service only lets an accessory read and dismiss them.
 
 ## Restoring the stock firmware
 

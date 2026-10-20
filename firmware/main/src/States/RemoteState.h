@@ -84,6 +84,7 @@ private:
 	void irList(uint32_t id);
 	void irSend(const LinkRequest& req);
 	void modules(uint32_t id);
+	void phone(const LinkRequest& req);
 };
 
 #endif //BUTTERBOT_FIRMWARE_REMOTESTATE_H
