@@ -104,6 +104,14 @@ input[type=text] { flex: 1; min-width: 0; }
       <details><summary class="muted">Agent output</summary><pre id="agentlog"></pre></details>
     </div>
     <div class="card">
+      <h2>Memory</h2>
+      <div class="muted" id="memnone">It remembers nothing yet.</div>
+      <ul class="known" id="facts"></ul>
+      <h2 style="margin-top:10px">Reminders</h2>
+      <div class="muted" id="remnone">No reminders.</div>
+      <ul class="known" id="reminders"></ul>
+    </div>
+    <div class="card">
       <h2>Faces</h2>
       <div id="inview" class="muted">Nobody in view</div>
       <form class="row" id="faceform" style="margin-top:8px">
@@ -266,6 +274,34 @@ function showFaces(f) {
   }
 }
 setInterval(async () => { if (!document.hidden) showFaces(await api('/api/faces')); }, 700);
+
+// ---- memory and reminders ----
+let memShown = '';
+function itemList(ul, items, label, onDrop) {
+  ul.replaceChildren();
+  for (const it of items) {
+    const li = document.createElement('li');
+    const span = document.createElement('span'); span.textContent = label(it);
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = 'Remove';
+    b.onclick = async () => { await onDrop(it); memRefresh(); };
+    li.append(span, b); ul.append(li);
+  }
+}
+async function memRefresh() {
+  const m = await api('/api/memory');
+  if (!m) return;
+  const key = JSON.stringify(m);
+  if (key === memShown) return;
+  memShown = key;
+  const facts = m.facts || [], rems = m.reminders || [];
+  $('memnone').hidden = facts.length > 0;
+  $('remnone').hidden = rems.length > 0;
+  itemList($('facts'), facts, f => `${f.text} (${f.date})`, f => {
+    if (confirm(`Forget "${f.text}"?`)) return api('/api/memory/forget', { id: f.id });
+  });
+  itemList($('reminders'), rems, r => `${r.at}: ${r.text}`, r => api('/api/reminders/cancel', { id: r.id }));
+}
+setInterval(() => { if (!document.hidden) memRefresh(); }, 3000); memRefresh();
 $('faceform').onsubmit = async (e) => {
   e.preventDefault();
   const name = $('facename').value.trim();

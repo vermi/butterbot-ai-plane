@@ -19,6 +19,7 @@ futures = "0.3.34"
 hound = "3.5.1"
 libc = "0.2"
 image = { version = "0.25.10", default-features = false, features = ["jpeg"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 local-ip-address = "0.6.13"
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }

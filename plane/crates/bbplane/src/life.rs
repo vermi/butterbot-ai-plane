@@ -19,6 +19,8 @@ use crate::config::LifeConfig;
 const ARRIVAL_FRESH: Duration = Duration::from_secs(60);
 /// Being picked up or shaken not reacted to within this long is old news.
 const HANDLED_FRESH: Duration = Duration::from_secs(20);
+/// A battery warning not passed on within this long waits for the next one.
+const BATTERY_FRESH: Duration = Duration::from_secs(300);
 /// Someone keeps talking: do not end a session in the middle of a conversation.
 const SESSION_END_QUIET: Duration = Duration::from_secs(90);
 
@@ -43,6 +45,9 @@ const SUGGESTIONS_ALONE: &[&str] = &[
 pub enum Nudge {
     /// Someone handled the robot: `pickup`, `putdown`, `shake`, `fall` or `upside_down`.
     Handled { how: String },
+    /// The battery is low (`plugged_in` false: ask to be charged), or the robot was just plugged
+    /// in after such a warning.
+    Battery { percent: u32, plugged_in: bool },
     /// A recognised person came into view.
     Arrived { name: String },
     /// Something worth noticing (a cat, a dog...) came into view.
@@ -62,6 +67,7 @@ struct State {
     arrivals: VecDeque<(String, Instant)>,
     noticed: VecDeque<(String, Instant)>,
     handled: Option<(String, Instant)>,
+    battery: Option<(u32, bool, Instant)>,
     session_started: Instant,
     rng: u64,
 }
@@ -84,6 +90,7 @@ impl Life {
             arrivals: VecDeque::new(),
             noticed: VecDeque::new(),
             handled: None,
+            battery: None,
             session_started: Instant::now(),
             rng: seed,
         };
@@ -113,6 +120,7 @@ impl Life {
         s.arrivals.clear();
         s.noticed.clear();
         s.handled = None;
+        s.battery = None;
     }
 
     pub fn unfocus(&self) {
@@ -156,6 +164,14 @@ impl Life {
         self.state.lock().unwrap().handled = Some((how.to_string(), Instant::now()));
     }
 
+    /// Tell the agent about the battery (see `Nudge::Battery`).
+    pub fn battery(&self, percent: u32, plugged_in: bool) {
+        if !self.cfg.enabled || self.focused().is_some() {
+            return;
+        }
+        self.state.lock().unwrap().battery = Some((percent, plugged_in, Instant::now()));
+    }
+
     /// Something worth noticing came into view.
     pub fn noticed(&self, what: &str) {
         if !self.cfg.enabled || self.focused().is_some() {
@@ -178,6 +194,16 @@ impl Life {
             s.last_activity = Instant::now();
             reschedule(&self.cfg, &mut s);
             return Some(Nudge::Handled { how });
+        }
+        if let Some((percent, plugged_in, at)) = s.battery.take()
+            && at.elapsed() < BATTERY_FRESH
+        {
+            s.last_activity = Instant::now();
+            reschedule(&self.cfg, &mut s);
+            return Some(Nudge::Battery {
+                percent,
+                plugged_in,
+            });
         }
         s.arrivals.retain(|(_, at)| at.elapsed() < ARRIVAL_FRESH);
         if let Some((name, _)) = s.arrivals.pop_front() {

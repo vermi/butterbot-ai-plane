@@ -156,6 +156,12 @@ by name.",
             known.join(", ")
         ));
     }
+    let facts = robot.memory.for_instructions();
+    if !facts.is_empty() {
+        p.push_str(&format!(
+            "\nThings you remember (drop one that is no longer true with `forget` and its id):\n{facts}"
+        ));
+    }
     let recap: Vec<String> = robot
         .hub
         .events_since(0, Duration::ZERO)

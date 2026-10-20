@@ -17,6 +17,34 @@ use crate::config::BrainConfig;
 use crate::control::Robot;
 
 const INSTRUCTIONS: &str = include_str!("instructions.md");
+/// Pictures go to the model at most this wide: smaller is quicker to upload and read, and the
+/// camera's 640x480 holds little more detail than this.
+const PICTURE_WIDTH: u32 = 512;
+
+/// A camera frame as a data URL for the model, scaled down to `PICTURE_WIDTH`.
+pub fn picture_url(jpeg: &[u8]) -> String {
+    use base64::Engine;
+    let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let shrunk = image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg)
+        .ok()
+        .filter(|img| img.width() > PICTURE_WIDTH)
+        .and_then(|img| {
+            let small = img.resize(
+                PICTURE_WIDTH,
+                PICTURE_WIDTH,
+                image::imageops::FilterType::Triangle,
+            );
+            let mut out = Vec::new();
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 80)
+                .encode_image(&small)
+                .ok()
+                .map(|_| out)
+        });
+    format!(
+        "data:image/jpeg;base64,{}",
+        b64(shrunk.as_deref().unwrap_or(jpeg))
+    )
+}
 
 /// The brain's instructions: persona, owner, known faces and a recap of recent conversation.
 pub async fn instructions(robot: &Robot) -> String {
@@ -113,8 +141,36 @@ pub fn tools() -> Vec<Value> {
             &["action"],
         ),
         f(
+            "remember",
+            "Remember something worth knowing next time (you forget conversations after a while): what people like, plans, names, what happened. Not passing chit-chat.",
+            json!({ "fact": { "type": "string", "description": "One short sentence, with names" } }),
+            &["fact"],
+        ),
+        f(
+            "forget",
+            "Forget something you remembered that is no longer true.",
+            json!({ "id": { "type": "integer" } }),
+            &["id"],
+        ),
+        f(
+            "remind",
+            "Set a reminder: it comes back to you when due, and you then tell the person. Give in_minutes, or at (local time, \"HH:MM\").",
+            json!({
+                "text": { "type": "string", "description": "What to remind them of" },
+                "in_minutes": { "type": "number" },
+                "at": { "type": "string", "description": "\"HH:MM\", 24-hour local time" },
+            }),
+            &["text"],
+        ),
+        f(
+            "reminders",
+            "List the reminders that are set, or cancel one by id.",
+            json!({ "cancel": { "type": "integer", "description": "id of a reminder to cancel" } }),
+            &[],
+        ),
+        f(
             "body",
-            "Your body's state: battery, whether you are plugged in, on the floor, and any add-on card.",
+            "Your body's state: battery, whether you are plugged in, on the floor, any add-on card, and the local time.",
             json!({}),
             &[],
         ),
@@ -219,6 +275,52 @@ pub async fn run_tool(robot: &Robot, cfg: &BrainConfig, name: &str, args: &Value
                 let action = args["action"].as_str().unwrap_or("status");
                 Outcome::Text(robot.phone(action).await?.to_string())
             }
+            "remember" => {
+                let fact = robot
+                    .memory
+                    .remember(args["fact"].as_str().unwrap_or_default())?;
+                Outcome::Text(format!("remembered (id {})", fact.id))
+            }
+            "forget" => {
+                let gone = robot
+                    .memory
+                    .forget(args["id"].as_u64().unwrap_or(0) as u32)?;
+                Outcome::Text(if gone { "forgotten" } else { "no such memory" }.into())
+            }
+            "remind" => {
+                let r = robot.reminders.add(
+                    args["text"].as_str().unwrap_or_default(),
+                    args["in_minutes"].as_f64(),
+                    args["at"].as_str(),
+                )?;
+                Outcome::Text(format!(
+                    "Set for {} (it is {} now), id {}.",
+                    r.due_local(),
+                    chrono::Local::now().format("%H:%M"),
+                    r.id
+                ))
+            }
+            "reminders" => {
+                if let Some(id) = args["cancel"].as_u64() {
+                    let gone = robot.reminders.cancel(id as u32)?;
+                    Outcome::Text(
+                        if gone {
+                            "cancelled"
+                        } else {
+                            "no such reminder"
+                        }
+                        .into(),
+                    )
+                } else {
+                    let list: Vec<Value> = robot
+                        .reminders
+                        .list()
+                        .iter()
+                        .map(|r| json!({ "id": r.id, "at": r.due_local(), "text": r.text }))
+                        .collect();
+                    Outcome::Text(json!({ "reminders": list }).to_string())
+                }
+            }
             "body" => {
                 let s = robot.hub.status.lock().await.clone();
                 let battery = s.battery.unwrap_or_default();
@@ -238,6 +340,7 @@ pub async fn run_tool(robot: &Robot, cfg: &BrainConfig, name: &str, args: &Value
                             .and_then(|p| p["bottom"].as_str())
                             .map(|b| b == "covered"),
                         "add_on_cards": cards,
+                        "local_time": chrono::Local::now().format("%A %H:%M").to_string(),
                     })
                     .to_string(),
                 )
@@ -297,6 +400,23 @@ pub fn describe(ev: &crate::control::AgentEvent) -> Option<(String, Option<Bytes
                     "[{} just came into view. In view: {in_view}.]",
                     info["name"].as_str().unwrap_or("someone")
                 ),
+                Some("reminder") => format!(
+                    "[Reminder (set at {}): {}. Tell the person now, briefly.]",
+                    info["set_at"].as_str().unwrap_or("earlier"),
+                    info["text"].as_str().unwrap_or_default()
+                ),
+                Some("battery") => {
+                    let percent = info["percent"].as_u64().unwrap_or(0);
+                    if info["plugged_in"] == true {
+                        format!(
+                            "[You were just plugged in to charge (battery {percent}%). Say thanks, briefly.]"
+                        )
+                    } else {
+                        format!(
+                            "[Your battery is at {percent}% and you are not plugged in. Ask to be charged, briefly.]"
+                        )
+                    }
+                }
                 Some("handled") => {
                     let what = match info["how"].as_str().unwrap_or_default() {
                         "pickup" => "Someone just picked you up",
@@ -456,7 +576,24 @@ async fn speak(robot: Robot, mut sentences: mpsc::UnboundedReceiver<String>) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::sentence_end;
+    use super::{picture_url, sentence_end};
+
+    #[test]
+    fn pictures_are_scaled_down_for_the_model() {
+        use base64::Engine;
+        let img = image::RgbImage::from_pixel(640, 480, image::Rgb([90, 120, 200]));
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
+            .encode_image(&img)
+            .unwrap();
+        let url = picture_url(&jpeg);
+        let b64 = url.strip_prefix("data:image/jpeg;base64,").unwrap();
+        let back = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .unwrap();
+        let small = image::load_from_memory(&back).unwrap();
+        assert_eq!((small.width(), small.height()), (512, 384));
+    }
 
     #[test]
     fn splits_sentences() {

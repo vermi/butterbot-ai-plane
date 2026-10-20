@@ -51,6 +51,9 @@ pub fn router(robot: Robot) -> Router {
         .route("/api/faces", get(faces))
         .route("/api/faces/remember", post(remember_face))
         .route("/api/faces/forget", post(forget_face))
+        .route("/api/memory", get(memory))
+        .route("/api/memory/forget", post(forget_memory))
+        .route("/api/reminders/cancel", post(cancel_reminder))
         .nest_service("/mcp", mcp)
         .layer(middleware::from_fn(move |req, next| {
             guard(allowed.clone(), req, next)
@@ -281,6 +284,36 @@ async fn remember_face(State(r): State<Robot>, Json(b): Json<FaceBody>) -> Respo
 
 async fn forget_face(State(r): State<Robot>, Json(b): Json<FaceBody>) -> Response {
     match r.faces.forget(&b.name).await {
+        Ok(removed) => Json(json!({ "ok": true, "removed": removed })).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+/// What the agent remembers and the reminders that are set.
+async fn memory(State(r): State<Robot>) -> Json<Value> {
+    let reminders: Vec<Value> = r
+        .reminders
+        .list()
+        .iter()
+        .map(|x| json!({ "id": x.id, "at": x.due_local(), "text": x.text }))
+        .collect();
+    Json(json!({ "facts": r.memory.facts(), "reminders": reminders }))
+}
+
+#[derive(Deserialize)]
+struct IdBody {
+    id: u32,
+}
+
+async fn forget_memory(State(r): State<Robot>, Json(b): Json<IdBody>) -> Response {
+    match r.memory.forget(b.id) {
+        Ok(removed) => Json(json!({ "ok": true, "removed": removed })).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+async fn cancel_reminder(State(r): State<Robot>, Json(b): Json<IdBody>) -> Response {
+    match r.reminders.cancel(b.id) {
         Ok(removed) => Json(json!({ "ok": true, "removed": removed })).into_response(),
         Err(e) => err(e),
     }

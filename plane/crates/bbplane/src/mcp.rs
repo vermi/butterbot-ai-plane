@@ -220,6 +220,34 @@ pub struct LedArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RememberArgs {
+    /// One short sentence worth knowing next time, with names.
+    pub fact: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ForgetArgs {
+    /// Id of the remembered fact (listed in the agent's instructions, and by `memories`).
+    pub id: u32,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RemindArgs {
+    /// What to remind them of.
+    pub text: String,
+    /// Minutes from now.
+    pub in_minutes: Option<f64>,
+    /// Or a local time, "HH:MM" (24-hour): the next time the clock says so.
+    pub at: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RemindersArgs {
+    /// Id of a reminder to cancel (omit to list them).
+    pub cancel: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct PhoneArgs {
     /// `status` (connected, notification count, what is playing), `notifications` (all of them),
     /// or a music control: `play`, `pause`, `next`, `previous`.
@@ -629,6 +657,71 @@ by hand."
     #[tool(description = "Read inserted add-on modules (temperature/humidity, CO2, motion, ...).")]
     async fn read_modules(&self) -> Result<CallToolResult, McpError> {
         ok_json(tryt!(self.robot.modules().await))
+    }
+
+    #[tool(
+        description = "Remember something across sessions (what people like, plans, names, what happened). \
+Remembered facts are put into every new agent session's instructions."
+    )]
+    async fn remember(
+        &self,
+        Parameters(a): Parameters<RememberArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let f = tryt!(self.robot.memory.remember(&a.fact));
+        ok_json(serde_json::json!({ "id": f.id }))
+    }
+
+    #[tool(description = "Forget a remembered fact that is no longer true.")]
+    async fn forget(
+        &self,
+        Parameters(a): Parameters<ForgetArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        ok_json(serde_json::json!({ "forgotten": tryt!(self.robot.memory.forget(a.id)) }))
+    }
+
+    #[tool(description = "Everything remembered across sessions.")]
+    async fn memories(&self) -> Result<CallToolResult, McpError> {
+        ok_json(serde_json::json!({ "facts": self.robot.memory.facts() }))
+    }
+
+    #[tool(
+        description = "Set a reminder. It comes back from `hear`/`reply` as a `reminder` nudge when due (in focus \
+mode too); tell the person then. If no agent passes it on within a minute, the robot says it itself."
+    )]
+    async fn remind(
+        &self,
+        Parameters(a): Parameters<RemindArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let r = tryt!(
+            self.robot
+                .reminders
+                .add(&a.text, a.in_minutes, a.at.as_deref())
+        );
+        ok_json(serde_json::json!({
+            "id": r.id,
+            "due_at": r.due_local(),
+            "now": chrono::Local::now().format("%H:%M").to_string(),
+        }))
+    }
+
+    #[tool(description = "List the reminders that are set, or cancel one by id.")]
+    async fn reminders(
+        &self,
+        Parameters(a): Parameters<RemindersArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        if let Some(id) = a.cancel {
+            return ok_json(
+                serde_json::json!({ "cancelled": tryt!(self.robot.reminders.cancel(id)) }),
+            );
+        }
+        let list: Vec<serde_json::Value> = self
+            .robot
+            .reminders
+            .list()
+            .iter()
+            .map(|r| serde_json::json!({ "id": r.id, "at": r.due_local(), "text": r.text }))
+            .collect();
+        ok_json(serde_json::json!({ "reminders": list }))
     }
 
     #[tool(

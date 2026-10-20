@@ -235,10 +235,7 @@ async fn send(sink: &mut Sink, v: Value) -> Result<()> {
 async fn add_message(sink: &mut Sink, text: &str, jpeg: Option<&[u8]>) -> Result<()> {
     let mut content = vec![json!({ "type": "input_text", "text": text })];
     if let Some(j) = jpeg {
-        content.push(json!({
-            "type": "input_image",
-            "image_url": format!("data:image/jpeg;base64,{}", B64.encode(j)),
-        }));
+        content.push(json!({ "type": "input_image", "image_url": super::picture_url(j) }));
     }
     send(
         sink,

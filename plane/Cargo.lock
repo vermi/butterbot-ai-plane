@@ -211,6 +211,7 @@ dependencies = [
  "bbproto",
  "btleplug",
  "bytes",
+ "chrono",
  "clap",
  "directories",
  "futures",

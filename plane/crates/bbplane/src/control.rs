@@ -40,6 +40,8 @@ pub struct Robot {
     pub hub: Arc<Hub>,
     pub faces: Arc<crate::face::Faces>,
     pub objects: Arc<crate::objects::Objects>,
+    pub reminders: Arc<crate::reminders::Reminders>,
+    pub memory: Arc<crate::memory::Memory>,
     pub ears: Arc<crate::ears::Ears>,
     pub life: Arc<crate::life::Life>,
     pub agent: Arc<crate::agent::AgentState>,
@@ -92,6 +94,8 @@ impl Robot {
         Robot {
             faces: Arc::new(crate::face::Faces::new(hub.clone())),
             objects: Arc::new(crate::objects::Objects::new(hub.clone())),
+            reminders: Arc::new(crate::reminders::Reminders::load(&hub.config.data_dir())),
+            memory: Arc::new(crate::memory::Memory::load(&hub.config.data_dir())),
             ears: Arc::new(crate::ears::Ears::new(hub.clone())),
             life: Arc::new(crate::life::Life::new(hub.config.life.clone())),
             agent: Default::default(),
@@ -749,6 +753,23 @@ impl Robot {
                 self.light.thinking();
                 return Ok(AgentEvent::Command { info, image });
             }
+            // Reminders come through focus mode too: someone asked for them.
+            if let Some(r) = self
+                .reminders
+                .take_due(chrono::Local::now().timestamp_millis())
+            {
+                tracing::info!("reminder due for the agent");
+                self.life.activity();
+                return Ok(AgentEvent::Nudge {
+                    info: json!({
+                        "nudge": "reminder",
+                        "text": r.text,
+                        "set_at": r.set_local(),
+                        "due_at": r.due_local(),
+                    }),
+                    image: None,
+                });
+            }
             if self.life.session_over() {
                 return Ok(AgentEvent::EndSession);
             }
@@ -799,13 +820,13 @@ impl Robot {
     }
 }
 
-/// Being picked up, put down, shaken or dropped becomes a nudge for the agent. Spawned once by
-/// `crate::start`.
+/// Being picked up, put down, shaken or dropped, and a low battery, become nudges for the agent.
+/// Spawned once by `crate::start`.
 ///
 /// Shakes and falls come from the robot's accelerometer. Its pick-up detection rarely fires, but
 /// the bottom IR sensor sees the floor go away when the robot is lifted, and come back when it is
 /// put down.
-pub async fn on_motion(robot: Robot) {
+pub async fn on_body(robot: Robot) {
     let mut cursor = robot.hub.last_event_seq().await;
     let bottom = |v: &Value| match v["bottom"].as_str() {
         Some("covered") => Some(true),
@@ -813,6 +834,7 @@ pub async fn on_motion(robot: Robot) {
         _ => None,
     };
     // The last reading, if the robot is already connected.
+    let mut battery = BatteryWatch::default();
     let mut floor = robot
         .hub
         .status
@@ -841,6 +863,19 @@ pub async fn on_motion(robot: Robot) {
                         _ => None,
                     }
                 }
+                "battery" => {
+                    let percent = e.data["pct"].as_f64().unwrap_or(100.0).round() as u32;
+                    let plugged_in = e.data["charging"]
+                        .as_str()
+                        .is_some_and(|c| c != "unplugged");
+                    if let Some(warn) = battery.update(percent, plugged_in) {
+                        tracing::info!(
+                            "battery {percent}% (plugged in: {plugged_in}): telling the agent"
+                        );
+                        robot.life.battery(warn, plugged_in);
+                    }
+                    None
+                }
                 // A new connection reports the sensors afresh.
                 "link" => {
                     floor = None;
@@ -856,6 +891,58 @@ pub async fn on_motion(robot: Robot) {
             tracing::info!("handled: {how}");
             robot.life.handled(&how);
         }
+    }
+}
+
+/// A reminder nobody passed on for a minute (no agent running, or it is paused) is said by the
+/// robot itself. Spawned once by `crate::start`.
+pub async fn overdue_reminders(robot: Robot) {
+    const GRACE_MS: i64 = 60_000;
+    loop {
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        let now = chrono::Local::now().timestamp_millis();
+        if !robot.reminders.overdue(now, GRACE_MS)
+            || !robot.hub.is_connected().await
+            || robot.mode().await.as_deref() != Some("remote")
+        {
+            continue;
+        }
+        while let Some(r) = robot.reminders.take_due(now - GRACE_MS) {
+            let text = format!("Reminder: {}", r.text);
+            if let Err(e) = robot.say(&text, Some("robot"), true).await {
+                tracing::warn!("saying a reminder: {e:#}");
+            }
+        }
+    }
+}
+
+/// When to tell the agent about the battery: at 20% and 10% while unplugged, and when it is
+/// plugged in after such a warning.
+#[derive(Default)]
+struct BatteryWatch {
+    /// The lowest warning given since it was last charged.
+    warned_at: Option<u32>,
+}
+
+impl BatteryWatch {
+    const LEVELS: [u32; 2] = [20, 10];
+
+    /// The percentage to report, if the agent should hear about it.
+    fn update(&mut self, percent: u32, plugged_in: bool) -> Option<u32> {
+        if plugged_in {
+            return self.warned_at.take().map(|_| percent);
+        }
+        if percent > Self::LEVELS[0] + 5 {
+            self.warned_at = None; // charged up again without us noticing the plug
+            return None;
+        }
+        let due = Self::LEVELS
+            .iter()
+            .copied()
+            .filter(|l| percent <= *l && self.warned_at.is_none_or(|w| *l < w))
+            .min()?;
+        self.warned_at = Some(due);
+        Some(percent)
     }
 }
 
@@ -1125,5 +1212,28 @@ mod resampler_tests {
             .sum::<f32>()
             / 15_800.0;
         assert!(err < 200.0, "{err}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BatteryWatch;
+
+    #[test]
+    fn battery_warns_twice_then_thanks_once() {
+        let mut b = BatteryWatch::default();
+        assert_eq!(b.update(60, false), None);
+        assert_eq!(b.update(20, false), Some(20));
+        assert_eq!(b.update(19, false), None, "warned at this level already");
+        assert_eq!(b.update(9, false), Some(9));
+        assert_eq!(b.update(8, false), None);
+        assert_eq!(b.update(8, true), Some(8), "plugged in after a warning");
+        assert_eq!(b.update(30, true), None);
+        // Unplugged at a high level: nothing to say. A plug without a warning: nothing either.
+        assert_eq!(b.update(90, false), None);
+        assert_eq!(b.update(90, true), None);
+        // Jumping straight to 10% gives one warning, not two.
+        assert_eq!(b.update(9, false), Some(9));
+        assert_eq!(b.update(9, false), None);
     }
 }

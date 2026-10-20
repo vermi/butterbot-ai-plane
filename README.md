@@ -178,9 +178,15 @@ Then run `bbplane serve` and short-press the robot's button. From then on:
 - **"Butterbot, I need to focus"** makes it stay quiet (an hour by default, or as long as you
   say) until you call it by name. **"Butterbot, switch off"** powers it down; "goodbye" alone
   never does.
+- **It remembers.** Sessions start fresh every half hour, but what it decides is worth keeping
+  ("Kiwi hates the vacuum") goes into a memory it reads at every start.
+- **Reminders and timers:** "Butterbot, remind me in 20 minutes to take the pizza out." They
+  survive a restart and come through focus mode.
+- **It knows its battery:** it asks to be charged at 20% and 10%, and says thanks when plugged in.
 - **The status light** shows what it is doing; see [Status light](#status-light).
-- **The live view** shows the conversation, what the agent is doing and its token use, and has
-  Pause and Focus buttons.
+- **The live view** shows the conversation, what the agent is doing and its token use, what it
+  remembers and the reminders that are set (both can be removed there), and has Pause and Focus
+  buttons.
 
 Speech is transcribed on your computer with Whisper, and objects are detected there with YOLOX-S
 (about 190 MB of models in all, downloaded once and checked against pinned hashes). When several
@@ -245,6 +251,8 @@ The safety rules copy what the stock firmware does in the same situation:
   requests from other origins. This blocks cross-site WebSockets and DNS rebinding.
 - **The robot only accepts link traffic from the provisioned plane address.** The link is not
   encrypted, so use a network you trust.
+- **Memories and reminders** are kept in `memory.json` and `reminders.json` in the data
+  directory, readable only by your user; the live view lists them and removes any.
 - **Phone notifications** reach the agent only when someone asks for them, and with the
   built-in brain they then go to OpenAI like anything else it is told.
 - **Speech is transcribed, and objects detected, on your computer.** Only what follows the robot's name (or is said in

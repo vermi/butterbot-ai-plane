@@ -132,14 +132,7 @@ pub async fn session(robot: &Robot, state: &AgentState) -> Result<String> {
 }
 
 fn image_part(jpeg: &[u8]) -> Value {
-    use base64::Engine;
-    json!({
-        "type": "input_image",
-        "image_url": format!(
-            "data:image/jpeg;base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(jpeg)
-        ),
-    })
+    json!({ "type": "input_image", "image_url": super::picture_url(jpeg) })
 }
 
 /// Stream one response, speaking sentences as they complete. Returns the response id and its

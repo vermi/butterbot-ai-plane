@@ -114,6 +114,8 @@ that streams a test card, a 440 Hz tone and fake events.
 | `play_audio`, `stop_audio`, `set_volume` | Speaker control |
 | `events` | Long-poll robot events: proximity, motion, battery, button, scenario progress, faces |
 | `remember_face`, `forget_face`, `who_is_here` | Face recognition, run on this machine (see below) |
+| `remember`, `forget`, `memories` | Long-term memory across agent sessions |
+| `remind`, `reminders` | Reminders and timers, delivered as nudges when due |
 | `phone` | The paired phone: `status` (what is playing), `notifications`, `play`, `pause`, `next`, `previous` |
 | `led`, `run_scenario`, `scenarios`, `ir_list`, `ir_send`, `read_modules` | Stock features and add-on modules |
 
@@ -199,10 +201,19 @@ default_tools_approval_mode = "approve"
 
 **Nudges.** `hear` and `reply` also return nudges, so the agent can act on its own:
 
-- `arrived`: an enrolled person came into view;
+- `reminder`: a reminder it set with `remind` is due (in focus mode too; with no agent to pass
+  it on within a minute, the robot says it itself);
+- `handled`: someone picked it up, put it down, shook it or dropped it;
+- `battery`: the battery is at 20% or 10% and it is not plugged in, or it was just plugged in
+  after such a warning;
+- `arrived`: an enrolled person came into view after 30 minutes away;
 - `noticed`: an animal came into view (see [Object detection](#object-detection));
 - `idle`: nobody has talked to the robot for a random 2–5 minutes while someone is around (in
   view, or talking nearby), or 15–30 minutes while nobody is. It may carry a suggestion.
+
+**Memory.** `remember` keeps a fact (at most 100, oldest dropped first) in
+`<data_dir>/memory.json`; every new session's instructions list them, so the agent knows what it
+learned before. `forget` drops one. The built-in brains have the same tools.
 
 The agent decides what to do with each: greet, chat, look around, wander, or stay quiet. Commands
 from `[life] owner` are marked `from_owner`, and the persona tells the agent to put them first.
