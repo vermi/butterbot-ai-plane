@@ -31,7 +31,6 @@ const SUGGESTIONS_IN_VIEW: &[&str] = &[
     "start a little chit-chat with whoever is in view",
     "comment on something you notice in the picture",
     "ask the person in view how their day is going",
-    "share a fun fact or a robot joke",
     "look around (turn a little) and say what you find",
     "stay quiet for now",
 ];
@@ -59,7 +58,7 @@ pub enum Nudge {
     /// Nobody has said anything to the robot for a while.
     Idle {
         quiet_for_minutes: u64,
-        suggestion: &'static str,
+        suggestion: String,
     },
 }
 
@@ -248,12 +247,25 @@ impl Life {
         if quiet < due {
             return None;
         }
-        let list = if anyone_in_view {
-            SUGGESTIONS_IN_VIEW
+        let suggestion = if anyone_in_view {
+            // Something they care about, twice as often as any one other idea.
+            let news = |rng: &mut u64| match self.cfg.interests.as_slice() {
+                [] => "share something interesting you read about recently".to_string(),
+                topics => format!(
+                    "tell them about an interesting recent development in {} (look it up with web_search first)",
+                    topics[next_rand(rng) as usize % topics.len()]
+                ),
+            };
+            let n = SUGGESTIONS_IN_VIEW.len() as u64 + 2;
+            match next_rand(&mut s.rng) % n {
+                i if (i as usize) < SUGGESTIONS_IN_VIEW.len() => {
+                    SUGGESTIONS_IN_VIEW[i as usize].to_string()
+                }
+                _ => news(&mut s.rng),
+            }
         } else {
-            SUGGESTIONS_ALONE
+            SUGGESTIONS_ALONE[next_rand(&mut s.rng) as usize % SUGGESTIONS_ALONE.len()].to_string()
         };
-        let suggestion = list[next_rand(&mut s.rng) as usize % list.len()];
         s.last_activity = Instant::now();
         reschedule(&self.cfg, &mut s);
         Some(Nudge::Idle {
@@ -330,6 +342,24 @@ mod tests {
         life.arrived("Mono");
         tokio::time::advance(Duration::from_secs(61)).await;
         assert!(!matches!(life.poll(false), Some(Nudge::Arrived { .. })));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn idle_chat_brings_up_their_interests() {
+        let life = Life::new(LifeConfig {
+            interests: vec!["quantum computing".into()],
+            ..cfg([60, 60], [60, 60])
+        });
+        let mut ideas = Vec::new();
+        for _ in 0..40 {
+            tokio::time::advance(Duration::from_secs(61)).await;
+            if let Some(Nudge::Idle { suggestion, .. }) = life.poll(true) {
+                ideas.push(suggestion);
+            }
+        }
+        assert_eq!(ideas.len(), 40);
+        assert!(ideas.iter().any(|i| i.contains("quantum computing")));
+        assert!(ideas.iter().all(|i| !i.contains("joke")));
     }
 
     #[tokio::test(start_paused = true)]

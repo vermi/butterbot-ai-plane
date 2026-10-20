@@ -84,6 +84,11 @@ The web server only answers requests addressed to an IP address, `localhost`, or
 from reaching the robot's camera, microphone or controls through your browser. The live view and
 API have no login, so only set `web_bind = "0.0.0.0"` on a network you trust.
 
+To have it start at login and restart if it crashes, run `bbplane service install` (a launchd
+agent on macOS, a systemd user service on Linux; logs go to `<data_dir>/bbplane.log` on macOS).
+Run it again after a rebuild to restart it on the new binary; `bbplane service status` and
+`bbplane service uninstall` do what they say.
+
 Connect an MCP client using either option:
 
 - **HTTP**, while `bbplane serve` is running:
@@ -302,6 +307,7 @@ follow_up_secs = 5       # after an answer, start talking within this long to ca
 enabled = true           # nudges for the agent
 owner = ""               # enrolled name whose requests come first
 pets = []                # e.g. ["Biscuit, a beagle"]: an animal it sees is probably one of them
+interests = []           # e.g. ["astronomy", "cooking"]: idle chat brings up recent news in these
 nudge_in_view_secs = [120, 300]    # random wait between idle nudges with someone around
 nudge_alone_secs = [900, 1800]     # ...and with nobody around
 default_focus_minutes = 60

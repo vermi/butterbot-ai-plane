@@ -231,6 +231,9 @@ pub struct LifeConfig {
     pub owner: String,
     /// Animals that live here, as you would introduce them: "Biscuit, a beagle".
     pub pets: Vec<String>,
+    /// Topics the people here enjoy: idle chit-chat brings up recent news in them (looked up on
+    /// the web) rather than jokes.
+    pub interests: Vec<String>,
     /// Random wait, in seconds, between idle nudges while someone is in view...
     pub nudge_in_view_secs: [u64; 2],
     /// ...and while nobody is.
@@ -248,6 +251,7 @@ impl Default for LifeConfig {
             enabled: true,
             owner: String::new(),
             pets: Vec::new(),
+            interests: Vec::new(),
             nudge_in_view_secs: [120, 300],
             nudge_alone_secs: [900, 1800],
             default_focus_minutes: 60,

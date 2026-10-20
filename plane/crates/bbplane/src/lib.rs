@@ -17,6 +17,7 @@ pub mod models;
 pub mod objects;
 pub mod provision;
 pub mod reminders;
+pub mod service;
 pub mod sim;
 pub mod stt;
 pub mod tts;

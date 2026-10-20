@@ -166,9 +166,11 @@ api_key_file = "~/path/to/openai-key"   # or set OPENAI_API_KEY
 [life]
 owner = "Sam"             # your enrolled name: your requests come first
 pets = ["Biscuit, a beagle"]  # optional: an animal it sees is probably one of them
+interests = ["astronomy"]     # optional: idle chat brings up recent news in these
 ```
 
-Then run `bbplane serve` and short-press the robot's button. From then on:
+Then run `bbplane serve` (or `bbplane service install` to have it start at every login) and
+short-press the robot's button. From then on:
 
 - **Talk to it by name:** "Butterbot, turn around." If you answer within 5 s, you can carry on
   without the name. "Goodbye" ends the conversation; it goes back to waiting for its name.

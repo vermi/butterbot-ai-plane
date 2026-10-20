@@ -59,6 +59,21 @@ enum Cmd {
     },
     /// Print the effective configuration and its path.
     Config,
+    /// Run `serve` in the background from login on (launchd on macOS, systemd on Linux).
+    Service {
+        #[command(subcommand)]
+        action: ServiceCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum ServiceCmd {
+    /// Start it now and at every login (replaces an installed one, e.g. after a rebuild).
+    Install,
+    /// Stop it and remove it from login.
+    Uninstall,
+    /// Whether it is installed and running.
+    Status,
 }
 
 #[tokio::main]
@@ -67,6 +82,8 @@ async fn main() -> Result<()> {
     // stdout belongs to the MCP protocol in `mcp` mode; always log to stderr.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
+        // Plain text in a log file (the login service), colour in a terminal.
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "info,rmcp=warn,whisper_rs=warn".into()),
@@ -87,7 +104,9 @@ async fn main() -> Result<()> {
             }
         }
         Cmd::Serve => {
-            let plane = bbplane::start(Config::load(cli.config.as_ref())?).await?;
+            let config = Config::load(cli.config.as_ref())?;
+            bbplane::service::trim_log(&config.data_dir());
+            let plane = bbplane::start(config).await?;
             eprintln!(
                 "robot link on {}; open http://{}/ ; MCP: http://{}/mcp",
                 plane.link_addr, plane.web_addr, plane.web_addr
@@ -146,6 +165,17 @@ async fn main() -> Result<()> {
             }
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         },
+        Cmd::Service { action } => {
+            let msg = match action {
+                ServiceCmd::Install => {
+                    let data = Config::load(cli.config.as_ref())?.data_dir();
+                    bbplane::service::install(cli.config.as_deref(), &data)?
+                }
+                ServiceCmd::Uninstall => bbplane::service::uninstall()?,
+                ServiceCmd::Status => bbplane::service::status()?,
+            };
+            eprintln!("{msg}");
+        }
         Cmd::Config => {
             let c = Config::load(cli.config.as_ref())?;
             eprintln!(

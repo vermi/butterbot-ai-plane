@@ -137,6 +137,22 @@ pub async fn with_context(robot: &Robot, persona: &str) -> String {
 (`owner_in_view`), they come first: drop what you are doing and attend to them."
         )
     };
+    let interests = &cfg.life.interests;
+    if !interests.is_empty() {
+        if !owner_line.is_empty() {
+            owner_line.push('\n');
+        }
+        let who = if owner.is_empty() {
+            "People here"
+        } else {
+            owner.as_str()
+        };
+        owner_line.push_str(&format!(
+            "- {who} enjoy hearing about recent developments in: {}. When you start a chat, bring \
+up something new in these (look it up first) rather than jokes.",
+            interests.join(", ")
+        ));
+    }
     let pets = &cfg.life.pets;
     if !pets.is_empty() {
         if !owner_line.is_empty() {
