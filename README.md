@@ -150,6 +150,9 @@ The safety rules copy what the stock firmware does in the same situation:
   robot drives while you hold a direction and stops when you let go.
 - **Driving by the AI** gets the checks of the stock autonomous moves. The robot refuses to start
   a move when tipped over, and stops driving forward when its front sensor sees something.
+  **On the robot this was tested with, the front sensor never reported anything** (standing,
+  covered, or driving into an obstacle), so the obstacle stop did not work there. The base board
+  does the sensing in its own firmware, which this project cannot change.
 - **Every drive command expires on its own:** within 1 s for the live view, and at the end of the
   move's duration for AI moves.
 - **Losing the link** stops the robot immediately. It leaves AI mode after 15 s without

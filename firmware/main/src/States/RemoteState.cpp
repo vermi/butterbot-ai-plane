@@ -64,6 +64,11 @@ RemoteState::RemoteState(BBStateMachine* sm) : State(sm){
 	base->stopMotors();
 	base->requestProximityState();
 	link->reportMode("remote");
+	// Shake / pick-up / fall detection only runs while enabled (IdleState enables it for itself);
+	// LinkService reports the events to the plane.
+	if(motion){
+		motion->enable();
+	}
 
 	// Joining Wi-Fi takes a few seconds; say so right away. Wait for it: speech allocates from
 	// the same internal RAM Wi-Fi start-up needs, and a failed allocation reboots (and so powers
@@ -97,6 +102,9 @@ RemoteState::RemoteState(BBStateMachine* sm) : State(sm){
 }
 
 RemoteState::~RemoteState(){
+	if(motion){
+		motion->disable(); // the next state enables it again if it wants it
+	}
 	ConMan.goHiPow();
 	bool wifiDown = true;
 	if(base){
