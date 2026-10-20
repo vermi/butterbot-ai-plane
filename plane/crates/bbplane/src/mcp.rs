@@ -15,7 +15,7 @@ use rmcp::{
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::control::{self, Robot};
+use crate::control::{self, AgentEvent, Robot};
 
 const INSTRUCTIONS: &str = "\
 Controls a ButterBot toy robot (two-wheel drive, camera, microphone, speaker).
@@ -141,12 +141,19 @@ pub struct ListenArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct FocusArgs {
+    /// How long to stay quiet, in minutes (default from the config, usually 60).
+    pub minutes: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ReplyArgs {
     /// What to say (one or two short sentences work best).
     pub text: String,
     /// Longest to wait for the next thing someone says, in seconds (default 50, max 3600).
     pub timeout_s: Option<u64>,
-    /// Also return what the camera sees as the person finishes speaking (default false).
+    /// Also return what the camera sees as the person finishes speaking. Default: only when
+    /// what they said is about seeing ("what do you see", "look", "who is this", colours...).
     pub include_image: Option<bool>,
 }
 
@@ -155,8 +162,9 @@ pub struct HearArgs {
     /// Longest to wait for someone to speak, in seconds (default 50, max 3600). Keep it under
     /// your client's tool-call timeout.
     pub timeout_s: Option<u64>,
-    /// Also return what the camera sees as the person finishes speaking (default false). Saves
-    /// a separate `look` when questions may be about what is in front of the robot.
+    /// Also return what the camera sees as the person finishes speaking, saving a separate
+    /// `look`. Default: only when what they said is about seeing ("what do you see", "look",
+    /// "who is this", colours...); images make every later turn slower, so not by default.
     pub include_image: Option<bool>,
 }
 
@@ -458,6 +466,42 @@ the robot is listening again the moment it stops talking."
         self.next_command(a.timeout_s, a.include_image).await
     }
 
+    #[tool(
+        description = "Focus mode: stay quiet (no idle chatter, no nudges, no follow-up listening) \
+until called by name or until the time is up. Use when someone says they need to focus or want \
+quiet."
+    )]
+    async fn focus(
+        &self,
+        Parameters(a): Parameters<FocusArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let minutes = a
+            .minutes
+            .unwrap_or(self.robot.hub.config.life.default_focus_minutes)
+            .clamp(1, 24 * 60);
+        self.robot
+            .focus(std::time::Duration::from_secs(minutes * 60));
+        ok_text(format!(
+            "Focus mode for {minutes} minutes: no idle chatter until called by name."
+        ))
+    }
+
+    #[tool(description = "End focus mode early.")]
+    async fn unfocus(&self) -> Result<CallToolResult, McpError> {
+        self.robot.unfocus();
+        ok_text("Focus mode off.")
+    }
+
+    #[tool(
+        description = "Switch the robot off: it says so and powers down (the stock shutdown \
+routine). Only when someone asks for it. Nobody can use the robot again until it is switched on \
+by hand."
+    )]
+    async fn power_off(&self) -> Result<CallToolResult, McpError> {
+        tryt!(self.robot.power_off().await);
+        ok_text("The robot is shutting down. Finish now.")
+    }
+
     #[tool(description = "Make the robot speak.")]
     async fn say(&self, Parameters(a): Parameters<SayArgs>) -> Result<CallToolResult, McpError> {
         let engine = tryt!(
@@ -579,31 +623,42 @@ const RES_CAMERA: &str = "butterbot://camera/latest";
 const RES_STATUS: &str = "butterbot://status";
 
 impl BotServer {
-    /// The next command for the robot (see `Ears`), as a tool result.
+    /// The next thing for the agent (see `Robot::next_event`), as a tool result.
     async fn next_command(
         &self,
         timeout_s: Option<u64>,
         include_image: Option<bool>,
     ) -> Result<CallToolResult, McpError> {
         let timeout = std::time::Duration::from_secs(timeout_s.unwrap_or(50).clamp(1, 3600));
-        match tryt!(self.robot.ears.next_command(timeout).await) {
-            Some(c) => {
-                let mut out = vec![ContentBlock::text(
-                    serde_json::to_string_pretty(&c).unwrap_or_default(),
-                )];
-                if include_image.unwrap_or(false)
-                    && let Some(f) = self.robot.hub.latest_frame().await
-                {
-                    out.push(ContentBlock::image(B64.encode(&f.jpeg), "image/jpeg"));
-                }
-                Ok(CallToolResult::success(out))
+        let ev = tryt!(self.robot.next_event(timeout, include_image).await);
+        let (v, image) = match ev {
+            AgentEvent::Command { info, image } | AgentEvent::Nudge { info, image } => {
+                (info, image)
             }
-            None => ok_json(serde_json::json!({
-                "timed_out": true,
-                "wake_word": self.robot.ears.wake_word(),
-                "hint": "nobody spoke to the robot; call hear again to keep listening",
-            })),
+            AgentEvent::EndSession => (
+                serde_json::json!({
+                    "end_session": true,
+                    "note": "time for a fresh session: finish now without speaking; you will be \
+                started again with a recap of the conversation",
+                }),
+                None,
+            ),
+            AgentEvent::TimedOut { focus_minutes_left } => (
+                serde_json::json!({
+                    "timed_out": true,
+                    "focus_minutes_left": focus_minutes_left,
+                    "hint": "nothing happened; call hear again to keep listening",
+                }),
+                None,
+            ),
+        };
+        let mut out = vec![ContentBlock::text(
+            serde_json::to_string_pretty(&v).unwrap_or_default(),
+        )];
+        if let Some(jpeg) = image {
+            out.push(ContentBlock::image(B64.encode(&jpeg), "image/jpeg"));
         }
+        Ok(CallToolResult::success(out))
     }
 }
 

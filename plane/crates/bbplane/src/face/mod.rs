@@ -527,7 +527,15 @@ pub async fn run(robot: Robot) {
         let mut greet_names = Vec::new();
         for (key, arrived, score) in changes {
             let name = (key != UNKNOWN).then_some(key.clone());
-            let greet = arrived && quiet && faces.take_greeting(&key);
+            if arrived && key != UNKNOWN {
+                robot.life.arrived(&key);
+            }
+            // With an agent running, it greets people itself (it gets an "arrived" nudge).
+            let agent = robot
+                .life
+                .agent_running
+                .load(std::sync::atomic::Ordering::Relaxed);
+            let greet = arrived && quiet && !agent && faces.take_greeting(&key);
             if greet {
                 greet_names.push(key.clone());
             }

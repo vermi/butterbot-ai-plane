@@ -193,6 +193,7 @@ dependencies = [
  "futures",
  "hound",
  "image",
+ "libc",
  "local-ip-address",
  "rmcp",
  "serde",

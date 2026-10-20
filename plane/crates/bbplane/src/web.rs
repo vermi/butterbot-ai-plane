@@ -47,6 +47,7 @@ pub fn router(robot: Robot) -> Router {
         .route("/api/stop", post(stop))
         .route("/api/say", post(say))
         .route("/api/camera", post(camera))
+        .route("/api/agent", get(agent_status).post(agent_control))
         .route("/api/faces", get(faces))
         .route("/api/faces/remember", post(remember_face))
         .route("/api/faces/forget", post(forget_face))
@@ -227,6 +228,34 @@ async fn camera(State(r): State<Robot>, Json(b): Json<CameraBody>) -> Response {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(e) => err(e),
     }
+}
+
+async fn agent_status(State(r): State<Robot>) -> Json<Value> {
+    let mut v = r.agent.status_json(r.hub.config.agent.enabled);
+    v["focus_minutes_left"] = r.life.focused().map(|d| d.as_secs().div_ceil(60)).into();
+    Json(v)
+}
+
+#[derive(Deserialize)]
+struct AgentControl {
+    /// Stop (true) or let it run (false).
+    paused: Option<bool>,
+    /// Focus mode for this many minutes; 0 ends it.
+    focus_minutes: Option<u64>,
+}
+
+async fn agent_control(State(r): State<Robot>, Json(b): Json<AgentControl>) -> Json<Value> {
+    if let Some(p) = b.paused {
+        r.agent
+            .paused
+            .store(p, std::sync::atomic::Ordering::Relaxed);
+    }
+    match b.focus_minutes {
+        Some(0) => r.unfocus(),
+        Some(m) => r.focus(std::time::Duration::from_secs(m * 60)),
+        None => {}
+    }
+    agent_status(State(r)).await
 }
 
 async fn faces(State(r): State<Robot>) -> Json<Value> {

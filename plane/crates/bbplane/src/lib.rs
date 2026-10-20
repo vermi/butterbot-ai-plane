@@ -1,11 +1,13 @@
 //! ButterBot AI control plane: robot link, live view and MCP server.
 
+pub mod agent;
 pub mod audio;
 pub mod config;
 pub mod control;
 pub mod ears;
 pub mod face;
 pub mod hub;
+pub mod life;
 pub mod link;
 pub mod mcp;
 pub mod models;
@@ -53,6 +55,7 @@ pub async fn start(config: config::Config) -> Result<Plane> {
     });
     tokio::spawn(face::run(robot.clone()));
     tokio::spawn(ears::run(robot.clone()));
+    tokio::spawn(agent::run(robot.clone()));
     tokio::spawn(control::on_link_up(robot.clone()));
     tokio::spawn({
         let robot = robot.clone();

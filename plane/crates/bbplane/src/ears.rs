@@ -29,26 +29,33 @@ use crate::control::Robot;
 use crate::hub::{Hub, now_ms};
 
 const RATE: f32 = bbproto::SAMPLE_RATE as f32;
-/// Audio kept from before speech was detected, so the first syllable is not cut off.
-const PRE_ROLL: Duration = Duration::from_millis(400);
-/// Speech ends after this much quiet.
-const END_SILENCE: Duration = Duration::from_millis(500);
-/// Quiet means the smoothed level is below this fraction of the utterance's peak (so a busy room
-/// does not keep it going) or near the noise floor.
-const PEAK_KEEP: f32 = 0.25;
-/// Chunks averaged for the smoothed level (about 160 ms).
-const SMOOTH_CHUNKS: usize = 5;
 /// After the robot's name alone ("Butterbot." then a pause), the next utterance within this
 /// long is the command.
 const NAME_ONLY_WINDOW: Duration = Duration::from_secs(8);
-/// Utterances with less loud time than this are clicks and bumps, not speech.
-const MIN_VOICED: Duration = Duration::from_millis(250);
-const MAX_UTTERANCE: Duration = Duration::from_secs(15);
-/// Loudness (RMS) relative to the noise floor that starts and sustains an utterance.
-const START_RATIO: f32 = 1.8;
-const KEEP_RATIO: f32 = 1.3;
-/// Chunks in a row above START_RATIO needed to start (about 100 ms).
-const START_CHUNKS: u32 = 3;
+/// Silero voice activity detection works on 32 ms frames, the robot's chunk size.
+#[cfg_attr(not(feature = "stt"), allow(dead_code))]
+const FRAME: usize = 512;
+/// Audio kept and analysed at a time (also the lead-in before detected speech): 1 s.
+#[cfg_attr(not(feature = "stt"), allow(dead_code))]
+const WINDOW: usize = 16_000;
+/// Run the detector every 128 ms.
+#[cfg_attr(not(feature = "stt"), allow(dead_code))]
+const CHECK_EVERY: usize = 4 * FRAME;
+/// Speech starts when at least START_FRAMES of the last 8 frames are above START_PROB...
+#[cfg_attr(not(feature = "stt"), allow(dead_code))]
+const START_PROB: f32 = 0.5;
+#[cfg_attr(not(feature = "stt"), allow(dead_code))]
+const START_FRAMES: usize = 4;
+/// ...and ends after END_FRAMES (0.5 s) in a row below END_PROB.
+#[cfg_attr(not(feature = "stt"), allow(dead_code))]
+const END_PROB: f32 = 0.35;
+#[cfg_attr(not(feature = "stt"), allow(dead_code))]
+const END_FRAMES: usize = 16;
+/// Utterances with fewer speech frames (about 0.2 s) are coughs and clicks.
+#[cfg_attr(not(feature = "stt"), allow(dead_code))]
+const MIN_SPEECH_FRAMES: usize = 6;
+#[cfg_attr(not(feature = "stt"), allow(dead_code))]
+const MAX_UTTERANCE: usize = 12 * 16_000;
 #[cfg(feature = "stt")]
 const LOAD_RETRY: Duration = Duration::from_secs(60);
 const QUEUE_LEN: usize = 8;
@@ -88,6 +95,12 @@ pub struct Ears {
     /// When the last command was heard, and until when no wake word is needed.
     last_command: Mutex<Option<Instant>>,
     open_until: Mutex<Option<Instant>>,
+    /// Called by name alone: the next utterance until then is the command, even in focus mode.
+    name_until: Mutex<Option<Instant>>,
+    /// Off in focus mode: only speech addressed by name gets through, no follow-up window.
+    attentive: AtomicBool,
+    /// When anyone last spoke near the robot (to it or not): someone is around.
+    last_speech: Mutex<Option<Instant>>,
 }
 
 impl Ears {
@@ -105,6 +118,9 @@ impl Ears {
             arrived: Notify::new(),
             last_command: Mutex::new(None),
             open_until: Mutex::new(None),
+            name_until: Mutex::new(None),
+            attentive: AtomicBool::new(true),
+            last_speech: Mutex::new(None),
         }
     }
 
@@ -164,6 +180,21 @@ impl Ears {
     /// The next command, waiting up to `timeout` for one. Starts listening on first use (and
     /// loads the speech model, downloading it once).
     pub async fn next_command(&self, timeout: Duration) -> Result<Option<Command>> {
+        self.start_listening().await?;
+        let deadline = Instant::now() + timeout;
+        loop {
+            let arrived = self.arrived.notified();
+            if let Some(c) = self.take_command() {
+                return Ok(Some(c));
+            }
+            if tokio::time::timeout_at(deadline, arrived).await.is_err() {
+                return Ok(None);
+            }
+        }
+    }
+
+    /// Turn on listening (and load the speech model) if it is not on yet.
+    pub async fn start_listening(&self) -> Result<()> {
         if !self.cfg.enabled {
             bail!("speech-to-text is off ([stt] enabled = false)");
         }
@@ -172,34 +203,71 @@ impl Ears {
         }
         #[cfg(feature = "stt")]
         self.engine().await?;
+        Ok(())
+    }
+
+    /// The oldest command still fresh enough to answer, if any.
+    pub fn take_command(&self) -> Option<Command> {
         let max_age = Duration::from_secs(self.cfg.command_max_age_secs);
-        let deadline = Instant::now() + timeout;
-        loop {
-            let arrived = self.arrived.notified();
-            {
-                let mut q = self.commands.lock().unwrap();
-                while let Some(c) = q.pop_front() {
-                    if c.heard_at.is_some_and(|t| t.elapsed() <= max_age) {
-                        return Ok(Some(c));
-                    }
-                }
+        let mut q = self.commands.lock().unwrap();
+        while let Some(c) = q.pop_front() {
+            if c.heard_at.is_some_and(|t| t.elapsed() <= max_age) {
+                return Some(c);
             }
-            if tokio::time::timeout_at(deadline, arrived).await.is_err() {
-                return Ok(None);
-            }
+        }
+        None
+    }
+
+    /// Wait up to `d` for a command to arrive (it is then fetched with `take_command`).
+    pub async fn wait_command(&self, d: Duration) {
+        let arrived = self.arrived.notified();
+        if self.commands.lock().unwrap().is_empty() {
+            let _ = tokio::time::timeout(d, arrived).await;
+        }
+    }
+
+    /// Whether anyone has spoken near the robot within `d`.
+    pub fn heard_speech_within(&self, d: Duration) -> bool {
+        self.last_speech
+            .lock()
+            .unwrap()
+            .is_some_and(|t| t.elapsed() < d)
+    }
+
+    /// In focus mode only speech that starts with the robot's name gets through.
+    pub fn set_attentive(&self, on: bool) {
+        self.attentive.store(on, Ordering::Relaxed);
+        if !on {
+            *self.open_until.lock().unwrap() = None;
         }
     }
 
     /// Whether speech now counts as a command without the wake word.
     fn is_open(&self) -> bool {
-        self.open_until
+        let now = Instant::now();
+        if self
+            .name_until
             .lock()
             .unwrap()
-            .is_some_and(|t| Instant::now() < t)
+            .take_if(|t| now < *t)
+            .is_some()
+        {
+            return true;
+        }
+        self.attentive.load(Ordering::Relaxed)
+            && self.open_until.lock().unwrap().is_some_and(|t| now < t)
+    }
+
+    /// The robot heard its name alone: what is said next (within `d`) is the command.
+    fn called_by_name(&self, d: Duration) {
+        *self.name_until.lock().unwrap() = Some(Instant::now() + d);
     }
 
     /// Treat whatever is said in the next `d` as addressed to the robot.
     fn open_for(&self, d: Duration) {
+        if !self.attentive.load(Ordering::Relaxed) {
+            return;
+        }
         let until = Instant::now() + d;
         let mut o = self.open_until.lock().unwrap();
         if o.is_none_or(|t| t < until) {
@@ -215,16 +283,14 @@ impl Ears {
             .unwrap()
             .is_some_and(|t| t.elapsed() < CONVERSATION);
         if recent {
-            *self.open_until.lock().unwrap() =
-                Some(Instant::now() + Duration::from_secs(self.cfg.follow_up_secs));
+            self.open_for(Duration::from_secs(self.cfg.follow_up_secs));
         }
     }
 
     fn push(&self, c: Command) {
         *self.last_command.lock().unwrap() = Some(Instant::now());
         // Also open the window now, in case the agent answers without speaking.
-        *self.open_until.lock().unwrap() =
-            Some(Instant::now() + Duration::from_secs(self.cfg.follow_up_secs));
+        self.open_for(Duration::from_secs(self.cfg.follow_up_secs));
         let mut q = self.commands.lock().unwrap();
         q.push_back(c);
         while q.len() > QUEUE_LEN {
@@ -235,107 +301,132 @@ impl Ears {
     }
 }
 
-/// Cuts the microphone stream into utterances by loudness.
-struct Segmenter {
-    floor: f32,
-    loud_run: u32,
+/// Speech start and end from Silero's per-frame speech probabilities.
+#[cfg_attr(not(feature = "stt"), allow(dead_code))]
+#[derive(Default)]
+struct Tracker {
     in_speech: bool,
-    quiet: f32,
-    /// Seconds of the current utterance that were above the noise floor.
-    voiced: f32,
-    /// Recent chunk levels, for a smoothed level.
-    recent: VecDeque<f32>,
-    /// Loudest smoothed level of the current utterance.
-    peak: f32,
-    pre: VecDeque<Vec<i16>>,
-    pre_len: usize,
-    utterance: Vec<i16>,
+    speech_frames: usize,
 }
 
-impl Segmenter {
-    fn new(floor: f32) -> Segmenter {
-        Segmenter {
-            floor: floor.max(10.0),
-            loud_run: 0,
-            in_speech: false,
-            quiet: 0.0,
-            voiced: 0.0,
-            recent: VecDeque::new(),
-            peak: 0.0,
-            pre: VecDeque::new(),
-            pre_len: 0,
-            utterance: Vec::new(),
-        }
-    }
+#[cfg_attr(not(feature = "stt"), allow(dead_code))]
+#[derive(Debug, PartialEq)]
+enum Edge {
+    None,
+    Start,
+    /// `keep`: enough speech to be worth transcribing.
+    End {
+        keep: bool,
+    },
+}
 
-    /// Feed one chunk; returns a finished utterance.
-    fn push(&mut self, chunk: &[i16]) -> Option<Vec<i16>> {
-        if chunk.is_empty() {
-            return None;
-        }
-        let secs = chunk.len() as f32 / RATE;
-        let rms =
-            (chunk.iter().map(|&s| (s as f32).powi(2)).sum::<f32>() / chunk.len() as f32).sqrt();
-        // All zeros: the robot muted its microphone because it is speaking.
-        let gated = rms < 1.0;
-        self.recent.push_back(rms);
-        while self.recent.len() > SMOOTH_CHUNKS {
-            self.recent.pop_front();
-        }
-        if self.in_speech {
-            self.utterance.extend_from_slice(chunk);
-            let level = self.recent.iter().sum::<f32>() / self.recent.len() as f32;
-            self.peak = self.peak.max(level);
-            let keep = (self.floor * KEEP_RATIO).max(self.peak * PEAK_KEEP);
-            if !gated && rms > keep {
-                self.voiced += secs;
-            }
-            if !gated && level > keep {
-                self.quiet = 0.0;
-            } else {
-                self.quiet += secs;
-            }
-            let len = self.utterance.len() as f32 / RATE;
-            if gated
-                || self.quiet >= END_SILENCE.as_secs_f32()
-                || len >= MAX_UTTERANCE.as_secs_f32()
-            {
-                self.in_speech = false;
-                self.quiet = 0.0;
-                let u = std::mem::take(&mut self.utterance);
-                return (self.voiced >= MIN_VOICED.as_secs_f32()).then_some(u);
-            }
-            return None;
-        }
-        if gated {
-            self.loud_run = 0;
-            self.pre.clear();
-            self.pre_len = 0;
-            return None;
-        }
-        self.pre.push_back(chunk.to_vec());
-        self.pre_len += chunk.len();
-        while self.pre_len > (PRE_ROLL.as_secs_f32() * RATE) as usize {
-            let old = self.pre.pop_front().unwrap();
-            self.pre_len -= old.len();
-        }
-        if rms > self.floor * START_RATIO && rms > self.floor + 20.0 {
-            self.loud_run += 1;
-            if self.loud_run >= START_CHUNKS {
+#[cfg_attr(not(feature = "stt"), allow(dead_code))]
+impl Tracker {
+    /// `probs`: speech probability per frame over the analysed window, oldest first; the last
+    /// `new_frames` of them arrived since the previous call.
+    fn update(&mut self, probs: &[f32], new_frames: usize) -> Edge {
+        let tail = |n: usize| &probs[probs.len().saturating_sub(n)..];
+        let speechy = |ps: &[f32]| ps.iter().filter(|p| **p > START_PROB).count();
+        if !self.in_speech {
+            let n = speechy(tail(8));
+            if n >= START_FRAMES {
                 self.in_speech = true;
-                self.voiced = START_CHUNKS as f32 * secs;
-                self.peak = self.recent.iter().sum::<f32>() / self.recent.len() as f32;
-                self.loud_run = 0;
-                self.utterance = self.pre.drain(..).flatten().collect();
-                self.pre_len = 0;
+                self.speech_frames = n;
+                return Edge::Start;
             }
-        } else {
-            self.loud_run = 0;
-            // Follow the room's noise level slowly, faster downwards.
-            let a = if rms < self.floor { 0.05 } else { 0.01 };
-            self.floor = (self.floor * (1.0 - a) + rms * a).max(10.0);
+            return Edge::None;
         }
-        None
+        self.speech_frames += speechy(tail(new_frames));
+        if probs.len() >= END_FRAMES && tail(END_FRAMES).iter().all(|p| *p < END_PROB) {
+            self.in_speech = false;
+            return Edge::End {
+                keep: self.speech_frames >= MIN_SPEECH_FRAMES,
+            };
+        }
+        Edge::None
+    }
+}
+
+/// Silero voice activity detection (via whisper.cpp), downloaded on first use.
+#[cfg(feature = "stt")]
+const VAD_MODEL: crate::models::ModelFile = crate::models::ModelFile {
+    name: "ggml-silero-v5.1.2.bin",
+    url: "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin",
+    sha256: "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf",
+    max_bytes: 4 << 20,
+};
+
+/// Cuts the microphone stream into utterances with the voice activity detector, on its own
+/// thread (the detector is not `Send`). Music, TV and room noise do not count as speech.
+#[cfg(feature = "stt")]
+fn vad_thread(
+    dir: PathBuf,
+    chunks: std::sync::mpsc::Receiver<Vec<i16>>,
+    out: tokio::sync::mpsc::UnboundedSender<Vec<i16>>,
+) {
+    use whisper_rs::{WhisperVadContext, WhisperVadContextParams};
+    let mut vad = match crate::models::fetch(&dir, &VAD_MODEL).and_then(|p| {
+        let mut params = WhisperVadContextParams::new();
+        params.set_n_threads(1);
+        WhisperVadContext::new(&p.to_string_lossy(), params)
+            .map_err(|e| anyhow::anyhow!("loading the voice activity model: {e}"))
+    }) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!("listening is off: {e:#}");
+            return;
+        }
+    };
+    let mut window: VecDeque<i16> = VecDeque::with_capacity(WINDOW + FRAME);
+    let mut since = 0;
+    let mut tracker = Tracker::default();
+    let mut utterance: Vec<i16> = Vec::new();
+    while let Ok(chunk) = chunks.recv() {
+        // All zeros: the robot muted its microphone because it is speaking.
+        if chunk.iter().all(|&s| s == 0) {
+            if tracker.in_speech && tracker.speech_frames >= MIN_SPEECH_FRAMES {
+                let _ = out.send(std::mem::take(&mut utterance));
+            }
+            tracker = Tracker::default();
+            utterance.clear();
+            window.clear();
+            since = 0;
+            continue;
+        }
+        window.extend(chunk.iter().copied());
+        while window.len() > WINDOW {
+            window.pop_front();
+        }
+        if tracker.in_speech {
+            utterance.extend_from_slice(&chunk);
+            if utterance.len() >= MAX_UTTERANCE {
+                tracker = Tracker::default();
+                let _ = out.send(std::mem::take(&mut utterance));
+                continue;
+            }
+        }
+        since += chunk.len();
+        if since < CHECK_EVERY {
+            continue;
+        }
+        let new_frames = since / FRAME;
+        since = 0;
+        let samples: Vec<f32> = window.iter().map(|&s| s as f32 / 32_768.0).collect();
+        if let Err(e) = vad.detect_speech(&samples) {
+            tracing::debug!("voice activity: {e}");
+            continue;
+        }
+        match tracker.update(vad.probabilities(), new_frames) {
+            // Start from the whole window: the lead-in holds the first syllables.
+            Edge::Start => utterance = window.iter().copied().collect(),
+            Edge::End { keep } => {
+                let u = std::mem::take(&mut utterance);
+                if keep {
+                    let _ = out.send(u);
+                }
+            }
+            Edge::None => {}
+        }
     }
 }
 
@@ -344,13 +435,23 @@ pub async fn run(robot: Robot) {
     let ears = robot.ears.clone();
     let hub = robot.hub.clone();
     let mut rx = hub.mic.subscribe();
-    let mut seg: Option<Segmenter> = None;
+    let (utterance_tx, mut utterances) = tokio::sync::mpsc::unbounded_channel::<Vec<i16>>();
+    #[cfg(feature = "stt")]
+    let mut vad: Option<std::sync::mpsc::Sender<Vec<i16>>> = None;
+    #[cfg(not(feature = "stt"))]
+    let _ = &utterance_tx; // nothing feeds utterances without speech-to-text
     let mut speaking = false;
     loop {
-        let chunk = match rx.recv().await {
-            Ok(c) => c,
-            Err(RecvError::Lagged(_)) => continue,
-            Err(RecvError::Closed) => return,
+        let chunk = tokio::select! {
+            r = rx.recv() => match r {
+                Ok(c) => c,
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => return,
+            },
+            Some(u) = utterances.recv() => {
+                handle_utterance(ears.clone(), robot.clone(), u);
+                continue;
+            }
         };
         let now_speaking = hub.status.lock().await.speaker_playing;
         if speaking && !now_speaking {
@@ -358,119 +459,143 @@ pub async fn run(robot: Robot) {
         }
         speaking = now_speaking;
         if !ears.cfg.enabled || !ears.active.load(Ordering::Relaxed) {
-            seg = None;
+            #[cfg(feature = "stt")]
+            {
+                vad = None;
+            }
             continue;
         }
-        let s = seg.get_or_insert_with(|| {
-            // Start from the recent noise level.
-            Segmenter::new(initial_floor(&chunk))
-        });
-        let Some(utterance) = s.push(&chunk) else {
-            continue;
-        };
-        let ears = ears.clone();
-        let robot = robot.clone();
-        let secs = utterance.len() as f32 / RATE;
-        tokio::spawn(async move {
-            let started = Instant::now();
-            let said = match ears.transcribe(utterance).await {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::warn!("transcription: {e:#}");
-                    return;
+        #[cfg(not(feature = "stt"))]
+        let _ = chunk;
+        #[cfg(feature = "stt")]
+        {
+            let tx = vad.get_or_insert_with(|| {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let dir = ears.models_dir.clone();
+                let out = utterance_tx.clone();
+                if let Err(e) = std::thread::Builder::new()
+                    .name("ears-vad".into())
+                    .spawn(move || vad_thread(dir, rx, out))
+                {
+                    tracing::error!("starting the listener: {e}");
                 }
-            };
-            // The words themselves are only logged at debug level (opt-in, for diagnosing the
-            // wake word), never by default.
-            tracing::debug!(
-                "heard {secs:.1} s in {} ms: {said:?}",
-                started.elapsed().as_millis()
-            );
-            if said.is_empty() {
-                tracing::info!("{secs:.1} s of sound, no speech");
-                return;
+                tx
+            });
+            if tx.send(chunk.to_vec()).is_err() {
+                vad = None;
             }
-            let (text, follow_up) = match crate::stt::addressed(&said, &ears.cfg.wake_word) {
-                // Just the name, then (probably) a pause: the command comes next.
-                Some("") => {
-                    tracing::info!("called by name; listening for the command");
-                    ears.open_for(NAME_ONLY_WINDOW);
-                    return;
-                }
-                Some(t) => (t.to_string(), false),
-                None if ears.is_open() => (said.clone(), true),
-                None => {
-                    // Not for the robot: forget it.
-                    tracing::info!("{secs:.1} s of speech not addressed to the robot, ignored");
-                    return;
-                }
-            };
-            let in_view: Vec<String> = robot
-                .faces
-                .in_view()
-                .into_iter()
-                .filter_map(|s| s.name)
-                .collect();
-            let c = Command {
-                text,
-                said: said.clone(),
-                follow_up,
-                at_ms: now_ms(),
-                in_view: in_view.clone(),
-                heard_at: Some(Instant::now()),
-            };
-            robot
-                .hub
-                .push_event(
-                    "heard",
-                    json!({ "text": c.text, "follow_up": follow_up, "in_view": in_view }),
-                )
-                .await;
-            ears.push(c);
-        });
+        }
     }
 }
 
-fn initial_floor(chunk: &[i16]) -> f32 {
-    let rms =
-        (chunk.iter().map(|&s| (s as f32).powi(2)).sum::<f32>() / chunk.len().max(1) as f32).sqrt();
-    rms.clamp(10.0, 400.0)
+/// Transcribe an utterance and, if it is for the robot, queue it as a command.
+fn handle_utterance(ears: Arc<Ears>, robot: Robot, utterance: Vec<i16>) {
+    let secs = utterance.len() as f32 / RATE;
+    tokio::spawn(async move {
+        let started = Instant::now();
+        let said = match ears.transcribe(utterance).await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!("transcription: {e:#}");
+                return;
+            }
+        };
+        // The words themselves are only logged at debug level (opt-in, for diagnosing the
+        // wake word), never by default.
+        tracing::debug!(
+            "heard {secs:.1} s in {} ms: {said:?}",
+            started.elapsed().as_millis()
+        );
+        if said.is_empty() {
+            tracing::info!("{secs:.1} s of sound, no speech");
+            return;
+        }
+        *ears.last_speech.lock().unwrap() = Some(Instant::now());
+        let (text, follow_up) = match crate::stt::addressed(&said, &ears.cfg.wake_word) {
+            // Just the name, then (probably) a pause: the command comes next.
+            Some("") => {
+                tracing::info!("called by name; listening for the command");
+                ears.called_by_name(NAME_ONLY_WINDOW);
+                return;
+            }
+            Some(t) => (t.to_string(), false),
+            None if ears.is_open() => (said.clone(), true),
+            None => {
+                // Not for the robot: forget it.
+                tracing::info!("{secs:.1} s of speech not addressed to the robot, ignored");
+                return;
+            }
+        };
+        let in_view: Vec<String> = robot
+            .faces
+            .in_view()
+            .into_iter()
+            .filter_map(|s| s.name)
+            .collect();
+        let c = Command {
+            text,
+            said: said.clone(),
+            follow_up,
+            at_ms: now_ms(),
+            in_view: in_view.clone(),
+            heard_at: Some(Instant::now()),
+        };
+        robot
+            .hub
+            .push_event(
+                "heard",
+                json!({ "text": c.text, "follow_up": follow_up, "in_view": in_view }),
+            )
+            .await;
+        ears.push(c);
+        // Show it was understood while the agent thinks: fast blink, the stock "listening"
+        // signal. The robot's own talking light (solid, then its idle slow blink) takes
+        // over when the answer is spoken.
+        if let Err(e) = robot
+            .led(
+                bbproto::ctrl::LedTarget::Status,
+                bbproto::ctrl::LedMode::Blink,
+                1.0,
+            )
+            .await
+        {
+            tracing::debug!("thinking light: {e:#}");
+        }
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn chunk(level: f32, n: usize, t0: usize) -> Vec<i16> {
-        (0..n)
-            .map(|i| (level * 1.414 * ((t0 + i) as f32 * 0.3).sin()) as i16)
-            .collect()
-    }
-
     #[test]
-    fn segments_speech_between_noise() {
-        let mut s = Segmenter::new(130.0);
-        let mut t = 0;
-        let mut feed = |level: f32, secs: f32, s: &mut Segmenter| {
-            let mut out = Vec::new();
-            for _ in 0..(secs / 0.032) as usize {
-                if let Some(u) = s.push(&chunk(level, 512, t)) {
-                    out.push(u);
-                }
-                t += 512;
-            }
-            out
-        };
-        assert!(feed(130.0, 2.0, &mut s).is_empty());
-        assert!(feed(400.0, 1.5, &mut s).is_empty());
-        let got = feed(130.0, 1.2, &mut s);
-        assert_eq!(got.len(), 1);
-        let secs = got[0].len() as f32 / RATE;
-        assert!((1.5..3.0).contains(&secs), "{secs}");
-        // A click is not speech.
-        assert!(feed(600.0, 0.1, &mut s).is_empty());
-        assert!(feed(130.0, 1.2, &mut s).is_empty());
-        // The robot speaking mutes the mic (zeros): ends an utterance, never starts one.
-        assert!(feed(0.0, 1.0, &mut s).is_empty());
+    fn tracks_speech_from_probabilities() {
+        let mut t = Tracker::default();
+        let mut probs = vec![0.1f32; 31];
+        assert_eq!(t.update(&probs, 4), Edge::None);
+        // A burst of speech.
+        probs.drain(..4);
+        probs.extend([0.9, 0.8, 0.95, 0.7]);
+        assert_eq!(t.update(&probs, 4), Edge::Start);
+        probs.drain(..4);
+        probs.extend([0.9; 4]);
+        assert_eq!(t.update(&probs, 4), Edge::None);
+        // Quiet for less than 0.5 s: still speaking (a pause between words).
+        probs.drain(..8);
+        probs.extend([0.1; 8]);
+        assert_eq!(t.update(&probs, 8), Edge::None);
+        probs.drain(..8);
+        probs.extend([0.1; 8]);
+        assert_eq!(t.update(&probs, 8), Edge::End { keep: true });
+
+        // A single loud frame is not speech; a short blip is dropped.
+        let mut t = Tracker::default();
+        let mut p = vec![0.1f32; 31];
+        p[30] = 0.9;
+        assert_eq!(t.update(&p, 4), Edge::None);
+        p[27..31].copy_from_slice(&[0.9; 4]);
+        assert_eq!(t.update(&p, 4), Edge::Start);
+        let p = vec![0.1f32; 31];
+        assert_eq!(t.update(&p, 16), Edge::End { keep: false });
     }
 }

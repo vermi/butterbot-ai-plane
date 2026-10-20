@@ -29,6 +29,8 @@ pub struct Config {
     pub safety: SafetyConfig,
     pub faces: FacesConfig,
     pub stt: SttConfig,
+    pub life: LifeConfig,
+    pub agent: AgentConfig,
     /// Where `listen` recordings and snapshots are saved.
     pub data_dir: Option<PathBuf>,
 }
@@ -118,6 +120,8 @@ impl Default for Config {
             safety: SafetyConfig::default(),
             faces: FacesConfig::default(),
             stt: SttConfig::default(),
+            life: LifeConfig::default(),
+            agent: AgentConfig::default(),
             data_dir: None,
         }
     }
@@ -130,6 +134,9 @@ pub struct SafetyConfig {
     pub tilt: bool,
     /// Stop driving forward when the front sensor is covered.
     pub obstacle: bool,
+    /// Let the agent drive while the robot is plugged in (it would pull on the cable). The live
+    /// view's drive pad is not limited.
+    pub drive_when_plugged: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -182,11 +189,83 @@ impl Default for SttConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LifeConfig {
+    /// Offer the agent nudges (arrivals, idle time) through `hear` and `reply`.
+    pub enabled: bool,
+    /// Enrolled name of the person whose requests come first.
+    pub owner: String,
+    /// Random wait, in seconds, between idle nudges while someone is in view...
+    pub nudge_in_view_secs: [u64; 2],
+    /// ...and while nobody is.
+    pub nudge_alone_secs: [u64; 2],
+    /// Focus mode lasts this long unless told otherwise.
+    pub default_focus_minutes: u64,
+    /// Start the agent on a fresh session after this many minutes (at a quiet moment), so its
+    /// context stays small. 0 keeps one session.
+    pub session_minutes: u64,
+}
+
+impl Default for LifeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            owner: String::new(),
+            nudge_in_view_secs: [120, 300],
+            nudge_alone_secs: [900, 1800],
+            default_focus_minutes: 60,
+            session_minutes: 30,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentConfig {
+    /// Run the agent while the robot is in AI mode (started and restarted by `bbplane serve`).
+    pub enabled: bool,
+    /// The agent's command. `{prompt}` is replaced by the persona plus a recap of recent
+    /// conversation. The agent must have this plane's MCP server configured.
+    pub command: Vec<String>,
+    /// Persona prompt file (default: the built-in Butterbot persona).
+    pub persona: Option<std::path::PathBuf>,
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            command: [
+                "codex",
+                "--search",
+                "exec",
+                "--skip-git-repo-check",
+                "-c",
+                "model_reasoning_effort=\"low\"",
+                // Codex hides tools behind a search step that fails in exec mode when this
+                // server adds many; the robot needs none of it.
+                "-c",
+                "mcp_servers.node_repl.enabled=false",
+                // `hear` waits until something happens (up to 30 min): one model call per event,
+                // not one per minute of silence.
+                "-c",
+                "mcp_servers.butterbot.tool_timeout_sec=2000",
+                "{prompt}",
+            ]
+            .map(String::from)
+            .to_vec(),
+            persona: None,
+        }
+    }
+}
+
 impl Default for SafetyConfig {
     fn default() -> Self {
         Self {
             tilt: true,
             obstacle: true,
+            drive_when_plugged: false,
         }
     }
 }

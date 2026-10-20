@@ -21,6 +21,8 @@ const DRIVE_SLICE_MS: u64 = 600;
 /// would cut short the next drive.
 const DRIVE_TAIL_MS: u64 = 150;
 const DRIVE_REFRESH: Duration = Duration::from_millis(250);
+/// Anyone heard speaking this recently counts as company for idle nudges.
+const COMPANY: Duration = Duration::from_secs(180);
 /// Hard cap for one drive/turn tool call.
 pub const MAX_DRIVE_MS: u64 = 10_000;
 /// Open-loop calibration: a full-speed spin in place turns about 180 degrees in this time
@@ -38,6 +40,8 @@ pub struct Robot {
     pub hub: Arc<Hub>,
     pub faces: Arc<crate::face::Faces>,
     pub ears: Arc<crate::ears::Ears>,
+    pub life: Arc<crate::life::Life>,
+    pub agent: Arc<crate::agent::AgentState>,
     /// Serialises wake attempts: many tool calls / clicks share one BLE wake.
     wake_lock: Arc<Mutex<()>>,
     speaker: Arc<Mutex<Option<CancellationToken>>>,
@@ -83,6 +87,8 @@ impl Robot {
         Robot {
             faces: Arc::new(crate::face::Faces::new(hub.clone())),
             ears: Arc::new(crate::ears::Ears::new(hub.clone())),
+            life: Arc::new(crate::life::Life::new(hub.config.life.clone())),
+            agent: Default::default(),
             streams: Arc::new(Mutex::new(Streams::defaults(&hub.config))),
             hub,
             wake_lock: Default::default(),
@@ -230,6 +236,23 @@ impl Robot {
     /// Returns early if the robot reports that it stopped on its own (obstacle, lifted, ...).
     pub async fn drive_for(&self, l: i8, r: i8, ms: u64) -> Result<DriveOutcome> {
         self.ensure_remote().await?;
+        if !self.hub.config.safety.drive_when_plugged {
+            let plugged = self
+                .hub
+                .status
+                .lock()
+                .await
+                .battery
+                .as_ref()
+                .and_then(|b| b["charging"].as_str().map(|c| c != "unplugged"))
+                .unwrap_or(false);
+            if plugged {
+                bail!(
+                    "the robot is plugged in (USB or charger); it does not drive on a cable. \
+Ask to be unplugged first."
+                );
+            }
+        }
         let ms = ms.min(MAX_DRIVE_MS);
         let token = CancellationToken::new();
         if let Some(old) = self.drive.lock().await.replace(token.clone()) {
@@ -381,6 +404,44 @@ impl Robot {
 
     /// Speak `text`. `engine` overrides the configured engine (`robot` or `command`).
     pub async fn say(&self, text: &str, engine: Option<&str>, wait: bool) -> Result<String> {
+        let r = self.say_inner(text, engine, wait).await;
+        if r.is_ok() {
+            self.life.activity();
+            self.hub
+                .push_event("said", serde_json::json!({ "text": text }))
+                .await;
+        }
+        r
+    }
+
+    /// Stay quiet (no nudges, no follow-up listening) for `d`, until called by name.
+    pub fn focus(&self, d: Duration) {
+        self.life.focus(d);
+        self.ears.set_attentive(false);
+    }
+
+    pub fn unfocus(&self) {
+        self.life.unfocus();
+        self.ears.set_attentive(true);
+    }
+
+    /// Run the stock shutdown routine: the robot says so and switches itself off.
+    pub async fn power_off(&self) -> Result<()> {
+        self.ensure_remote().await?;
+        let scenario = bbproto::bb::scenario_id("shutdown")
+            .ok_or_else(|| anyhow::anyhow!("no shutdown scenario"))?;
+        let id = self.hub.next_id();
+        // The robot loses power before it can acknowledge; do not wait for an answer.
+        self.hub
+            .send(ToRobot::Scenario {
+                id,
+                scenario,
+                arg: 0,
+            })
+            .await
+    }
+
+    async fn say_inner(&self, text: &str, engine: Option<&str>, wait: bool) -> Result<String> {
         self.ensure_remote().await?;
         if text.len() > MAX_SAY_BYTES {
             bail!(
@@ -533,8 +594,107 @@ impl Robot {
             "robot": s,
             "latest_frame": latest,
             "faces": self.faces.status_json(),
+            "focus_minutes_left": self.life.focused().map(|d| d.as_secs().div_ceil(60)),
+            "agent": {
+                "enabled": self.hub.config.agent.enabled,
+                "running": self.life.agent_running.load(std::sync::atomic::Ordering::Relaxed),
+                "paused": self.agent.paused.load(std::sync::atomic::Ordering::Relaxed),
+            },
             "last_event_seq": self.hub.last_event_seq().await,
         })
+    }
+}
+
+/// Something for the agent to respond to (see `Robot::next_event`).
+pub enum AgentEvent {
+    /// Someone spoke to the robot: `info` holds the command (text, in_view, from_owner, ...).
+    Command {
+        info: Value,
+        image: Option<bytes::Bytes>,
+    },
+    /// An arrival or idle time (see `crate::life`), with who is in view; always with an image.
+    Nudge {
+        info: Value,
+        image: Option<bytes::Bytes>,
+    },
+    /// Time for the agent to start a fresh session.
+    EndSession,
+    TimedOut {
+        focus_minutes_left: Option<u64>,
+    },
+}
+
+impl Robot {
+    /// The next thing for the agent: a command (see `Ears`), a nudge (see `Life`), the end of
+    /// its session, or nothing within `timeout`. `include_image`: attach the camera frame to a
+    /// command (default: only when it is about seeing).
+    pub async fn next_event(
+        &self,
+        timeout: Duration,
+        include_image: Option<bool>,
+    ) -> Result<AgentEvent> {
+        use tokio::time::Instant;
+        self.ears.start_listening().await?;
+        let deadline = Instant::now() + timeout;
+        let owner = self.life.owner().to_string();
+        let frame = async || self.hub.latest_frame().await.map(|f| f.jpeg.clone());
+        loop {
+            if let Some(c) = self.ears.take_command() {
+                if self.life.focused().is_some() {
+                    // Called by name: awake again.
+                    self.unfocus();
+                }
+                self.life.activity();
+                let want_image = include_image.unwrap_or_else(|| crate::stt::about_seeing(&c.text));
+                let mut info = serde_json::to_value(&c).unwrap_or_default();
+                if !owner.is_empty() {
+                    info["from_owner"] = c
+                        .in_view
+                        .iter()
+                        .any(|n| n.eq_ignore_ascii_case(&owner))
+                        .into();
+                }
+                let image = if want_image { frame().await } else { None };
+                return Ok(AgentEvent::Command { info, image });
+            }
+            if self.life.session_over() {
+                return Ok(AgentEvent::EndSession);
+            }
+            let seen = self.faces.in_view();
+            // The camera sits low and often misses faces; people talking nearby count too.
+            let company = !seen.is_empty() || self.ears.heard_speech_within(COMPANY);
+            if let Some(n) = self.life.poll(company) {
+                tracing::info!(
+                    "nudge for the agent: {} (company: {company}, faces in view: {})",
+                    serde_json::to_string(&n).unwrap_or_default(),
+                    seen.len()
+                );
+                let mut info = serde_json::to_value(&n).unwrap_or_default();
+                let names: Vec<String> = seen
+                    .iter()
+                    .map(|s| s.name.clone().unwrap_or_else(|| "someone".into()))
+                    .collect();
+                info["in_view"] = names.clone().into();
+                if !owner.is_empty() {
+                    info["owner_in_view"] =
+                        names.iter().any(|n| n.eq_ignore_ascii_case(&owner)).into();
+                }
+                // Nudges are about the surroundings: always show them.
+                return Ok(AgentEvent::Nudge {
+                    info,
+                    image: frame().await,
+                });
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return Ok(AgentEvent::TimedOut {
+                    focus_minutes_left: self.life.focused().map(|d| d.as_secs().div_ceil(60)),
+                });
+            }
+            self.ears
+                .wait_command((deadline - now).min(Duration::from_secs(1)))
+                .await;
+        }
     }
 }
 
@@ -577,6 +737,164 @@ pub async fn on_link_up(robot: Robot) {
     }
 }
 
+/// Speech played while it is still arriving (a realtime model's audio, streamed TTS).
+/// Created by `Robot::speaker_stream`; feed it with `push`, end it with `finish`.
+pub struct SpeakerStream {
+    tx: Option<tokio::sync::mpsc::UnboundedSender<Vec<i16>>>,
+    task: tokio::task::JoinHandle<Result<()>>,
+    resampler: Resampler,
+}
+
+impl SpeakerStream {
+    /// Queue mono PCM at the stream's input rate.
+    pub fn push(&mut self, pcm: &[i16]) {
+        let out = self.resampler.process(pcm);
+        if !out.is_empty()
+            && let Some(tx) = &self.tx
+        {
+            let _ = tx.send(out);
+        }
+    }
+
+    /// No more audio: wait until the robot has played everything.
+    pub async fn finish(mut self) -> Result<()> {
+        self.tx = None;
+        (&mut self.task).await?
+    }
+}
+
+/// Linear-interpolating resampler to the robot's 16 kHz, keeping its position across chunks.
+struct Resampler {
+    step: f64,
+    pos: f64,
+    last: f32,
+}
+
+impl Resampler {
+    fn new(from_rate: u32) -> Resampler {
+        Resampler {
+            step: from_rate as f64 / RATE as f64,
+            // Position 1.0 is the first sample of the first chunk (0.0 the one before it).
+            pos: 1.0,
+            last: 0.0,
+        }
+    }
+
+    fn process(&mut self, input: &[i16]) -> Vec<i16> {
+        if (self.step - 1.0).abs() < 1e-9 {
+            return input.to_vec();
+        }
+        let mut out = Vec::with_capacity((input.len() as f64 / self.step) as usize + 1);
+        // `pos` counts from the sample before `input` (the previous chunk's last one).
+        let at = |i: isize| -> f32 {
+            if i < 0 {
+                self.last
+            } else {
+                input[i as usize] as f32
+            }
+        };
+        while self.pos < input.len() as f64 {
+            let i = self.pos.floor() as isize - 1;
+            let f = (self.pos - self.pos.floor()) as f32;
+            let v = at(i) * (1.0 - f) + at(i + 1) * f;
+            out.push(v.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16);
+            self.pos += self.step;
+        }
+        self.pos -= input.len() as f64;
+        if let Some(&l) = input.last() {
+            self.last = l as f32;
+        }
+        out
+    }
+}
+
+impl Robot {
+    /// Start streaming speech at `rate` Hz to the robot speaker (stopping anything playing).
+    pub async fn speaker_stream(&self, rate: u32) -> Result<SpeakerStream> {
+        self.ensure_remote().await?;
+        let token = CancellationToken::new();
+        if let Some(old) = self.speaker.lock().await.replace(token.clone()) {
+            old.cancel();
+            self.hub.send(ToRobot::SpkAbort).await.ok();
+        }
+        let id = self.hub.next_id();
+        self.hub.request(ToRobot::SpkBegin { id }).await?;
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let hub = self.hub.clone();
+        Ok(SpeakerStream {
+            tx: Some(tx),
+            task: tokio::spawn(pace_stream(hub, rx, token)),
+            resampler: Resampler::new(rate),
+        })
+    }
+}
+
+/// Send queued 16 kHz audio to the robot about SPK_LEAD ahead of playback, as it arrives.
+async fn pace_stream(
+    hub: Arc<Hub>,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<Vec<i16>>,
+    token: CancellationToken,
+) -> Result<()> {
+    let mut buf: std::collections::VecDeque<i16> = Default::default();
+    let mut start: Option<tokio::time::Instant> = None;
+    let mut sent = 0usize;
+    let mut open = true;
+    loop {
+        // Take in whatever has arrived.
+        while let Ok(more) = rx.try_recv() {
+            buf.extend(more);
+        }
+        if buf.is_empty() {
+            if !open {
+                break;
+            }
+            tokio::select! {
+                _ = token.cancelled() => return Ok(()),
+                more = rx.recv() => match more {
+                    Some(more) => buf.extend(more),
+                    None => open = false,
+                },
+            }
+            continue;
+        }
+        let now = tokio::time::Instant::now();
+        let played = Duration::from_secs_f64(sent as f64 / RATE as f64);
+        // First audio, or the stream ran dry (the robot has played everything): restart the clock.
+        let t0 = match start {
+            Some(t) if t + played > now => t,
+            _ => {
+                let t = now - played;
+                start = Some(t);
+                t
+            }
+        };
+        let due = t0 + played.saturating_sub(SPK_LEAD);
+        if due > now {
+            tokio::select! {
+                _ = token.cancelled() => return Ok(()),
+                _ = tokio::time::sleep_until(due) => {}
+            }
+        }
+        let n = buf.len().min(SPK_CHUNK);
+        let chunk: Vec<i16> = buf.drain(..n).collect();
+        hub.send_frame(Frame::new(
+            FrameType::SpkPcm,
+            bbproto::frame::pcm_to_le(&chunk),
+        ))
+        .await?;
+        sent += n;
+    }
+    hub.send(ToRobot::SpkEnd).await?;
+    if let Some(t0) = start {
+        let total = Duration::from_secs_f64(sent as f64 / RATE as f64);
+        tokio::select! {
+            _ = token.cancelled() => {}
+            _ = tokio::time::sleep_until(t0 + total + Duration::from_millis(100)) => {}
+        }
+    }
+    Ok(())
+}
+
 async fn stream_pcm(hub: Arc<Hub>, pcm: Vec<i16>, token: CancellationToken) -> Result<()> {
     let start = tokio::time::Instant::now();
     let mut sent = 0usize;
@@ -611,4 +929,35 @@ async fn stream_pcm(hub: Arc<Hub>, pcm: Vec<i16>, token: CancellationToken) -> R
 /// Encode a level-stats + WAV pair for tools that return audio.
 pub fn clip_summary(samples: &[i16]) -> (Vec<u8>, audio::LevelStats) {
     (audio::wav_bytes(samples, RATE), audio::level_stats(samples))
+}
+
+#[cfg(test)]
+mod resampler_tests {
+    use super::Resampler;
+
+    #[test]
+    fn resamples_24k_to_16k_across_chunks() {
+        let tone: Vec<i16> = (0..24_000)
+            .map(|i| {
+                (8000.0 * (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 24_000.0).sin()) as i16
+            })
+            .collect();
+        let mut r = Resampler::new(24_000);
+        let mut out = Vec::new();
+        for c in tone.chunks(777) {
+            out.extend(r.process(c));
+        }
+        assert!((15_990..=16_010).contains(&out.len()), "{}", out.len());
+        // Still a clean 440 Hz tone: compare with the ideal at 16 kHz.
+        let err: f32 = out[100..15_900]
+            .iter()
+            .enumerate()
+            .map(|(i, &v)| {
+                let t = (i + 100) as f32 / 16_000.0;
+                (v as f32 - 8000.0 * (2.0 * std::f32::consts::PI * 440.0 * t).sin()).abs()
+            })
+            .sum::<f32>()
+            / 15_800.0;
+        assert!(err < 200.0, "{err}");
+    }
 }

@@ -156,6 +156,47 @@ pub fn addressed<'a>(text: &'a str, name: &str) -> Option<&'a str> {
     None
 }
 
+/// Whether a request is (probably) about what the robot can see.
+pub fn about_seeing(text: &str) -> bool {
+    let t = format!(
+        " {} ",
+        text.to_lowercase()
+            .replace(|c: char| !c.is_alphanumeric() && c != '\'', " ")
+    );
+    [
+        " see ",
+        " seeing ",
+        " look ",
+        " looking ",
+        " looks ",
+        " watch ",
+        " show ",
+        " camera ",
+        " picture ",
+        " photo ",
+        " describe ",
+        " color ",
+        " colour ",
+        " wearing ",
+        " holding ",
+        " in front ",
+        " around you ",
+        " who is ",
+        " who's ",
+        " whos ",
+        " what's this ",
+        " what is this ",
+        " what's that ",
+        " what is that ",
+        " how many ",
+        " read ",
+        " recognize ",
+        " recognise ",
+    ]
+    .iter()
+    .any(|w| t.contains(w))
+}
+
 fn edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
@@ -183,6 +224,16 @@ mod tests {
         assert_eq!(clean(" One, two, three."), "One, two, three.");
         assert_eq!(clean(" ♪♪ "), "");
         assert_eq!(clean("..."), "");
+    }
+
+    #[test]
+    fn seeing() {
+        assert!(about_seeing("What do you see?"));
+        assert!(about_seeing("Who's that next to me"));
+        assert!(about_seeing("What colour is my shirt?"));
+        assert!(!about_seeing("Tell me a joke."));
+        assert!(!about_seeing("How are you feeling today?"));
+        assert!(!about_seeing("Seems fine"));
     }
 
     #[test]

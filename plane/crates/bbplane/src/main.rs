@@ -92,8 +92,10 @@ async fn main() -> Result<()> {
                 "robot link on {}; open http://{}/ ; MCP: http://{}/mcp",
                 plane.link_addr, plane.web_addr, plane.web_addr
             );
-            tokio::signal::ctrl_c().await?;
+            shutdown_signal().await?;
+            plane.robot.agent.stop().await;
             plane.robot.stop().await.ok();
+            // Returning drops the runtime and with it the agent process (kill_on_drop).
         }
         Cmd::Mcp => {
             let plane = bbplane::start(Config::load(cli.config.as_ref())?).await?;
@@ -102,6 +104,7 @@ async fn main() -> Result<()> {
                 .serve(rmcp::transport::stdio())
                 .await?;
             server.waiting().await?;
+            plane.robot.agent.stop().await;
             plane.robot.stop().await.ok();
         }
         Cmd::Provision {
@@ -156,4 +159,18 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Ctrl-C, or SIGTERM (`kill`, launchd): either way shut down cleanly, so the agent stops too.
+async fn shutdown_signal() -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! {
+            r = tokio::signal::ctrl_c() => r,
+            _ = term.recv() => Ok(()),
+        }
+    }
+    #[cfg(not(unix))]
+    tokio::signal::ctrl_c().await
 }

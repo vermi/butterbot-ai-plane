@@ -1,0 +1,243 @@
+//! Runs the agent that lives in the robot ([agent] in the config): started by `bbplane serve`
+//! whenever the robot is in AI mode, restarted when it exits (each start is a fresh session with
+//! a recap of the recent conversation), and stopped when the robot leaves AI mode or the agent
+//! is paused from the live view.
+
+use std::collections::VecDeque;
+use std::process::Stdio;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
+use std::time::Duration;
+
+use serde_json::{Value, json};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::time::Instant;
+
+use crate::control::Robot;
+
+const PERSONA: &str = include_str!("persona.md");
+/// Agent output lines kept for the live view.
+const LOG_LINES: usize = 300;
+/// Lines of recent conversation given to a new session.
+const RECAP_LINES: usize = 16;
+/// The robot must have been out of AI mode this long before the agent is stopped (it drops out
+/// briefly when Wi-Fi hiccups).
+const OFFLINE_GRACE: Duration = Duration::from_secs(20);
+
+/// What the live view shows and controls.
+#[derive(Default)]
+pub struct AgentState {
+    pub paused: AtomicBool,
+    /// Process group of the running agent (0: none). `codex` is a wrapper that starts the real
+    /// binary as a child, so the whole group is signalled.
+    group: AtomicI32,
+    running: AtomicBool,
+    starts: AtomicU32,
+    last_exit: Mutex<Option<String>>,
+    log: Mutex<VecDeque<String>>,
+}
+
+impl AgentState {
+    /// Stop the running agent, if any (on shutdown, pause, or when the robot leaves AI mode).
+    pub async fn stop(&self) {
+        let pid = self.group.swap(0, Ordering::Relaxed);
+        if pid <= 0 {
+            return;
+        }
+        #[cfg(unix)]
+        {
+            // SAFETY: plain syscalls on a process group this process created.
+            unsafe { libc::killpg(pid, libc::SIGTERM) };
+            for _ in 0..30 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                if unsafe { libc::killpg(pid, 0) } != 0 {
+                    return;
+                }
+            }
+            unsafe { libc::killpg(pid, libc::SIGKILL) };
+        }
+    }
+
+    fn log(&self, line: String) {
+        let mut l = self.log.lock().unwrap();
+        l.push_back(line);
+        while l.len() > LOG_LINES {
+            l.pop_front();
+        }
+    }
+
+    pub fn status_json(&self, enabled: bool) -> Value {
+        json!({
+            "enabled": enabled,
+            "running": self.running.load(Ordering::Relaxed),
+            "paused": self.paused.load(Ordering::Relaxed),
+            "sessions": self.starts.load(Ordering::Relaxed),
+            "last_exit": self.last_exit.lock().unwrap().clone(),
+            "log": self.log.lock().unwrap().iter().rev().take(80).rev().cloned().collect::<Vec<_>>(),
+        })
+    }
+}
+
+async fn robot_ready(robot: &Robot) -> bool {
+    let s = robot.hub.status.lock().await;
+    s.connected && s.mode.as_deref() == Some("remote")
+}
+
+/// The persona with the owner filled in, plus a recap of recent conversation.
+async fn prompt(robot: &Robot) -> String {
+    let cfg = &robot.hub.config;
+    let persona = cfg
+        .agent
+        .persona
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_else(|| PERSONA.to_string());
+    let owner = &cfg.life.owner;
+    let owner_line = if owner.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "- {owner} is your person. When they speak to you (`from_owner`) or are in view \
+(`owner_in_view`), they come first: drop what you are doing and attend to them."
+        )
+    };
+    let mut p = persona.replace("{owner}", &owner_line);
+    let known = robot.faces.known();
+    if !known.is_empty() {
+        p.push_str(&format!(
+            "\nPeople you know by face: {}.\n",
+            known.join(", ")
+        ));
+    }
+    let recap: Vec<String> = robot
+        .hub
+        .events_since(0, Duration::ZERO)
+        .await
+        .into_iter()
+        .filter_map(|e| match e.kind.as_str() {
+            "heard" => Some(format!("Person: {}", e.data["text"].as_str().unwrap_or(""))),
+            "said" => Some(format!("You: {}", e.data["text"].as_str().unwrap_or(""))),
+            _ => None,
+        })
+        .collect();
+    if !recap.is_empty() {
+        p.push_str("\nRecent conversation (from before this session):\n");
+        for line in &recap[recap.len().saturating_sub(RECAP_LINES)..] {
+            p.push_str(line);
+            p.push('\n');
+        }
+    }
+    p
+}
+
+/// Supervise the agent. Spawned once by `crate::start`.
+pub async fn run(robot: Robot) {
+    let cfg = robot.hub.config.agent.clone();
+    if !cfg.enabled || cfg.command.is_empty() {
+        return;
+    }
+    let state = robot.agent.clone();
+    let mut backoff = Duration::from_secs(5);
+    loop {
+        if state.paused.load(Ordering::Relaxed) || !robot_ready(&robot).await {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            continue;
+        }
+        let prompt = prompt(&robot).await;
+        let args: Vec<String> = cfg
+            .command
+            .iter()
+            .map(|a| a.replace("{prompt}", &prompt))
+            .collect();
+        let mut child = match tokio::process::Command::new(&args[0])
+            .args(&args[1..])
+            // Our own log settings are not for the agent (Codex, for one, would log every request).
+            .env_remove("RUST_LOG")
+            .process_group(0)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                let msg = format!("could not start {}: {e}", args[0]);
+                tracing::error!("agent: {msg}");
+                *state.last_exit.lock().unwrap() = Some(msg);
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                continue;
+            }
+        };
+        let session = state.starts.fetch_add(1, Ordering::Relaxed) + 1;
+        tracing::info!("agent session {session} started ({})", args[0]);
+        state.log(format!("--- session {session} ---"));
+        state.running.store(true, Ordering::Relaxed);
+        if let Some(pid) = child.id() {
+            state.group.store(pid as i32, Ordering::Relaxed);
+        }
+        robot.life.agent_running.store(true, Ordering::Relaxed);
+        robot.life.session_started();
+        let started = Instant::now();
+
+        for pipe in [
+            child
+                .stdout
+                .take()
+                .map(|p| Box::new(p) as Box<dyn tokio::io::AsyncRead + Send + Unpin>),
+            child
+                .stderr
+                .take()
+                .map(|p| Box::new(p) as Box<dyn tokio::io::AsyncRead + Send + Unpin>),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let state = state.clone();
+            tokio::spawn(async move {
+                let mut lines = BufReader::new(pipe).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    tracing::debug!(target: "bbplane::agent::output", "{line}");
+                    state.log(line);
+                }
+            });
+        }
+
+        // Run until it exits, is paused, or the robot has left AI mode for a while.
+        let mut offline_since: Option<Instant> = None;
+        let exit = loop {
+            tokio::select! {
+                status = child.wait() => break status.map(|s| s.to_string()).unwrap_or_else(|e| e.to_string()),
+                _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+            }
+            if state.paused.load(Ordering::Relaxed) {
+                state.stop().await;
+                let _ = child.wait().await;
+                break "paused from the live view".into();
+            }
+            if robot_ready(&robot).await {
+                offline_since = None;
+            } else if offline_since.get_or_insert_with(Instant::now).elapsed() > OFFLINE_GRACE {
+                state.stop().await;
+                let _ = child.wait().await;
+                break "robot left AI mode".into();
+            }
+        };
+        // It may have exited on its own, leaving children behind.
+        state.stop().await;
+        tracing::info!("agent session {session} ended: {exit}");
+        state.log(format!("--- session {session} ended: {exit} ---"));
+        *state.last_exit.lock().unwrap() = Some(exit);
+        state.running.store(false, Ordering::Relaxed);
+        robot.life.agent_running.store(false, Ordering::Relaxed);
+
+        // A session that dies right away (bad command, no network) must not restart in a tight
+        // loop and burn tokens; a normal end (fresh session) restarts at once.
+        if started.elapsed() < Duration::from_secs(60) {
+            tokio::time::sleep(backoff).await;
+            backoff = (backoff * 2).min(Duration::from_secs(300));
+        } else {
+            backoff = Duration::from_secs(5);
+        }
+    }
+}

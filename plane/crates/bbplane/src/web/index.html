@@ -32,6 +32,12 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; pa
 .known { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
 .known li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .known button { padding: 2px 8px; font-size: 12px; }
+#chat { display: grid; gap: 6px; max-height: 260px; overflow: auto; }
+#chat .msg { padding: 6px 10px; border-radius: 10px; max-width: 85%; }
+#chat .person { background: var(--pad); justify-self: start; }
+#chat .robot { background: var(--accent); color: var(--accent-ink); justify-self: end; }
+#chat .note { color: var(--muted); font-size: 12px; justify-self: center; }
+#agentlog { font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; max-height: 200px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 8px 0 0; }
 .video .none { color: #888; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .stack { display: grid; gap: 12px; align-content: start; }
@@ -72,6 +78,10 @@ input[type=text] { flex: 1; min-width: 0; }
       </div>
     </div>
     <div class="card">
+      <h2>Conversation</h2>
+      <div id="chat"><span class="note">Say "Butterbot, ..." to talk to it.</span></div>
+    </div>
+    <div class="card">
       <h2>Events</h2>
       <div id="log"></div>
     </div>
@@ -83,6 +93,15 @@ input[type=text] { flex: 1; min-width: 0; }
         <button class="primary" id="enter">Enter AI mode</button>
         <button id="exit">Exit</button>
       </div>
+    </div>
+    <div class="card">
+      <h2>Agent</h2>
+      <div id="agentstate" class="muted">…</div>
+      <div class="row" style="margin-top:8px">
+        <button id="agentpause">Pause</button>
+        <button id="focus">Focus 1 h</button>
+      </div>
+      <details><summary class="muted">Agent output</summary><pre id="agentlog"></pre></details>
     </div>
     <div class="card">
       <h2>Faces</h2>
@@ -153,10 +172,45 @@ setInterval(refresh, 2000); refresh();
         const t = new Date(e.ts).toLocaleTimeString();
         log(`${t} ${e.kind} ${JSON.stringify(e.data)}`);
         if (e.kind === 'mode' || e.kind === 'link' || e.kind === 'battery') refresh();
+        if (e.kind === 'heard') chat('person', e.data.text, e.data.in_view && e.data.in_view.length ? e.data.in_view.join(', ') : '');
+        if (e.kind === 'said') chat('robot', e.data.text);
+        if (e.kind === 'face' && e.data.event === 'arrived' && e.data.name) chat('note', `${e.data.name} arrived`);
       }
     } catch { await new Promise(r => setTimeout(r, 2000)); }
   }
 })();
+
+// ---- conversation and agent ----
+function chat(who, text, by) {
+  const box = $('chat');
+  if (box.firstElementChild && box.firstElementChild.classList.contains('note') && box.children.length === 1 && who !== 'note') box.replaceChildren();
+  const d = document.createElement('div');
+  d.className = 'msg ' + who;
+  d.textContent = who === 'person' && by ? `${by}: ${text}` : text;
+  box.append(d);
+  while (box.children.length > 60) box.firstElementChild.remove();
+  box.scrollTop = box.scrollHeight;
+}
+let agent = {};
+async function agentRefresh() {
+  agent = await api('/api/agent');
+  let st = !agent.enabled ? 'Off (enable [agent] in the config)'
+    : agent.paused ? 'Paused'
+    : agent.running ? `Running (session ${agent.sessions})`
+    : 'Waiting for the robot to be in AI mode';
+  if (agent.focus_minutes_left) st += ` · focus mode, ${agent.focus_minutes_left} min left`;
+  $('agentstate').textContent = st;
+  $('agentpause').textContent = agent.paused ? 'Resume' : 'Pause';
+  $('agentpause').disabled = !agent.enabled;
+  $('focus').textContent = agent.focus_minutes_left ? 'End focus' : 'Focus 1 h';
+  const log = $('agentlog');
+  const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
+  log.textContent = (agent.log || []).join('\n');
+  if (atEnd) log.scrollTop = log.scrollHeight;
+}
+setInterval(() => { if (!document.hidden) agentRefresh(); }, 2000); agentRefresh();
+$('agentpause').onclick = async () => { await api('/api/agent', { paused: !agent.paused }); agentRefresh(); };
+$('focus').onclick = async () => { await api('/api/agent', { focus_minutes: agent.focus_minutes_left ? 0 : 60 }); agentRefresh(); };
 
 // ---- faces ----
 const SVG = 'http://www.w3.org/2000/svg';
