@@ -313,6 +313,7 @@ enabled = true           # detect objects in AI mode (downloads a 36 MB model on
 notice = ["cat", "dog", "bird"]   # COCO classes whose arrival nudges the agent
 threshold = 0.4          # detection confidence needed
 notice_cooldown_secs = 600
+pet_cooldown_secs = 1800 # with [life] pets set, a pet coming into view is remarked on at most this often
 
 [sounds]
 enabled = true           # recognise sounds in AI mode (downloads a 16 MB model on first use)

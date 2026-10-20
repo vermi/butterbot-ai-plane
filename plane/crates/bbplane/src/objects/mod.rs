@@ -82,6 +82,8 @@ struct View {
 
 pub struct Objects {
     cfg: ObjectsConfig,
+    /// Pets live here (`[life] pets`): animals are noticed less often.
+    pets: bool,
     models_dir: PathBuf,
     engine: OnceCell<Arc<Engine>>,
     /// When and why loading the model last failed.
@@ -101,6 +103,7 @@ impl Objects {
         }
         Objects {
             cfg,
+            pets: !hub.config.life.pets.is_empty(),
             models_dir: hub.config.data_dir().join("models"),
             engine: OnceCell::new(),
             load_failure: Mutex::new(None),
@@ -213,7 +216,13 @@ impl Objects {
                     .filter_map(|n| engine::CLASSES.iter().find(|c| *c == n))
                     .any(|c| kind(c) == k)
             },
-            Duration::from_secs(self.cfg.notice_cooldown_secs),
+            |k| {
+                Duration::from_secs(if k == "animal" && self.pets {
+                    self.cfg.pet_cooldown_secs
+                } else {
+                    self.cfg.notice_cooldown_secs
+                })
+            },
         )
         .into_iter()
         // `seen` is best first: name it after its most confident detection.
@@ -242,7 +251,7 @@ fn update(
     seen: impl Iterator<Item = &'static str>,
     now: Instant,
     worth_noticing: impl Fn(&str) -> bool,
-    cooldown: Duration,
+    cooldown: impl Fn(&str) -> Duration,
 ) -> Vec<&'static str> {
     let mut here: Vec<&'static str> = seen.collect();
     here.sort_unstable();
@@ -254,7 +263,7 @@ fn update(
         t.last_seen = Some(now);
         if !t.present && t.hits >= ARRIVE_HITS {
             t.present = true;
-            if worth_noticing(kind) && t.last_noticed.is_none_or(|n| now - n >= cooldown) {
+            if worth_noticing(kind) && t.last_noticed.is_none_or(|n| now - n >= cooldown(kind)) {
                 t.last_noticed = Some(now);
                 noticed.push(*kind);
             }
@@ -334,7 +343,7 @@ mod tests {
         let cooldown = Duration::from_secs(600);
         let t0 = Instant::now();
         let step = |tracks: &mut HashMap<_, _>, kinds: &[&'static str], at: Duration| {
-            update(tracks, kinds.iter().copied(), t0 + at, cats, cooldown)
+            update(tracks, kinds.iter().copied(), t0 + at, cats, |_| cooldown)
         };
         // A cup is there all along: never noticed. The cat needs two frames in a row.
         assert!(step(&mut tracks, &["cup", "cat"], Duration::ZERO).is_empty());
@@ -366,14 +375,19 @@ mod tests {
         let t0 = Instant::now();
         let animal = |k: &str| k == "animal";
         let cooldown = Duration::from_secs(600);
-        assert!(update(&mut tracks, [kind("cat")].into_iter(), t0, animal, cooldown).is_empty());
+        assert!(
+            update(&mut tracks, [kind("cat")].into_iter(), t0, animal, |_| {
+                cooldown
+            })
+            .is_empty()
+        );
         assert_eq!(
             update(
                 &mut tracks,
                 [kind("dog")].into_iter(),
                 t0 + Duration::from_secs(1),
                 animal,
-                cooldown
+                |_| cooldown
             ),
             ["animal"]
         );

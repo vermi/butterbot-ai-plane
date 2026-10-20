@@ -185,6 +185,9 @@ pub struct ObjectsConfig {
     pub threshold: f32,
     /// Notice the same kind of thing at most this often.
     pub notice_cooldown_secs: u64,
+    /// With pets living here (`[life] pets`), animals are around all the time: remark on one at
+    /// most this often.
+    pub pet_cooldown_secs: u64,
 }
 
 impl Default for ObjectsConfig {
@@ -194,6 +197,7 @@ impl Default for ObjectsConfig {
             notice: ["cat", "dog", "bird"].map(String::from).to_vec(),
             threshold: 0.4,
             notice_cooldown_secs: 600,
+            pet_cooldown_secs: 1800,
         }
     }
 }

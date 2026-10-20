@@ -165,8 +165,8 @@ calmer or quieter.",
             owner_line.push('\n');
         }
         owner_line.push_str(&format!(
-            "- Pets that live here: {}. An animal you see is most likely one of them: greet them \
-by name.",
+            "- Pets that live here: {}. An animal you see is most likely one of them. They are \
+around all the time: say hi now and then, not every time you see them.",
             pets.join("; ")
         ));
     }

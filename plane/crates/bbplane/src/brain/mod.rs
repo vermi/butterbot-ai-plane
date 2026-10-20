@@ -522,7 +522,7 @@ pub fn describe(ev: &crate::control::AgentEvent) -> Option<(String, Option<Bytes
                     )
                 }
                 _ => format!(
-                    "[Quiet for {} minutes. In view: {in_view}. Idea: {}. Do something, or call stay_quiet.]",
+                    "[Time to yourself (nobody has talked with you for {} minutes). In view: {in_view}. Do whatever you are curious about, or rest (stay_quiet). An idea, if you want one: {}.]",
                     info["quiet_for_minutes"].as_u64().unwrap_or(0),
                     info["suggestion"].as_str().unwrap_or("rest")
                 ),
