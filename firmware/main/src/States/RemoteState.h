@@ -63,13 +63,6 @@ private:
 	uint64_t speakingUntil = 0; // keep the talking light a moment after the audio stops
 	uint64_t enteredAt = 0;
 
-	// The LED add-on card, while inserted: a soft glow the plane picks (off while it is out of reach).
-	LEDGlow planeGlow;
-	LEDGlow shownGlow;
-	bool glowShown = false;
-	bool cardIn = false;
-	uint64_t cardCheckAt = 0;
-
 	void onRequest(LinkRequest req);
 	void onConnection(bool online);
 	/** Say a short status phrase in the robot's voice; `wait` blocks until it has been said. */
@@ -86,7 +79,6 @@ private:
 	const char* driveRefusal(bool forward);
 	void led(const LinkRequest& req);
 	void showLed();
-	void showCard();
 	void startScenario(const LinkRequest& req);
 	void finishScenario(bool aborted = false);
 	void irList(uint32_t id);

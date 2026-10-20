@@ -78,7 +78,6 @@ namespace {
 		{ "mic", LinkRequest::Type::Mic },
 		{ "led", LinkRequest::Type::Led },
 		{ "status_light", LinkRequest::Type::StatusLight },
-		{ "card_light", LinkRequest::Type::CardLight },
 		{ "scenario", LinkRequest::Type::Scenario },
 		{ "ir_list", LinkRequest::Type::IrList },
 		{ "ir_send", LinkRequest::Type::IrSend },
@@ -784,13 +783,6 @@ void LinkService::handleCtrl(const char* json, size_t len){
 			(float) std::clamp<double>(num(root, "base", 0), 0, 1),
 			(float) std::clamp<double>(num(root, "flash", 1), 0, 1),
 		}.sane();
-	}
-	if(req.type == T::CardLight){
-		req.glow = LEDGlow{
-			(float) std::clamp<double>(num(root, "low", 0), 0, 1),
-			(float) std::clamp<double>(num(root, "high", 0), 0, 1),
-			(uint16_t) std::clamp<double>(num(root, "period_ms", 0), 0, 60000),
-		};
 	}
 	if(const char* text = str(root, "text")){
 		req.text = text;

@@ -193,19 +193,20 @@ setting up Codex and all options.
 
 ## Status light
 
-In AI mode the robot's status light shows what it is doing. It has three levels: off, dim and
-bright. (The light sits on an I/O expander pin that can only switch on and off; "dim" lets the pin
-float on the expander's weak pull-up, the glow you see while holding the button at power-on.)
+In AI mode the robot's status light shows what it is doing. The light sits on an I/O expander pin
+that can only switch on and off, so states differ by blink rhythm. Releasing the pin to the
+expander's weak pull-up gives a faint glow (the one you see while holding the button at power-on).
+It is only visible in a dim room, so it is used as a background hint, never on its own.
 
 | Light | Meaning |
 |---|---|
 | A short tick every second | Joining Wi-Fi |
-| Steady dim | Listening for its name |
-| Bright, with a short dim wink every 2 s | In a conversation: no name needed |
+| Faint glow, a short bright tick every 3 s | Listening for its name |
+| Bright, with a short wink off every 2 s | In a conversation: no name needed |
 | Quick flicker | Heard you, thinking |
 | Steady bright | Talking |
-| Off, with a soft glow every 6 s | Focus mode |
-| Two dim blips every 4 s | No agent running (paused, or not set up) |
+| Faint glow, a brief tick every 10 s | Focus mode |
+| Two quick ticks every 4 s | No agent running (paused, or not set up) |
 | Three quick blinks, pause | Cannot reach the computer |
 
 ## Safety

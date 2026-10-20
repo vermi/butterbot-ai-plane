@@ -2,7 +2,6 @@
 #define BUTTERBOT_FIRMWARE_LEDRHYTHM_H
 
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <Services/LED/LED.h>
 #include <Util/stdafx.h>
@@ -97,62 +96,6 @@ private:
 	uint32_t untilChange = 0;
 	bool started = false;
 	bool lit = false;
-};
-
-/**
- * A soft glow for the LED add-on card, which has real dimming (PWM): breathes between `low` and
- * `high` (duty, 0..1) once every `periodMs`, or stays at `high` when `periodMs` is 0. The card is
- * very bright: its stock "on" is 0.1.
- */
-struct LEDGlow {
-	float low = 0.0f;
-	float high = 0.0f;
-	uint16_t periodMs = 0;
-
-	bool steady() const{
-		return periodMs == 0 || low == high;
-	}
-
-	bool operator==(const LEDGlow&) const = default;
-};
-
-/** Plays a breathing LEDGlow forever, evenly in perceived brightness rather than in duty. */
-template<typename LED>
-class LEDGlowFunction : public LEDFunction<LED, float> {
-public:
-	explicit LEDGlowFunction(const LEDGlow& glow) : glow(glow){}
-
-	float getValue() const noexcept override{
-		return value;
-	}
-
-	bool isDone() const noexcept override{
-		return false;
-	}
-
-	TickType_t getInterval() const noexcept override{
-		return started ? 20 / portTICK_PERIOD_MS : 0;
-	}
-
-private:
-	void tick(float deltaTime) noexcept override{
-		const uint64_t now = millis();
-		if(!started){
-			started = true;
-			startTime = now;
-		}
-		const float phase = (float) ((now - startTime) % std::max<uint16_t>(glow.periodMs, 1)) / std::max<uint16_t>(glow.periodMs, 1);
-		const float t = 0.5f - 0.5f * cosf(2.0f * (float) M_PI * phase);
-		const float a = sqrtf(glow.low);
-		const float b = sqrtf(glow.high);
-		const float r = a + (b - a) * t;
-		value = r * r;
-	}
-
-	const LEDGlow glow;
-	uint64_t startTime = 0;
-	bool started = false;
-	float value = 0.0f;
 };
 
 #endif //BUTTERBOT_FIRMWARE_LEDRHYTHM_H
