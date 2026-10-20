@@ -21,6 +21,7 @@ pub mod service;
 pub mod sim;
 pub mod sounds;
 pub mod stt;
+pub mod summon;
 pub mod tts;
 pub mod web;
 

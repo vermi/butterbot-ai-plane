@@ -154,6 +154,7 @@ async fn respond(
     robot_voice: bool,
 ) -> Result<Vec<Call>> {
     let mut speech = robot_voice.then(|| super::Speech::start(robot));
+    let hushes = robot.hush_count();
     let mut speaker = None;
     let mut said = String::new();
     let mut calls = Vec::new();
@@ -168,6 +169,10 @@ async fn respond(
                     &B64.decode(v["delta"].as_str().unwrap_or_default())
                         .unwrap_or_default(),
                 );
+                // Cut off: the rest of this answer is not played.
+                if robot.hush_count() != hushes {
+                    continue;
+                }
                 if speaker.is_none() {
                     speaker = Some(robot.speaker_stream(RATE).await?);
                 }

@@ -253,6 +253,32 @@ impl Ears {
         }
     }
 
+    /// Treat what is said next (within the name-only window) as a command, as if called by name:
+    /// the controller's Listen button.
+    pub fn listen_now(&self) {
+        self.ended.store(false, Ordering::Relaxed);
+        self.called_by_name(NAME_ONLY_WINDOW);
+    }
+
+    /// A conversation starts without a spoken command (the controller's Poke): the robot's
+    /// answer opens the follow-up window.
+    pub fn conversation_opened(&self) {
+        self.ended.store(false, Ordering::Relaxed);
+        *self.last_command.lock().unwrap() = Some(Instant::now());
+    }
+
+    /// A command that did not come from the microphone (the controller's menu).
+    pub fn command(&self, text: &str) {
+        self.push(Command {
+            text: text.to_string(),
+            said: text.to_string(),
+            follow_up: false,
+            at_ms: crate::hub::now_ms(),
+            in_view: Vec::new(),
+            heard_at: Some(Instant::now()),
+        });
+    }
+
     /// Whether anyone has given the robot a command within `d`.
     pub fn talked_within(&self, d: Duration) -> bool {
         self.last_command

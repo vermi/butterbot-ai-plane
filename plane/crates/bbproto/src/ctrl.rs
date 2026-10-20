@@ -335,6 +335,27 @@ pub enum FromRobot {
     PhoneCall {
         from: String,
     },
+    /// The paired phone connected or went away (AI mode only).
+    PhoneLink {
+        connected: bool,
+    },
+    /// A button on the handheld controller in AI mode: `override` (Manual Override: the robot
+    /// leaves AI mode for stock RC mode and comes back), `shut_up` (`talking`: it was cut off),
+    /// `poke`, `summon`, `listen`, a menu `scenario` (`scenario`, `arg`) the robot leaves to the
+    /// agent, or `other` (`command`, for anything else).
+    Remote {
+        button: String,
+        #[serde(default)]
+        on: Option<bool>,
+        #[serde(default)]
+        talking: Option<bool>,
+        #[serde(default)]
+        scenario: Option<u32>,
+        #[serde(default)]
+        arg: Option<u8>,
+        #[serde(default)]
+        command: Option<u32>,
+    },
     /// Wi-Fi signal strength, reported every few seconds while connected.
     Wifi {
         rssi: i32,

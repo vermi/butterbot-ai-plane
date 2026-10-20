@@ -64,6 +64,7 @@
 #include "FaceDet.h"
 #include "Util/ServiceLocator.h"
 #include "Link/LinkService.h"
+#include "Util/AiRestart.h"
 
 DEFINE_LOG(Butterbot)
 
@@ -145,7 +146,9 @@ protected:
 
 		CMF_LOG(Butterbot, LogLevel::Info, "Boot was %lld ms, remaining hold time: %lld ms", BootTimeMs + partialInitTimeMs, RemainingMs);
 
-		uint64_t deadline = millis() + RemainingMs;
+		// A restart into AI mode (after Manual Override) keeps the power on: no button to check.
+		const bool restartIntoAi = takeRestartIntoAiMode();
+		uint64_t deadline = restartIntoAi ? 0 : millis() + RemainingMs;
 
 		while(millis() < deadline){
 			if(gpio_get_level(static_cast<gpio_num_t>(PIN_BTN)) == 0){
@@ -283,7 +286,9 @@ protected:
 
 		server->start();
 
-		speakAndWait(audio, Phrase::Startup);
+		if(!restartIntoAi){ // back from Manual Override: straight into AI mode, no greeting
+			speakAndWait(audio, Phrase::Startup);
+		}
 
 		ServiceLocator::SC7A20Instance = std::make_unique<SC7A20>(i2c_main, HardwareConfiguration::getAcceleroAddress());
 		MotionService* motionService = registerService<MotionService>();
@@ -304,7 +309,10 @@ protected:
 		});
 
 		// AI control plane link: needs Battery, BaseBoard, MotionService and ISRButtonInput registered first.
-		registerService<LinkService>();
+		LinkService* link = registerService<LinkService>();
+		if(restartIntoAi){
+			link->setAiOnIdle(true);
+		}
 
 		ServiceLocator::ScenarioRoutineServiceInstance = std::make_unique<ScenarioRoutineService>();
 
@@ -407,6 +415,15 @@ private:
 
 	void onCommand(const Ctrl::Command command){
 		if(command != Ctrl::ShutUp){
+			return;
+		}
+		// In AI mode Shut up interrupts the robot or puts it in focus mode instead (RemoteState).
+		// Stop the talking here, right away: a menu routine may be holding the state machine's thread.
+		if(LinkService* link = LinkService::instance(); link && link->isRemote()){
+			if(Audio* audio = getService<Audio>(); audio && audio->isPlaying()){
+				link->noteHush();
+				audio->stop();
+			}
 			return;
 		}
 

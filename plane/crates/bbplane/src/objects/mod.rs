@@ -117,6 +117,12 @@ impl Objects {
         }
     }
 
+    /// What the detector saw in a frame analysed after `t` (None until there is one).
+    pub fn seen_after(&self, t: Instant) -> Option<Vec<Seen>> {
+        let v = self.view.lock().unwrap();
+        v.at.filter(|at| *at > t).map(|_| v.seen.clone())
+    }
+
     /// The kinds of things in view, most confident first, without repeats.
     pub fn kinds_in_view(&self) -> Vec<&'static str> {
         let mut kinds: Vec<&'static str> = Vec::new();

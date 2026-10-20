@@ -8,6 +8,10 @@
 #include "Services/ISRButtonInput.h"
 #include "Services/LEDRhythm.h"
 #include "Phone/Phone.h"
+#include "Services/Com.h"
+#include <CtrlData.h>
+#include <BBData.h>
+#include <Scenarios.h>
 
 /**
  * AI mode: the laptop control plane drives the robot over the link. Autonomy is off.
@@ -75,6 +79,16 @@ private:
 	void onButton(int button, ISRButtonInput::Action action);
 	void onAudioStatus(bool playing);
 	void onPhoneNotif(Phone::NotifEvent event);
+	void onPhoneConn(Phone::ConnEvent event);
+
+	// The handheld controller in AI mode: Manual Override hands over to stock RC mode (and comes
+	// back); Shut up, Poke, Summon and Listen go to the plane; the menu runs scenarios.
+	void onRemoteCommand(Ctrl::Command command);
+	void onRemoteRC(RCData data);
+	void onRemoteScenario(BB::Action::Scenario scenario, ScenarioData data);
+	void sendRemote(const std::string& button, const std::string& extra = "");
+	/** Tell the controller the robot is idle again: it clears what a scenario put on its screen. */
+	void remoteIdle();
 
 	void drive(const LinkRequest& req);
 	void stopDriving(const char* reason);

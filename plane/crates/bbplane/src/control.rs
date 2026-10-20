@@ -50,6 +50,13 @@ pub struct Robot {
     /// Serialises wake attempts: many tool calls / clicks share one BLE wake.
     wake_lock: Arc<Mutex<()>>,
     speaker: Arc<Mutex<Option<CancellationToken>>>,
+    /// Bumped each time someone cuts the robot off (the controller's Shut up): speech queued
+    /// before that is dropped.
+    hushes: Arc<std::sync::atomic::AtomicU64>,
+    /// Someone drives with the controller's joystick (Manual Override): the agent does not.
+    pub manual_override: Arc<std::sync::atomic::AtomicBool>,
+    /// A Summon in progress (the controller's button), to cancel.
+    summon: Arc<Mutex<Option<CancellationToken>>>,
     drive: Arc<Mutex<Option<CancellationToken>>>,
     /// The robot is driving (or just stopped) until then: the jolts are its own, not someone
     /// handling it.
@@ -108,6 +115,9 @@ impl Robot {
             speaker: Default::default(),
             drive: Default::default(),
             moving_until: Default::default(),
+            hushes: Default::default(),
+            manual_override: Default::default(),
+            summon: Default::default(),
             plane_woke: Default::default(),
         }
     }
@@ -250,6 +260,12 @@ impl Robot {
     /// Returns early if the robot reports that it stopped on its own (obstacle, lifted, ...).
     pub async fn drive_for(&self, l: i8, r: i8, ms: u64) -> Result<DriveOutcome> {
         self.ensure_remote().await?;
+        if self
+            .manual_override
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            bail!("someone is driving the robot with the remote (Manual Override) right now");
+        }
         if !self.hub.config.safety.drive_when_plugged {
             let plugged = self
                 .hub
@@ -563,6 +579,60 @@ goodbye). Say bye and keep listening."
         Ok(())
     }
 
+    /// Come to whoever pressed Summon (see `crate::summon`), replacing one in progress.
+    pub async fn start_summon(&self) {
+        let token = CancellationToken::new();
+        if let Some(old) = self.summon.lock().await.replace(token.clone()) {
+            old.cancel();
+        }
+        let robot = self.clone();
+        tokio::spawn(async move {
+            robot.life.activity();
+            if let Err(e) = robot.say("Coming!", Some("robot"), true).await {
+                tracing::debug!("summon: {e:#}");
+            }
+            let said = match crate::summon::run(&robot, &token).await {
+                Ok(s) => s,
+                Err(e) if format!("{e:#}").contains("plugged in") => {
+                    "I'm plugged in, so I can't come to you."
+                }
+                Err(e) => {
+                    tracing::warn!("summon: {e:#}");
+                    "I can't come right now."
+                }
+            };
+            if token.is_cancelled() || said.is_empty() {
+                return;
+            }
+            // They called it over: what they say next is for it.
+            robot.ears.conversation_opened();
+            if let Err(e) = robot.say(said, Some("robot"), false).await {
+                tracing::debug!("summon: {e:#}");
+            }
+        });
+    }
+
+    pub async fn cancel_summon(&self) {
+        if let Some(t) = self.summon.lock().await.take() {
+            t.cancel();
+            let _ = self.stop().await;
+        }
+    }
+
+    pub fn hush_count(&self) -> u64 {
+        self.hushes.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Cut the robot off: whatever it was about to say is dropped, and the conversation ends.
+    pub async fn hush(&self) {
+        self.hushes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Err(e) = self.stop_audio().await {
+            tracing::debug!("hush: {e:#}");
+        }
+        self.ears.end_conversation();
+    }
+
     pub async fn stop_audio(&self) -> Result<()> {
         if let Some(t) = self.speaker.lock().await.take() {
             t.cancel();
@@ -872,6 +942,21 @@ pub async fn on_body(robot: Robot) {
                         _ => None,
                     }
                 }
+                "remote" => {
+                    remote_button(&robot, &e.data).await;
+                    None
+                }
+                "phone_link" => {
+                    let text = if e.data["connected"] == true {
+                        "Phone connected."
+                    } else {
+                        "Phone disconnected."
+                    };
+                    if let Err(err) = robot.say(text, Some("robot"), false).await {
+                        tracing::debug!("phone link: {err:#}");
+                    }
+                    None
+                }
                 "phone_call" => {
                     let from = e.data["from"].as_str().unwrap_or("someone");
                     tracing::info!("the phone is ringing: telling the agent");
@@ -907,6 +992,97 @@ pub async fn on_body(robot: Robot) {
             robot.life.handled(&how);
         }
     }
+}
+
+/// A button on the handheld controller, in AI mode.
+async fn remote_button(robot: &Robot, data: &Value) {
+    let button = data["button"].as_str().unwrap_or_default();
+    tracing::info!("remote: {button}");
+    match button {
+        // The robot leaves AI mode for stock RC mode (it says so) and comes back when that ends.
+        "override" => {
+            robot
+                .manual_override
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            robot.cancel_summon().await;
+        }
+        // Talking, or about to answer: cut it off. Quiet: focus mode.
+        "shut_up" => {
+            robot.cancel_summon().await;
+            if data["talking"] == true || robot.light.answering() {
+                robot.hush().await;
+            } else {
+                let minutes = robot.hub.config.life.default_focus_minutes;
+                robot.focus(Duration::from_secs(minutes * 60));
+            }
+        }
+        "poke" => {
+            if robot.life.focused().is_some() {
+                robot.unfocus();
+            }
+            robot.ears.conversation_opened();
+            robot.life.poked();
+        }
+        // The remote's Summon button: call the robot to listen, as stock did for voice commands.
+        "listen" => {
+            if robot.life.focused().is_some() {
+                robot.unfocus();
+            }
+            let robot = robot.clone();
+            tokio::spawn(async move {
+                if let Err(e) = robot.say("Yes?", Some("robot"), true).await {
+                    tracing::debug!("listen: {e:#}");
+                }
+                // After the prompt: the mic is muted while the robot speaks.
+                robot.ears.listen_now();
+            });
+        }
+        "summon" => robot.start_summon().await,
+        "other" => tracing::info!("remote sent command {}", data["command"]),
+        "scenario" => {
+            let name = data["scenario"]
+                .as_u64()
+                .and_then(|i| bbproto::bb::SCENARIOS.get(i as usize).copied())
+                .unwrap_or_default();
+            let arg = data["arg"].as_u64().unwrap_or(0);
+            if let Some(text) = menu_request(name, arg) {
+                robot.ears.command(&text);
+                robot.light.thinking();
+            }
+        }
+        _ => {}
+    }
+}
+
+/// What a controller menu entry asks the agent, for the entries the robot leaves to it.
+fn menu_request(scenario: &str, arg: u64) -> Option<String> {
+    const DICE: [&str; 8] = ["", "4", "6", "8", "10", "12", "20", "100"];
+    Some(match scenario {
+        "eight_ball" => {
+            "Be a magic eight ball: ask me for my yes-or-no question, then answer it.".into()
+        }
+        "dice_roll" => match DICE.get(arg as usize).copied().unwrap_or("") {
+            "" => "Roll a die for me.".into(),
+            n => format!("Roll a d{n} for me."),
+        },
+        "voice_control" => match arg {
+            0 => "Drive forward a little.",
+            1 => "Back up a little.",
+            2 => "Turn left.",
+            3 => "Turn right.",
+            _ => "Turn around.",
+        }
+        .into(),
+        "dance" => "Dance for me!".into(),
+        "face_detect" if arg == 1 => "Remember my face.".into(),
+        "face_detect" => "Who's this in front of you?".into(),
+        "face_detect_forget" => "Forget my face.".into(),
+        "whats_this" => "What's this in front of you?".into(),
+        "read_notifs" | "phone_list_notifs" => "Do I have any notifications?".into(),
+        "ir_train" => "Learn a button from my IR remote.".into(),
+        "ir_forget" => "Forget a button from my IR remote.".into(),
+        _ => return None,
+    })
 }
 
 /// A reminder nobody passed on for a minute (no agent running, or it is paused) is said by the
@@ -978,6 +1154,10 @@ pub async fn on_link_up(robot: Robot) {
                 "link" => linked = e.data["connected"] == true,
                 "mode" if linked && e.data["mode"] == "remote" => {
                     linked = false;
+                    // Back from Manual Override (stock RC mode), if that is where it was.
+                    robot
+                        .manual_override
+                        .store(false, std::sync::atomic::Ordering::Relaxed);
                     let robot = robot.clone();
                     let woken_by_plane = robot
                         .plane_woke
@@ -986,11 +1166,22 @@ pub async fn on_link_up(robot: Robot) {
                         if let Err(e) = robot.apply_session_settings().await {
                             tracing::warn!("starting the robot's streams: {e:#}");
                         }
-                        if robot.hub.config.announce_connect
-                            && !woken_by_plane
-                            && let Err(e) = robot.say("Connected.", Some("robot"), false).await
-                        {
-                            tracing::debug!("connect announcement: {e:#}");
+                        if robot.hub.config.announce_connect && !woken_by_plane {
+                            // Like stock's own announcement, mention a linked phone.
+                            let phone =
+                                tokio::time::timeout(Duration::from_secs(2), robot.phone("status"))
+                                    .await
+                                    .ok()
+                                    .and_then(Result::ok)
+                                    .is_some_and(|s| s["connected"] == true);
+                            let text = if phone {
+                                "Connected. Your phone is linked."
+                            } else {
+                                "Connected."
+                            };
+                            if let Err(e) = robot.say(text, Some("robot"), false).await {
+                                tracing::debug!("connect announcement: {e:#}");
+                            }
                         }
                     });
                 }
@@ -1232,7 +1423,24 @@ mod resampler_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::BatteryWatch;
+    use super::{BatteryWatch, menu_request};
+
+    #[test]
+    fn menu_entries_the_robot_cannot_run_become_requests() {
+        assert_eq!(menu_request("dice_roll", 6).unwrap(), "Roll a d20 for me.");
+        assert_eq!(menu_request("dice_roll", 0).unwrap(), "Roll a die for me.");
+        assert_eq!(menu_request("voice_control", 2).unwrap(), "Turn left.");
+        assert_eq!(menu_request("face_detect", 1).unwrap(), "Remember my face.");
+        assert!(
+            menu_request("phone_list_notifs", 0)
+                .unwrap()
+                .contains("notifications")
+        );
+        assert!(
+            menu_request("joke", 0).is_none(),
+            "the robot tells jokes itself"
+        );
+    }
 
     #[test]
     fn battery_warns_twice_then_thanks_once() {

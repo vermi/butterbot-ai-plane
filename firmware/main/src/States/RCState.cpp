@@ -7,6 +7,7 @@
 #include <Services/Audio/FileAudioSource.h>
 #include <Services/ControllerState.h>
 #include <Util/ServiceLocator.h>
+#include "Util/Joystick.h"
 #include "FaceDet.h"
 #include "Audio/AudioFrontend.h"
 #include "Services/Com.h"
@@ -152,70 +153,8 @@ void RCState::onDriveData(DriveData driveData){
 		return;
 	}
 
-	if(driveData.joystickX == 0 && driveData.joystickY == 0){
-		baseBoard->setMotors(driveData.joystickX, driveData.joystickY);
-		return;
-	}
-
-	static constexpr float MaxSpeed = 100.0f;
-
-	// Calculate motor speeds based on joystick positions
-	glm::vec2 direction = { driveData.joystickX, driveData.joystickY };
-	const float speed = glm::clamp(glm::length(direction), 0.0f, MaxSpeed);
-	direction = glm::normalize(direction);
-
-	float angle = glm::degrees(glm::angle(direction, { 0.0, 1.0 }));
-
-	if(direction.x < 0){
-		angle = 360.0f - angle;
-	}
-
-	static constexpr float circParts = 360.0f / 8.0f;
-
-	float calcAngle = angle + circParts / 2.0f;
-	if(calcAngle >= 360){
-		calcAngle -= 360.0f;
-	}
-	const uint8_t number = std::floor(calcAngle / circParts);
-
-	float leftSpeed = 0.0f;
-	float rightSpeed = 0.0f;
-
-	if(number == 0){
-		leftSpeed = rightSpeed = 1.0f;
-	}
-	else if(number == 1){
-		leftSpeed = 1.0f;
-		rightSpeed = 0.2f;
-	}
-	else if(number == 2){
-		leftSpeed = 1.0f;
-		rightSpeed = -1.0f;
-	}
-	else if(number == 3){
-		leftSpeed = -1.0f;
-		rightSpeed = -0.2f;
-	}
-	else if(number == 4){
-		leftSpeed = rightSpeed = -1.0f;
-	}
-	else if(number == 5){
-		leftSpeed = -0.2f;
-		rightSpeed = -1.0f;
-	}
-	else if(number == 6){
-		leftSpeed = -1.0f;
-		rightSpeed = 1.0f;
-	}
-	else if(number == 7){
-		leftSpeed = 0.2f;
-		rightSpeed = 1.0f;
-	}
-
-	leftSpeed = std::clamp(leftSpeed * speed * 2.0f, -100.0f, 100.0f);
-	rightSpeed = std::clamp(rightSpeed * speed * 2.0f, -100.0f, 100.0f);
-
-	baseBoard->setMotors(leftSpeed, rightSpeed);
+	const auto [left, right] = joystickMotors(driveData.joystickX, driveData.joystickY);
+	baseBoard->setMotors(left, right);
 }
 
 void RCState::onBTDisconnect(Com::ConnStatus status){

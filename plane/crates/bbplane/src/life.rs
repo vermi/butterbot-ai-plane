@@ -48,6 +48,8 @@ const SUGGESTIONS_ALONE: &[&str] = &[
 pub enum Nudge {
     /// The paired phone is ringing.
     Call { from: String },
+    /// Someone pressed Poke on the controller.
+    Poked,
     /// Someone handled the robot: `pickup`, `putdown`, `shake`, `fall` or `upside_down`.
     Handled { how: String },
     /// The battery is low (`plugged_in` false: ask to be charged), or the robot was just plugged
@@ -75,6 +77,7 @@ struct State {
     noticed: VecDeque<(String, Instant)>,
     handled: Option<(String, Instant)>,
     call: Option<(String, Instant)>,
+    poked: Option<Instant>,
     /// What, whether it is urgent (an alarm), when.
     heard: Option<(String, bool, Instant)>,
     battery: Option<(u32, bool, Instant)>,
@@ -101,6 +104,7 @@ impl Life {
             noticed: VecDeque::new(),
             handled: None,
             call: None,
+            poked: None,
             heard: None,
             battery: None,
             session_started: Instant::now(),
@@ -186,6 +190,13 @@ impl Life {
         self.state.lock().unwrap().heard = Some((what.to_string(), urgent, Instant::now()));
     }
 
+    /// Someone pressed Poke on the controller: it comes through focus mode (they want attention).
+    pub fn poked(&self) {
+        if self.cfg.enabled {
+            self.state.lock().unwrap().poked = Some(Instant::now());
+        }
+    }
+
     /// The paired phone is ringing.
     pub fn call(&self, from: &str) {
         if !self.cfg.enabled || self.focused().is_some() {
@@ -225,6 +236,13 @@ impl Life {
             s.last_activity = Instant::now();
             reschedule(&self.cfg, &mut s);
             return Some(Nudge::Heard { what });
+        }
+        if let Some(at) = s.poked.take()
+            && at.elapsed() < HANDLED_FRESH
+        {
+            s.last_activity = Instant::now();
+            reschedule(&self.cfg, &mut s);
+            return Some(Nudge::Poked);
         }
         if focused {
             return None;

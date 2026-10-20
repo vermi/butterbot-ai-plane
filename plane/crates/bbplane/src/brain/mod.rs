@@ -400,6 +400,7 @@ pub fn describe(ev: &crate::control::AgentEvent) -> Option<(String, Option<Bytes
                     "[{} just came into view. In view: {in_view}.]",
                     info["name"].as_str().unwrap_or("someone")
                 ),
+                Some("poked") => "[Someone poked you with the remote. React out loud, briefly; they may want to chat.]".to_string(),
                 Some("call") => format!(
                     "[The phone paired with you is ringing: {} is calling. Tell your person, briefly.]",
                     info["from"].as_str().unwrap_or("someone")
@@ -511,16 +512,21 @@ pub struct Speech {
     task: tokio::task::JoinHandle<Result<()>>,
     pending: String,
     said: String,
+    robot: Robot,
+    hushes: u64,
 }
 
 impl Speech {
     pub fn start(robot: &Robot) -> Speech {
         let (tx, rx) = mpsc::unbounded_channel();
+        let hushes = robot.hush_count();
         Speech {
             tx,
-            task: tokio::spawn(speak(robot.clone(), rx)),
+            task: tokio::spawn(speak(robot.clone(), rx, hushes)),
             pending: String::new(),
             said: String::new(),
+            robot: robot.clone(),
+            hushes,
         }
     }
 
@@ -541,7 +547,11 @@ impl Speech {
         }
         drop(self.tx);
         self.task.await??;
-        Ok(self.said.trim().to_string())
+        let said = self.said.trim().to_string();
+        if self.robot.hush_count() != self.hushes {
+            return Ok(format!("{said} (cut off)"));
+        }
+        Ok(said)
     }
 }
 
@@ -554,12 +564,16 @@ fn sentence_end(s: &str) -> Option<usize> {
     })
 }
 
-/// Speak sentences in order as they arrive.
-async fn speak(robot: Robot, mut sentences: mpsc::UnboundedReceiver<String>) -> Result<()> {
+/// Speak sentences in order as they arrive, until someone cuts the robot off (`hushes` changes).
+async fn speak(
+    robot: Robot,
+    mut sentences: mpsc::UnboundedReceiver<String>,
+    hushes: u64,
+) -> Result<()> {
     let cfg = &robot.hub.config.brain;
     if cfg.voice == "robot" {
         while let Some(s) = sentences.recv().await {
-            if !s.is_empty() {
+            if !s.is_empty() && robot.hush_count() == hushes {
                 robot.say_quietly(&s).await?;
             }
         }
@@ -569,7 +583,7 @@ async fn speak(robot: Robot, mut sentences: mpsc::UnboundedReceiver<String>) -> 
     let http = text::client();
     let mut stream = None;
     while let Some(s) = sentences.recv().await {
-        if s.is_empty() {
+        if s.is_empty() || robot.hush_count() != hushes {
             continue;
         }
         let resp = http
@@ -598,6 +612,9 @@ async fn speak(robot: Robot, mut sentences: mpsc::UnboundedReceiver<String>) -> 
             }
             if bytes.len() % 2 == 1 {
                 odd = bytes.pop();
+            }
+            if robot.hush_count() != hushes {
+                break;
             }
             if let Some(st) = stream.as_mut() {
                 st.push(&bbproto::frame::pcm_from_le(&bytes));

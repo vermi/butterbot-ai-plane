@@ -134,6 +134,17 @@ public:
 
 	void setRemote(bool remote){ this->remote = remote; }
 	bool isRemote() const { return remote; }
+	/** Manual Override left AI mode for stock RC mode: go back to AI mode when RC mode ends. */
+	void setResumeAfterRC(bool on){ resumeAfterRC = on; }
+	bool takeResumeAfterRC(){ return resumeAfterRC.exchange(false); }
+	/** Enter AI mode as soon as the robot is idle (after a restart into AI mode). */
+	void setAiOnIdle(bool on){ aiOnIdle = on; }
+	bool takeAiOnIdle(){ return aiOnIdle.exchange(false); }
+	/** Why startRadio() last failed, for the robot to say: "settings", "memory" or "wifi". */
+	const char* startFailure() const { return lastStartFailure; }
+	/** Shut up stopped the robot mid-sentence (noted on the app thread, used on the state machine's). */
+	void noteHush(){ hushedAt = millis(); }
+	bool hushedWithin(uint64_t ms) const { const uint64_t at = hushedAt; return at != 0 && millis() - at < ms; }
 
 	/** Current state machine mode: idle, listen, scenario, rc, remote. */
 	void reportMode(const char* mode);
@@ -199,6 +210,10 @@ private:
 	uint32_t micSeq = 0;
 	std::atomic_bool online = false;
 	std::atomic_bool remote = false;
+	std::atomic_bool resumeAfterRC = false;
+	std::atomic_bool aiOnIdle = false;
+	const char* lastStartFailure = "";
+	std::atomic<uint64_t> hushedAt = 0;
 	uint64_t lastRx = 0;
 
 	char mode[12] = "idle";

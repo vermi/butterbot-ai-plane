@@ -374,6 +374,24 @@ impl Hub {
                 self.push_event("drive_stopped", json!({ "reason": reason }))
                     .await
             }
+            FromRobot::PhoneLink { connected } => {
+                self.push_event("phone_link", json!({ "connected": connected }))
+                    .await
+            }
+            FromRobot::Remote {
+                button,
+                on,
+                talking,
+                scenario,
+                arg,
+                command,
+            } => {
+                self.push_event(
+                    "remote",
+                    json!({ "button": button, "on": on, "talking": talking, "scenario": scenario, "arg": arg, "command": command }),
+                )
+                .await
+            }
             FromRobot::PhoneCall { from } => {
                 self.push_event("phone_call", json!({ "from": from })).await
             }

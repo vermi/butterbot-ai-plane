@@ -30,6 +30,12 @@ const NOISE_FLOOR: f32 = 0.008;
 const TARGET_PEAK: f32 = 0.5;
 /// Sounds that matter even in focus mode.
 pub const ALARMS: [&str; 3] = ["Smoke detector, smoke alarm", "Fire alarm", "Alarm"];
+/// An alarm keeps going: it must be heard in this many windows in a row (about 1.5 s) at
+/// `ALARM_SCORE` or more. A tap on the counter, levelled up, briefly scores like one.
+const ALARM_WINDOWS: u32 = 3;
+const ALARM_SCORE: f32 = 0.5;
+/// Quiet windows are brought up at most this much.
+const MAX_GAIN: f32 = 8.0;
 /// After a failed model load (usually the download), wait this long before trying again.
 const LOAD_RETRY: Duration = Duration::from_secs(60);
 
@@ -39,6 +45,8 @@ pub struct Sounds {
     engine: OnceCell<Arc<Engine>>,
     load_failure: Mutex<Option<(Instant, String)>>,
     last_heard: Mutex<HashMap<String, Instant>>,
+    /// Windows in a row each alarm has been heard in.
+    alarm_streak: Mutex<HashMap<String, u32>>,
     /// The most recent sounds heard (any class), for `status`.
     recent: Mutex<VecDeque<(String, f32, Instant)>>,
 }
@@ -51,6 +59,7 @@ impl Sounds {
             engine: OnceCell::new(),
             load_failure: Mutex::new(None),
             last_heard: Mutex::new(HashMap::new()),
+            alarm_streak: Mutex::new(HashMap::new()),
             recent: Mutex::new(VecDeque::new()),
         }
     }
@@ -119,11 +128,23 @@ impl Sounds {
                 recent.pop_front();
             }
         }
+        // Alarms count only when they go on for a while.
+        let mut streaks = self.alarm_streak.lock().unwrap();
+        for alarm in ALARMS {
+            let loud = ranked
+                .iter()
+                .any(|(c, s)| c == alarm && *s >= ALARM_SCORE.max(self.cfg.threshold));
+            let n = streaks.entry(alarm.to_string()).or_insert(0);
+            *n = if loud { *n + 1 } else { 0 };
+        }
         let cooldown = Duration::from_secs(self.cfg.cooldown_secs);
         let mut last = self.last_heard.lock().unwrap();
         Ok(ranked
             .into_iter()
             .filter(|(c, s)| *s >= self.cfg.threshold && self.cfg.notice.contains(c))
+            .filter(|(c, _)| {
+                !ALARMS.contains(&c.as_str()) || streaks.get(c).is_some_and(|n| *n >= ALARM_WINDOWS)
+            })
             .filter(|(c, _)| {
                 let fresh = last.get(c).is_none_or(|t| now - *t >= cooldown);
                 if fresh {
@@ -141,7 +162,7 @@ fn level(mut window: Vec<f32>) -> Option<Vec<f32>> {
     if peak < NOISE_FLOOR {
         return None;
     }
-    let gain = (TARGET_PEAK / peak).clamp(1.0, 32.0);
+    let gain = (TARGET_PEAK / peak).clamp(1.0, MAX_GAIN);
     for s in &mut window {
         *s = (*s * gain).clamp(-1.0, 1.0);
     }
@@ -214,9 +235,13 @@ mod tests {
         assert!(level(vec![0.001; WINDOW]).is_none());
         // A short knock in a quiet second still counts, and is brought up.
         let mut knock = vec![0.001; WINDOW];
-        knock[100] = 0.05;
+        knock[100] = 0.1;
         let up = level(knock).unwrap();
         assert!((up[100] - TARGET_PEAK).abs() < 1e-4, "{}", up[100]);
+        // Never more than MAX_GAIN.
+        let mut faint = vec![0.0; WINDOW];
+        faint[0] = 0.01;
+        assert!((level(faint).unwrap()[0] - 0.01 * MAX_GAIN).abs() < 1e-5);
         let loud = level(vec![0.5; WINDOW]).unwrap();
         assert_eq!(loud[0], 0.5, "never turned down");
     }

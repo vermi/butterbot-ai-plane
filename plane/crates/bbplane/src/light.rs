@@ -84,6 +84,11 @@ impl Light {
                 .is_some_and(|t| t.elapsed() < AGENT_GONE)
     }
 
+    /// The agent is working on something someone said (it may speak any moment).
+    pub fn answering(&self) -> bool {
+        self.is_thinking()
+    }
+
     fn is_thinking(&self) -> bool {
         self.thinking_since
             .lock()

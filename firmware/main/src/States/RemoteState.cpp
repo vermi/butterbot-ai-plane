@@ -1,4 +1,5 @@
 #include "RemoteState.h"
+#include <algorithm>
 #include <Core/Application.h>
 #include <Devices/Camera.h>
 #include <Services/Audio/Audio.h>
@@ -13,6 +14,8 @@
 #include <Util/stdafx.h>
 #include "BBStateMachine.h"
 #include "IdleState.h"
+#include "RCState.h"
+#include "Services/ControllerState.h"
 #include "ScenarioRoutineMappings.h"
 #include "Enums.h"
 #include "Audio/SpeechAudioSource.h"
@@ -75,6 +78,12 @@ RemoteState::RemoteState(BBStateMachine* sm) : State(sm){
 	}
 	if(auto* phone = app->getService<Phone>()){
 		sm->bindState(phone->onNotifEvent, this, &RemoteState::onPhoneNotif);
+		sm->bindState(phone->onConnEvent, this, &RemoteState::onPhoneConn);
+	}
+	if(auto* com = app->getService<Com>()){
+		sm->bindState(com->OnCommand, this, &RemoteState::onRemoteCommand);
+		sm->bindState(com->OnRCData, this, &RemoteState::onRemoteRC);
+		sm->bindState(com->OnScenario, this, &RemoteState::onRemoteScenario);
 	}
 
 	if(audio){
@@ -187,7 +196,12 @@ void RemoteState::tick(float deltaTime){
 		// Without this the robot just went back to idle, and nobody could tell a short press had
 		// done anything at all.
 		if(abortRequested){
-			speak("A I mode could not start.", true);
+			// Say why: it is the only clue without a serial cable.
+			const std::string why = link ? link->startFailure() : "";
+			speak(why == "memory" ? "A I mode could not start: not enough memory. Turn me off and on again."
+				  : why == "settings" ? "A I mode could not start: I have no Wi-Fi settings."
+				  : why == "wifi" ? "A I mode could not start: Wi-Fi would not start."
+				  : "A I mode could not start.", true);
 		}else{
 			CMF_LOG(RemoteState, LogLevel::Warning, "no plane connection, leaving remote mode");
 			speak(connectedOnce ? "Lost the computer." : "I can't reach the computer.", true);
@@ -464,6 +478,81 @@ void RemoteState::speak(const char* text, bool wait){
 	}
 }
 
+// ---------------------------------------------------------------- the handheld controller
+
+void RemoteState::sendRemote(const std::string& button, const std::string& extra){
+	link->sendJson("{\"t\":\"remote\",\"button\":\"" + button + "\"" + extra + "}");
+}
+
+void RemoteState::remoteIdle(){
+	if(Com* com = Application::getApp()->getService<Com>()){
+		com->sendData(BB::State::Idle, BB::Action::Idle::None);
+	}
+}
+
+// Manual Override. The controller wants stock RC mode: the robot joins the controller's own
+// Wi-Fi and streams video to its screen, and the controller waits for that before it sends the
+// joystick. That cannot run next to the home Wi-Fi, so AI mode steps aside and comes back when RC
+// mode ends (IdleState).
+void RemoteState::onRemoteRC(RCData data){
+	if(scenarioRunning){
+		finishScenario(true);
+	}
+	base->stopMotors();
+	driving = false;
+	if(ServiceLocator::ControllerStateInstance){
+		ServiceLocator::ControllerStateInstance->updateRCData(data);
+	}
+	sendRemote("override", ",\"on\":true");
+	link->setResumeAfterRC(true);
+	speak("Manual override.", true);
+	sm->transitionTo<RCState>();
+}
+
+void RemoteState::onRemoteCommand(Ctrl::Command command){
+	switch(command){
+		case Ctrl::EnterRC: // handled with its data in onRemoteRC
+			break;
+		case Ctrl::ShutUp: {
+			// Talking (or a menu routine running): stop right now; the plane drops the rest of the
+			// answer. Quiet: focus mode. The app thread may have stopped the audio already.
+			const bool talking = (audio && audio->isPlaying()) || link->hushedWithin(3000) || scenarioRunning;
+			if(scenarioRunning){
+				finishScenario(true);
+			}
+			if(talking){
+				session->speakerAbort();
+				if(audio){
+					audio->stop();
+				}
+			}
+			sendRemote("shut_up", talking ? ",\"talking\":true" : ",\"talking\":false");
+			break;
+		}
+		case Ctrl::Poke:
+			sendRemote("poke");
+			break;
+		case Ctrl::Summon:
+			sendRemote("summon");
+			break;
+		case Ctrl::Listen:
+			sendRemote("listen");
+			break;
+		default:
+			// Anything else the controller sends in AI mode is reported, to see what it does.
+			sendRemote("other", ",\"command\":" + std::to_string(static_cast<int>(command)));
+			break;
+	}
+}
+
+// The phone connecting or going away, which stock announces in its idle behaviour.
+void RemoteState::onPhoneConn(Phone::ConnEvent event){
+	if(link != nullptr){
+		link->sendJson(std::string("{\"t\":\"phone_link\",\"connected\":") +
+					   (event == Phone::ConnEvent::Connected ? "true" : "false") + "}");
+	}
+}
+
 // A ringing phone is passed to the plane, so the agent can tell its person who is calling.
 void RemoteState::onPhoneNotif(Phone::NotifEvent event){
 	if(event.action != Phone::NotifEvent::Added || link == nullptr){
@@ -562,26 +651,55 @@ void RemoteState::showLed(){
 	ledShown = true;
 }
 
-void RemoteState::startScenario(const LinkRequest& req){
+namespace {
 	// These load on-robot speech or vision models. Their internal RAM needs were never budgeted
 	// next to Wi-Fi (stock runs them without it), and an allocation failure aborts the firmware.
+	bool needsModels(uint32_t scenario){
+		using S = BB::Action::Scenario;
+		static constexpr S NeedModels[] = {
+			S::EightBall, S::DiceRoll, S::VoiceControl, S::Dance, S::FaceDetect, S::FaceDetectForget,
+			S::IR_train, S::IR_forget, S::WhatsThis,
+		};
+		return std::any_of(std::begin(NeedModels), std::end(NeedModels),
+						   [scenario](S s){ return static_cast<uint32_t>(s) == scenario; });
+	}
+}
+
+// A scenario from the controller's menu. Those the robot cannot run in AI mode, and reading
+// notifications (the agent sums them up), go to the agent as requests; the rest run as in stock.
+void RemoteState::onRemoteScenario(BB::Action::Scenario scenario, ScenarioData data){
 	using S = BB::Action::Scenario;
-	static constexpr S NeedModels[] = {
-		S::EightBall, S::DiceRoll, S::VoiceControl, S::Dance, S::FaceDetect, S::FaceDetectForget,
-		S::IR_train, S::IR_forget, S::WhatsThis,
-	};
-	for(const S s : NeedModels){
-		if(static_cast<uint32_t>(s) == req.scenario){
+	const uint32_t id = static_cast<uint32_t>(scenario);
+	if(needsModels(id) || scenario == S::ReadNotifs || scenario == S::PhoneListNotifs){
+		sendRemote("scenario", ",\"scenario\":" + std::to_string(id) + ",\"arg\":" + std::to_string(data.raw));
+		remoteIdle(); // nothing for its screen: the agent answers out loud
+		return;
+	}
+	if(scenarioRunning){
+		return;
+	}
+	LinkRequest req;
+	req.id = 0; // nobody to answer
+	req.scenario = id;
+	req.arg = data.raw;
+	startScenario(req);
+}
+
+void RemoteState::startScenario(const LinkRequest& req){
+	if(needsModels(req.scenario)){
+		if(req.id != 0){
 			link->error(req.id, "this scenario needs on-robot speech/vision models and is not available in AI mode");
-			return;
 		}
+		return;
 	}
 
 	ScenarioData data{};
 	data.raw = req.arg;
 	const RoutineFactory factory = routineForScenario({ static_cast<BB::Action::Scenario>(req.scenario), data });
 	if(factory == nullptr){
-		link->error(req.id, "no routine for this scenario");
+		if(req.id != 0){
+			link->error(req.id, "no routine for this scenario");
+		}
 		return;
 	}
 
@@ -608,7 +726,10 @@ void RemoteState::finishScenario(bool aborted){
 	base->stopMotors();
 	session->pause(false);
 	ledShown = false; // routines may have used the LED; show ours again
-	link->ack(scenarioId, aborted ? "{\"done\":false,\"aborted\":true}" : "{\"done\":true}");
+	if(scenarioId != 0){
+		link->ack(scenarioId, aborted ? "{\"done\":false,\"aborted\":true}" : "{\"done\":true}");
+	}
+	remoteIdle();
 }
 
 void RemoteState::irList(uint32_t id){

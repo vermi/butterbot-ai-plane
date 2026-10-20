@@ -209,6 +209,21 @@ rest is still being written. Set `[brain] voice` to an OpenAI voice (`marin`, `c
 that instead. Both can search the web. See [`plane/README.md`](plane/README.md#the-agent) for
 setting up Codex and all options.
 
+## The remote in AI mode
+
+The handheld controller works in AI mode too:
+
+| Button | In AI mode |
+|---|---|
+| **Manual Override** | Stock RC mode, with video on the remote's screen. RC mode needs the remote's own Wi-Fi, so the robot leaves AI mode for it; when you leave RC mode it restarts itself straight back into AI mode (a few seconds; RC mode leaves too little unfragmented memory to start the home Wi-Fi again without a restart). |
+| **Shut up** | While it talks, or is about to answer: it stops at once and drops the rest. While it is quiet: focus mode. (In stock mode it still mutes.) |
+| **Poke** | It reacts, then listens for a reply without its name. |
+| **Summon** | Says "Yes?" and takes what you say next as a command, no name needed. |
+| **Joystick menu** | Entries the robot can run in AI mode run as in stock. Those that needed the removed on-robot models (dice, eight ball, "what's this", "who's this", dance, voice moves) and reading notifications go to the agent as requests. |
+
+When the remote sends stock's come-to-me Summon, the robot turns to look for a person with the
+plane's object detection and drives over. Entering AI mode with a phone linked, it says so.
+
 ## Status light
 
 In AI mode the robot's status light shows what it is doing. The light sits on an I/O expander pin

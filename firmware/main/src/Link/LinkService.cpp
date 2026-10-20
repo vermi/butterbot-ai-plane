@@ -451,6 +451,7 @@ bool LinkService::startRadio(){
 		cfg = config;
 	}
 	if(!LinkCredentials::isValid(cfg)){
+		lastStartFailure = "settings";
 		return false;
 	}
 
@@ -462,6 +463,7 @@ bool LinkService::startRadio(){
 	if(freeInternal < minFree || largest < minBlock){
 		CMF_LOG(LinkService, LogLevel::Error, "not enough internal RAM for Wi-Fi (need free %lu, block %lu), not starting it",
 				(unsigned long) minFree, (unsigned long) minBlock);
+		lastStartFailure = "memory";
 		return false;
 	}
 
@@ -473,6 +475,7 @@ bool LinkService::startRadio(){
 	wifi->setIPMode(WiFiIPMode::DHCP);
 	if(!wifi->startStation()){
 		CMF_LOG(LinkService, LogLevel::Error, "Wi-Fi start failed");
+		lastStartFailure = "wifi";
 		delete *wifi;
 		wifi = nullptr;
 		LinkCredentials::setWiFiStarting(false);

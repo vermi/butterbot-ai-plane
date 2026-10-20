@@ -1,6 +1,7 @@
 #include "IdleState.h"
 #include "RemoteState.h"
 #include "Link/LinkService.h"
+#include "Util/AiRestart.h"
 #include <Core/Application.h>
 #include <Statics/ApplicationStatics.h>
 #include <Routines/MotionRoutine.h>
@@ -119,6 +120,22 @@ void IdleState::tick(float deltaTime){
 
 	if(sm->isTransitionPending()){
 		return;
+	}
+
+	if(LinkService* link = ApplicationStatics::getApplication()->getService<LinkService>()){
+		// Started by a restart into AI mode.
+		if(link->takeAiOnIdle()){
+			sm->transitionTo<RemoteState>();
+			return;
+		}
+		// Manual Override took the robot from AI mode to RC mode, which has ended: back to AI
+		// mode, through a restart (RC mode leaves too little unfragmented RAM for Wi-Fi).
+		if(link->takeResumeAfterRC()){
+			if(BaseBoard* base = ApplicationStatics::getApplication()->getService<BaseBoard>()){
+				base->stopMotors();
+			}
+			restartIntoAiMode();
+		}
 	}
 
 	if(eventBag == nullptr){
