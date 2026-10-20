@@ -61,7 +61,7 @@ You need:
 
 - a ButterBot;
 - a computer on the same network, with **2.4 GHz** Wi-Fi reachable by the robot;
-- [Rust](https://rustup.rs) 1.89 or newer;
+- [Rust](https://rustup.rs) 1.91 or newer;
 - [ESP-IDF 5.5.3](https://docs.espressif.com/projects/esp-idf/en/v5.5.3/esp32s3/get-started/), only for flashing.
 
 ### 1. Build the plane

@@ -13,7 +13,7 @@ Browser  --live view, REST------------+--> bbplane --UDP :7531 (robot dials in)-
 ## Build
 
 ```sh
-cargo build --release        # binary: target/release/bbplane (Rust 1.89 or newer)
+cargo build --release        # binary: target/release/bbplane (Rust 1.91 or newer)
 cargo test                   # unit tests + end-to-end test against the simulated robot
 ```
 
