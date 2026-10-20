@@ -152,6 +152,9 @@ pub struct FacesConfig {
     pub greet: bool,
     /// Greet the same person at most this often.
     pub greet_cooldown_secs: u64,
+    /// Someone counts as arriving (a hello, or a nudge for the agent) only after being out of view
+    /// this long. The camera sits low and loses people all the time.
+    pub welcome_back_minutes: u64,
     /// Similarity (0..1) needed to name someone. Higher means fewer mix-ups but more misses.
     pub threshold: f32,
 }
@@ -162,6 +165,7 @@ impl Default for FacesConfig {
             enabled: true,
             greet: true,
             greet_cooldown_secs: 600,
+            welcome_back_minutes: 30,
             threshold: 0.40,
         }
     }
@@ -225,6 +229,8 @@ pub struct LifeConfig {
     pub enabled: bool,
     /// Enrolled name of the person whose requests come first.
     pub owner: String,
+    /// Animals that live here, as you would introduce them: "Biscuit, a beagle".
+    pub pets: Vec<String>,
     /// Random wait, in seconds, between idle nudges while someone is in view...
     pub nudge_in_view_secs: [u64; 2],
     /// ...and while nobody is.
@@ -241,6 +247,7 @@ impl Default for LifeConfig {
         Self {
             enabled: true,
             owner: String::new(),
+            pets: Vec::new(),
             nudge_in_view_secs: [120, 300],
             nudge_alone_secs: [900, 1800],
             default_focus_minutes: 60,
@@ -369,10 +376,11 @@ impl Default for SafetyConfig {
 impl Default for CameraConfig {
     fn default() -> Self {
         // At the board's default 27 MHz sensor clock, frames larger than the stock 128x128 lose
-        // lines in the camera DMA and come back corrupted. 20 MHz gives clean QVGA (and VGA) with
-        // headroom; the robot's CPU JPEG encoder caps QVGA at about 5-6 fps either way.
+        // lines in the camera DMA and come back corrupted. 20 MHz gives clean QVGA and VGA with
+        // headroom. The robot's CPU JPEG encoder manages about 2 fps at VGA (5-6 at QVGA), but at
+        // QVGA the object detector misses a dog lying across the room and faces are too small.
         Self {
-            res: Res::Qvga,
+            res: Res::Vga,
             fps: 10,
             quality: 12,
             opts: bbproto::ctrl::CamOpts {
@@ -448,7 +456,7 @@ mod tests {
         let c: Config = toml::from_str("[camera]\nxclk_mhz = 16\n").unwrap();
         assert_eq!(c.camera.opts.xclk_mhz, Some(16));
         assert_eq!(c.camera.opts.encoder, Some(bbproto::ctrl::Encoder::Sw));
-        assert_eq!(c.camera.res, Res::Qvga);
+        assert_eq!(c.camera.res, Res::Vga);
         assert_eq!(c.link_port, 7531);
         assert!(c.mic.gate);
     }

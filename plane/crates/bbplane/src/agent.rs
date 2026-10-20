@@ -129,7 +129,7 @@ async fn prompt(robot: &Robot) -> String {
 pub async fn with_context(robot: &Robot, persona: &str) -> String {
     let cfg = &robot.hub.config;
     let owner = &cfg.life.owner;
-    let owner_line = if owner.is_empty() {
+    let mut owner_line = if owner.is_empty() {
         String::new()
     } else {
         format!(
@@ -137,6 +137,17 @@ pub async fn with_context(robot: &Robot, persona: &str) -> String {
 (`owner_in_view`), they come first: drop what you are doing and attend to them."
         )
     };
+    let pets = &cfg.life.pets;
+    if !pets.is_empty() {
+        if !owner_line.is_empty() {
+            owner_line.push('\n');
+        }
+        owner_line.push_str(&format!(
+            "- Pets that live here: {}. An animal you see is most likely one of them: greet them \
+by name.",
+            pets.join("; ")
+        ));
+    }
     let mut p = persona.replace("{owner}", &owner_line);
     let known = robot.faces.known();
     if !known.is_empty() {

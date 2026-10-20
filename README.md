@@ -147,8 +147,10 @@ events and can ask `who_is_here`.
 
 Recognition runs on your computer, not the robot. The first enrollment downloads two open models
 from the OpenCV model zoo (about 40 MB, checked against pinned hashes). The robot's camera sits
-low, so standing people are often only in view from the chest down. At 320×240 a face across the
-room is only about 15 pixels wide, too small to recognize; closer is better.
+low, so standing people are often only in view from the chest down. At the default 640×480 a
+face across the room is only about 30 pixels wide, barely enough to recognize; closer is better.
+Someone counts as arriving (a hello, or a nudge for the agent) only after 30 minutes out of view,
+and not while they are talking with the robot.
 
 ### 6. Let it run itself (optional)
 
@@ -163,6 +165,7 @@ api_key_file = "~/path/to/openai-key"   # or set OPENAI_API_KEY
 
 [life]
 owner = "Sam"             # your enrolled name: your requests come first
+pets = ["Biscuit, a beagle"]  # optional: an animal it sees is probably one of them
 ```
 
 Then run `bbplane serve` and short-press the robot's button. From then on:
@@ -288,7 +291,7 @@ These are the lessons that shaped the firmware. Most of them came from the hardw
     well under 1%. `status` reports `video_dropped` and `wifi_rssi`.
   - **Control requests** are retransmitted until acknowledged, and the robot runs each request
     only once.
-- **The camera streams 320×240 at about 5 fps, with a 640×480 `snapshot`.** At the board's
+- **The camera streams 640×480 at about 2 fps** (320×240 manages 5–6). At the board's
   default 27 MHz sensor clock, frames larger than the stock 128×128 lose lines in the camera DMA
   and come back corrupted. AI mode runs the sensor at 20 MHz, which gives clean frames.
   Frames are captured as RGB565 and JPEG-encoded on the CPU, the same path stock uses; that
@@ -303,7 +306,7 @@ These are the lessons that shaped the firmware. Most of them came from the hardw
 
 ## Limitations
 
-- **Camera:** about 5 fps live at 320×240, and slower at larger sizes. Sizes above 640×480 are
+- **Camera:** about 2 fps live at 640×480 and 5–6 at 320×240. Sizes above 640×480 are
   experimental and may not fit in memory next to Wi-Fi. The sensor's own JPEG mode
   (`encoder = "sensor"`) stalls after a frame or two.
 - **Network:** 2.4 GHz Wi-Fi only (an ESP32 limitation). Expect some lost audio and video on a
@@ -312,9 +315,8 @@ These are the lessons that shaped the firmware. Most of them came from the hardw
   cannot interrupt it. The S3's microphone input has no hardware high-pass filter; the firmware
   removes the rumble and DC offset in software.
 - **Movement:** open loop (no wheel encoders), so `turn` estimates angles from time.
-- **Object detection** knows COCO's 80 everyday classes: a fireplace comes out as an oven. At
-  320×240 it misses small or still animals (a dog asleep across the room); at 640×480
-  (`[camera] res = "vga"`) it finds them, but the stream drops from about 6 to about 2 fps.
+- **Object detection** knows COCO's 80 everyday classes: a fireplace comes out as an oven, and a
+  dog lying down can come out as a cat. At 320×240 it misses small or still animals entirely.
 - **Removed scenarios:** those that needed the removed features (dice, eight ball, face
   detection, "what's this", dance) are not available.
 - **Phone:** music controls act on whatever app the phone is playing from (open Spotify once to

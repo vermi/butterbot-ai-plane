@@ -311,7 +311,20 @@ pub fn describe(ev: &crate::control::AgentEvent) -> Option<(String, Option<Bytes
                 Some("noticed") => {
                     let what = info["what"].as_str().unwrap_or("something");
                     // At the robot's resolution a dog can come out as a cat.
-                    let seen = if crate::objects::is_animal(what) {
+                    let pets = info["pets"]
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| v.as_str())
+                                .collect::<Vec<_>>()
+                                .join("; ")
+                        })
+                        .unwrap_or_default();
+                    let seen = if crate::objects::is_animal(what) && !pets.is_empty() {
+                        format!(
+                            "An animal (the detector guesses a {what}; pets here: {pets}; look at the picture)"
+                        )
+                    } else if crate::objects::is_animal(what) {
                         format!("An animal (maybe a {what}; look at the picture to tell)")
                     } else {
                         format!("Something that looks like a {what}")

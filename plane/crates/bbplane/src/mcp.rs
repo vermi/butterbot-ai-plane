@@ -24,7 +24,8 @@ Controls a ButterBot toy robot (two-wheel drive, camera, microphone, speaker).
 driving forward when something is in front, and reports `drive_stopped` events.
 - Using a control tool switches the robot into AI mode (its own autonomy pauses). \
 Call `exit_ai_mode` to give it back.
-- `look` returns what the camera sees now (320x240 live frame); `snapshot` takes a 640x480 still.
+- `look` returns what the camera sees now (640x480 live frame by default); `snapshot` takes a \
+fresh still.
 - `hear` waits until someone talks to the robot (\"Butterbot, ...\") and returns what they said as \
 text. For a conversation: `hear` once, then answer each time with `reply`, which speaks and \
 returns the next thing said. \
@@ -118,7 +119,7 @@ pub struct SnapshotArgs {
 pub struct StreamArgs {
     /// Live stream on/off.
     pub on: bool,
-    /// r128 (default, reliable). qvga/vga/svga are experimental on this robot.
+    /// qvga (about 6 fps) or vga (about 2 fps, the default). Larger sizes are experimental.
     pub resolution: Option<Res>,
     /// Frames per second, 1..30.
     pub fps: Option<u8>,

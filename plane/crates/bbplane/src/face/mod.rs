@@ -50,6 +50,8 @@ const RECOGNIZE_MIN_WIDTH: f32 = 20.0;
 /// An enrollment sample whose median similarity to the others is below this is a bad frame
 /// (blur, a turned head) and is dropped.
 const ENROLL_CONSISTENCY: f32 = 0.4;
+/// Someone who talked to the robot this recently is not greeted as if they just arrived.
+const TALKED_RECENTLY: Duration = Duration::from_secs(600);
 /// Track key for faces that match nobody.
 const UNKNOWN: &str = "";
 
@@ -71,7 +73,18 @@ struct Track {
     hits: u32,
     present: bool,
     last_seen: Option<Instant>,
+    /// When they were last in view before they left.
+    left_at: Option<Instant>,
     last_greeted: Option<Instant>,
+}
+
+/// Someone came into view or left it.
+struct Change {
+    key: String,
+    arrived: bool,
+    score: Option<f32>,
+    /// How long they had been out of view (None: not seen before).
+    away: Option<Duration>,
 }
 
 #[derive(Default)]
@@ -199,7 +212,7 @@ impl Faces {
     }
 
     /// Analyse one frame, update who is in view, and return arrivals and departures.
-    async fn observe(&self, frame: &VideoFrame) -> Result<Vec<(String, bool, Option<f32>)>> {
+    async fn observe(&self, frame: &VideoFrame) -> Result<Vec<Change>> {
         let faces = self.analyze(frame).await?;
         let seen: Vec<Seen> = {
             let db = self.db.lock().unwrap();
@@ -246,7 +259,12 @@ impl Faces {
             t.last_seen = Some(now);
             if !t.present && t.hits >= ARRIVE_HITS {
                 t.present = true;
-                changes.push((key.clone(), true, *score));
+                changes.push(Change {
+                    key: key.clone(),
+                    arrived: true,
+                    score: *score,
+                    away: t.left_at.map(|l| now - l),
+                });
             }
         }
         for (key, t) in v.tracks.iter_mut() {
@@ -256,7 +274,13 @@ impl Faces {
             t.hits = 0;
             if t.present && t.last_seen.is_none_or(|s| now - s > LEAVE_AFTER) {
                 t.present = false;
-                changes.push((key.clone(), false, None));
+                t.left_at = t.last_seen;
+                changes.push(Change {
+                    key: key.clone(),
+                    arrived: false,
+                    score: None,
+                    away: None,
+                });
             }
         }
         v.faces = seen;
@@ -280,6 +304,9 @@ impl Faces {
             .iter_mut()
             .filter_map(|(k, t)| {
                 t.hits = 0;
+                if t.present {
+                    t.left_at = t.last_seen;
+                }
                 std::mem::take(&mut t.present).then(|| k.clone())
             })
             .collect()
@@ -525,9 +552,22 @@ pub async fn run(robot: Robot) {
         // Do not talk over the robot (or the AI) speaking; those greetings are skipped, not queued.
         let quiet = !hub.status.lock().await.speaker_playing;
         let mut greet_names = Vec::new();
-        for (key, arrived, score) in changes {
+        let welcome_back = Duration::from_secs(faces.cfg.welcome_back_minutes * 60);
+        for Change {
+            key,
+            arrived,
+            score,
+            away,
+        } in changes
+        {
             let name = (key != UNKNOWN).then_some(key.clone());
-            if arrived && key != UNKNOWN {
+            // Back after a while, and not just talking with the robot (the low camera often
+            // misses people who are right there).
+            let welcome = arrived
+                && key != UNKNOWN
+                && away.is_none_or(|a| a >= welcome_back)
+                && !robot.ears.talked_within(TALKED_RECENTLY);
+            if welcome {
                 robot.life.arrived(&key);
             }
             // With an agent running, it greets people itself (it gets an "arrived" nudge).
@@ -535,7 +575,7 @@ pub async fn run(robot: Robot) {
                 .life
                 .agent_running
                 .load(std::sync::atomic::Ordering::Relaxed);
-            let greet = arrived && quiet && !agent && faces.take_greeting(&key);
+            let greet = welcome && quiet && !agent && faces.take_greeting(&key);
             if greet {
                 greet_names.push(key.clone());
             }

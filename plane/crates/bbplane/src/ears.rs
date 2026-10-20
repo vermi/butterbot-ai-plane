@@ -253,6 +253,14 @@ impl Ears {
         }
     }
 
+    /// Whether anyone has given the robot a command within `d`.
+    pub fn talked_within(&self, d: Duration) -> bool {
+        self.last_command
+            .lock()
+            .unwrap()
+            .is_some_and(|t| t.elapsed() < d)
+    }
+
     /// Whether anyone has spoken near the robot within `d`.
     pub fn heard_speech_within(&self, d: Duration) -> bool {
         self.last_speech

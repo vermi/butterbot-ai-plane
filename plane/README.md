@@ -101,7 +101,7 @@ that streams a test card, a 440 Hz tone and fake events.
 | `status` | Connection, mode, battery, sensors, stream state and free RAM (`ram_free`) |
 | `enter_ai_mode` / `exit_ai_mode` | Pause or resume the robot's own behavior. Control tools enter AI mode automatically. |
 | `move`, `turn`, `drive`, `stop` | Timed movement. The robot stops by itself when the time runs out, the link drops, or a safety check trips. |
-| `look` | Latest live camera frame (320x240 image) |
+| `look` | Latest live camera frame (640x480 by default) |
 | `snapshot` | Still photo, 640x480 by default (larger sizes are experimental) |
 | `set_stream` | Live camera resolution and frame rate |
 | `listen` | Microphone clip as WAV, with loudness and speech-activity stats (and a transcript) |
@@ -247,8 +247,8 @@ ble_wake = true          # wake the robot over Bluetooth when it is not connecte
 announce_connect = true  # the robot says "Connected." when it links up in AI mode
 
 [camera]
-res = "qvga"             # r128, qvga, vga, svga, xga, hd, uxga, qxga
-fps = 10                 # the robot reaches about 5-6 fps at qvga
+res = "vga"              # r128, qvga, vga, svga, xga, hd, uxga, qxga
+fps = 10                 # the robot reaches about 2 fps at vga, 5-6 at qvga
 quality = 12             # 4..63, lower is better
 xclk_mhz = 20            # sensor clock; the board default (27) corrupts frames above 128x128
 
@@ -266,6 +266,7 @@ drive_when_plugged = false  # let the agent drive while the robot is plugged in
 enabled = true           # recognize enrolled people in AI mode (idle until someone is enrolled)
 greet = true             # say "Hi, <name>!" when an enrolled person arrives
 greet_cooldown_secs = 600
+welcome_back_minutes = 30  # someone counts as arriving only after being out of view this long
 threshold = 0.40         # 0..1 similarity needed to name someone; higher = fewer mix-ups, more misses
 
 [tts]
@@ -288,6 +289,7 @@ follow_up_secs = 5       # after an answer, start talking within this long to ca
 [life]
 enabled = true           # nudges for the agent
 owner = ""               # enrolled name whose requests come first
+pets = []                # e.g. ["Biscuit, a beagle"]: an animal it sees is probably one of them
 nudge_in_view_secs = [120, 300]    # random wait between idle nudges with someone around
 nudge_alone_secs = [900, 1800]     # ...and with nobody around
 default_focus_minutes = 60

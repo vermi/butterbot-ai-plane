@@ -770,6 +770,9 @@ impl Robot {
                     .map(|s| s.name.clone().unwrap_or_else(|| "someone".into()))
                     .collect();
                 info["in_view"] = names.clone().into();
+                if matches!(n, crate::life::Nudge::Noticed { .. }) {
+                    info["pets"] = self.hub.config.life.pets.clone().into();
+                }
                 if !owner.is_empty() {
                     info["owner_in_view"] =
                         names.iter().any(|n| n.eq_ignore_ascii_case(&owner)).into();

@@ -182,7 +182,7 @@ async fn plane_with_simulated_robot() {
         .find(|c| c["type"] == "image")
         .expect("image content");
     assert_eq!(img["mimeType"], "image/jpeg");
-    assert!(text_of(&r).contains("320x240"), "{}", text_of(&r));
+    assert!(text_of(&r).contains("640x480"), "{}", text_of(&r));
 
     let r = c.tool("snapshot", json!({"resolution":"qxga"})).await;
     assert!(text_of(&r).contains("2048x1536"), "{}", text_of(&r));
