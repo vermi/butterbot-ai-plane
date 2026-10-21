@@ -691,11 +691,19 @@ pub fn describe(ev: &crate::control::AgentEvent) -> Option<(String, Option<Bytes
                     )
                 }
                 Some("diary") => format!(
-                    "[Evening: time to write your diary for {}. What happened that day:\n{}\nWrite it with write_diary, in your own words and for yourself: what stood out, how you felt, what you wonder about. Nobody needs to hear it, so don't say anything.]",
+                    "[Evening: time to write your diary for {}. What happened that day:\n{}\nWrite it with write_diary, in your own words and for yourself: what stood out, how you felt, what you wonder about. If something comes to mind for tomorrow, make it a plan (intend). Nobody needs to hear it, so don't say anything.]",
                     info["day"].as_str().unwrap_or("today"),
                     info["what_happened"].as_str().unwrap_or("(nothing noted)")
                 ),
-                Some("reflect") => "[That conversation is over. Is anything from it worth keeping? Facts about people (what they like, their plans, names, what happened) go in remember; things you want to do or find out later go in intend. If nothing is, call stay_quiet. Don't say anything either way.]".to_string(),
+                Some("reflect") => "[That conversation is over: think back on it, the way you would after talking with a friend. Usually something is worth keeping: who it was and what they wanted, how they seemed, something new about them, the home or their plans (remember), or something you said you'd do, want to follow up on or got curious about (intend). Keep one or two such things. Only if it really was nothing (a hello, a misheard word), call stay_quiet. Don't say anything either way.]".to_string(),
+                Some("morning") => format!(
+                    "[A new day{}. What would you like to do or find out today? Make one to three plans of your own with intend: things to explore, check on, learn about or bring up with someone (with a time, or for some day). Don't say anything.]",
+                    info["plans_now"]
+                        .as_u64()
+                        .filter(|n| *n > 0)
+                        .map(|n| format!(" (you have {n} plans already: see plans)"))
+                        .unwrap_or_default()
+                ),
                 Some("plan") => format!(
                     "[Your own plan is due (you made it {}): {}. Do it, put it off (intend again), or let it go (plans, done).]",
                     info["planned_at"].as_str().unwrap_or("earlier"),

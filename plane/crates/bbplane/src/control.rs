@@ -418,6 +418,29 @@ Ask to be unplugged first."
         Ok(())
     }
 
+    /// A planning moment is due: the first of the day after 7:00, or it has no plans at all (at most
+    /// every few hours). Kept in planned.json so a restart does not ask again.
+    fn planning_due(&self) -> bool {
+        let path = self.hub.config.data_dir().join("planned.json");
+        let now = chrono::Local::now();
+        if chrono::Timelike::hour(&now) < 7 {
+            return false;
+        }
+        let last: Option<chrono::DateTime<chrono::Local>> = std::fs::read(&path)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<i64>(&b).ok())
+            .and_then(|ms| chrono::TimeZone::timestamp_millis_opt(&chrono::Local, ms).single());
+        let due = match last {
+            None => true,
+            Some(t) if t.date_naive() != now.date_naive() => true,
+            Some(t) => self.intentions.list().is_empty() && now - t >= chrono::Duration::hours(3),
+        };
+        if due && let Err(e) = std::fs::write(&path, now.timestamp_millis().to_string()) {
+            tracing::warn!("saving the planning time: {e}");
+        }
+        due
+    }
+
     /// Say what it is up to for `d` ("dancing"): shown on the controller's screen.
     pub fn set_doing(&self, what: &str, d: Duration) {
         *self.doing.lock().unwrap() = Some((what.to_string(), std::time::Instant::now() + d));
@@ -1054,6 +1077,21 @@ impl Robot {
                         image: None,
                     });
                 }
+            }
+            // Each day (or whenever it has none), a moment to make plans of its own.
+            if self.life.focused().is_none()
+                && self.life.activity_level() != crate::life::Activity::Quiet
+                && self.planning_due()
+            {
+                tracing::info!("planning moment for the agent");
+                return Ok(AgentEvent::Nudge {
+                    info: json!({
+                        "nudge": "morning",
+                        "plans_now": self.intentions.list().len(),
+                        "mood": self.mood.for_agent(),
+                    }),
+                    image: frame().await,
+                });
             }
             // Its own plans and diary wait for focus mode to end; plans also wait while quiet.
             if self.life.focused().is_none() {

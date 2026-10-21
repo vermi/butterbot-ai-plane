@@ -426,25 +426,18 @@ impl Life {
     fn idea(&self, s: &mut State, in_view: bool) -> String {
         let pick =
             |rng: &mut u64, list: &[&str]| list[next_rand(rng) as usize % list.len()].to_string();
-        let news = |rng: &mut u64| match self.cfg.interests.as_slice() {
-            [] => "share something interesting you read about recently".to_string(),
-            topics => format!(
-                "tell them about an interesting recent development in {} (look it up with web_search first): one sentence, the headline first",
-                topics[next_rand(rng) as usize % topics.len()]
-            ),
-        };
+
         let pets = (!self.cfg.pets.is_empty()).then(|| {
             format!(
                 "go and see what {} is up to (look around for them)",
                 self.cfg.pets[next_rand(&mut s.rng) as usize % self.cfg.pets.len()]
             )
         });
-        // (idea, weight): chat 3, news 2, the rest by level.
+        // (idea, weight): chat 3, the rest by level. (No headlines: volunteered news got tiresome.)
         let mut ideas: Vec<(String, u64)> = Vec::new();
         use Activity::*;
         if in_view {
             ideas.push((pick(&mut s.rng, CHAT), 3));
-            ideas.push((news(&mut s.rng), 2));
             match s.activity {
                 Quiet | Calm => ideas.extend([(REST_IN_VIEW.into(), 3), (LOOK.into(), 1)]),
                 Normal => ideas.extend([
@@ -570,7 +563,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn idle_chat_brings_up_their_interests() {
+    async fn idle_time_volunteers_no_headlines_or_jokes() {
         let life = Life::new(LifeConfig {
             interests: vec!["quantum computing".into()],
             ..cfg([60, 60], [60, 60])
@@ -583,7 +576,7 @@ mod tests {
             }
         }
         assert_eq!(ideas.len(), 40);
-        assert!(ideas.iter().any(|i| i.contains("quantum computing")));
+        assert!(ideas.iter().all(|i| !i.contains("quantum computing") && !i.contains("web_search")));
         assert!(ideas.iter().all(|i| !i.contains("joke")));
     }
 

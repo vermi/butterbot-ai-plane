@@ -46,11 +46,11 @@ const CHECK_EVERY: usize = 4 * FRAME;
 const START_PROB: f32 = 0.5;
 #[cfg_attr(not(feature = "stt"), allow(dead_code))]
 const START_FRAMES: usize = 4;
-/// ...and ends after END_FRAMES (0.5 s) in a row below END_PROB.
+/// ...and ends after END_FRAMES (1.5 s: people pause to think mid-sentence) in a row below END_PROB.
 #[cfg_attr(not(feature = "stt"), allow(dead_code))]
 const END_PROB: f32 = 0.35;
 #[cfg_attr(not(feature = "stt"), allow(dead_code))]
-const END_FRAMES: usize = 16;
+const END_FRAMES: usize = 47;
 /// Utterances with fewer speech frames (about 0.2 s) are coughs and clicks.
 #[cfg_attr(not(feature = "stt"), allow(dead_code))]
 const MIN_SPEECH_FRAMES: usize = 6;
@@ -400,6 +400,9 @@ impl Ears {
 struct Tracker {
     in_speech: bool,
     speech_frames: usize,
+    /// Quiet frames in a row since the last speech, counted across calls (the analysed window is
+    /// shorter than the pause that ends an utterance).
+    quiet_frames: usize,
 }
 
 #[cfg_attr(not(feature = "stt"), allow(dead_code))]
@@ -429,9 +432,15 @@ impl Tracker {
             }
             return Edge::None;
         }
-        self.speech_frames += speechy(tail(new_frames));
-        if probs.len() >= END_FRAMES && tail(END_FRAMES).iter().all(|p| *p < END_PROB) {
+        let new = tail(new_frames);
+        self.speech_frames += speechy(new);
+        match new.iter().rposition(|p| *p >= END_PROB) {
+            Some(i) => self.quiet_frames = new.len() - 1 - i,
+            None => self.quiet_frames += new.len(),
+        }
+        if self.quiet_frames >= END_FRAMES {
             self.in_speech = false;
+            self.quiet_frames = 0;
             return Edge::End {
                 keep: self.speech_frames >= MIN_SPEECH_FRAMES,
             };
@@ -682,13 +691,18 @@ mod tests {
         probs.drain(..4);
         probs.extend([0.9; 4]);
         assert_eq!(t.update(&probs, 4), Edge::None);
-        // Quiet for less than 0.5 s: still speaking (a pause between words).
-        probs.drain(..8);
-        probs.extend([0.1; 8]);
-        assert_eq!(t.update(&probs, 8), Edge::None);
-        probs.drain(..8);
-        probs.extend([0.1; 8]);
-        assert_eq!(t.update(&probs, 8), Edge::End { keep: true });
+        // Quiet for a second: still speaking (a pause to think).
+        for _ in 0..4 {
+            probs.drain(..8);
+            probs.extend([0.1; 8]);
+            assert_eq!(t.update(&probs, 8), Edge::None);
+        }
+        // Quiet for 1.5 s: done.
+        for _ in 0..2 {
+            probs.drain(..8);
+            probs.extend([0.1; 8]);
+        }
+        assert_eq!(t.update(&probs, 16), Edge::End { keep: true });
 
         // A single loud frame is not speech; a short blip is dropped.
         let mut t = Tracker::default();
@@ -698,6 +712,7 @@ mod tests {
         p[27..31].copy_from_slice(&[0.9; 4]);
         assert_eq!(t.update(&p, 4), Edge::Start);
         let p = vec![0.1f32; 31];
+        assert_eq!(t.update(&p, 31), Edge::None);
         assert_eq!(t.update(&p, 16), Edge::End { keep: false });
     }
 }

@@ -16,6 +16,8 @@ use crate::config::Config;
 
 const EVENT_LOG_LEN: usize = 1000;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+/// See `Hub::heal_speaker_flag`.
+const SPEAKER_STUCK: Duration = Duration::from_secs(20);
 /// Resend an unanswered request this often (lost datagrams).
 const RETRANSMIT: Duration = Duration::from_millis(400);
 
@@ -40,6 +42,9 @@ pub struct RobotStatus {
     pub battery: Option<Value>,
     pub proximity: Option<Value>,
     pub speaker_playing: bool,
+    /// When `speaker_playing` last turned on.
+    #[serde(skip)]
+    pub speaker_since: Option<std::time::Instant>,
     pub rtt_ms: Option<u64>,
     pub camera_streaming: bool,
     pub mic_streaming: bool,
@@ -61,6 +66,8 @@ struct Conn {
 }
 
 pub struct Hub {
+    /// When speaker audio last went to the robot (Unix ms).
+    last_speaker_tx: std::sync::atomic::AtomicU64,
     pub config: Config,
     conn: Mutex<Option<Conn>>,
     generation: AtomicU32,
@@ -90,6 +97,7 @@ pub fn now_ms() -> u64 {
 impl Hub {
     pub fn new(config: Config) -> Arc<Hub> {
         Arc::new(Hub {
+            last_speaker_tx: Default::default(),
             config,
             conn: Mutex::new(None),
             generation: AtomicU32::new(0),
@@ -161,6 +169,21 @@ impl Hub {
 
     // ---- outgoing ----
 
+    /// The robot reports its speaker stopping once, by datagram; if that is lost the flag stays on
+    /// (the face keeps talking, sound recognition stays paused). Turn it off when it has been on for
+    /// a while and nothing has been sent to the speaker lately.
+    pub async fn heal_speaker_flag(&self) {
+        let quiet_for = now_ms().saturating_sub(self.last_speaker_tx.load(Ordering::Relaxed));
+        let mut st = self.status.lock().await;
+        if st.speaker_playing
+            && st.speaker_since.is_some_and(|t| t.elapsed() >= SPEAKER_STUCK)
+            && quiet_for >= SPEAKER_STUCK.as_millis() as u64
+        {
+            tracing::info!("speaker still marked playing with nothing sent to it: clearing it");
+            st.speaker_playing = false;
+        }
+    }
+
     pub async fn send_frame(&self, frame: Frame) -> Result<()> {
         let tx = {
             let conn = self.conn.lock().await;
@@ -168,6 +191,9 @@ impl Hub {
                 .map(|c| c.tx.clone())
                 .ok_or_else(|| anyhow!("robot is not connected"))?
         };
+        if frame.ty == FrameType::SpkPcm {
+            self.last_speaker_tx.store(now_ms(), Ordering::Relaxed);
+        }
         tx.send(frame)
             .await
             .map_err(|_| anyhow!("robot link closed"))
@@ -365,7 +391,13 @@ impl Hub {
                 buffered_ms,
                 underruns,
             } => {
-                self.status.lock().await.speaker_playing = playing;
+                {
+                    let mut st = self.status.lock().await;
+                    if playing && !st.speaker_playing {
+                        st.speaker_since = Some(std::time::Instant::now());
+                    }
+                    st.speaker_playing = playing;
+                }
                 self.push_event("speaker", json!({ "playing": playing, "buffered_ms": buffered_ms, "underruns": underruns }))
                     .await;
             }

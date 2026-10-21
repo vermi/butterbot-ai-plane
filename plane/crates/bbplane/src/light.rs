@@ -160,6 +160,7 @@ pub async fn run(robot: Robot) {
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tick.tick().await;
+        robot.hub.heal_speaker_flag().await;
         // Sent again whenever the robot (re)enters AI mode: it starts from its own default.
         if !robot.hub.is_connected().await || robot.mode().await.as_deref() != Some("remote") {
             shown = None;

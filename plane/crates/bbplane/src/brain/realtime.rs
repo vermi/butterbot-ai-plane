@@ -17,6 +17,9 @@ use crate::control::{AgentEvent, Robot};
 
 /// The realtime API speaks 24 kHz PCM.
 const RATE: u32 = 24_000;
+/// Every reply processes the whole conversation, so it slows down as that grows: past this many
+/// tokens a fresh session starts at the next quiet moment (it gets a recap of what was said).
+const CONTEXT_LIMIT: u64 = 20_000;
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD;
 
 type Sink = futures::stream::SplitSink<
@@ -106,7 +109,12 @@ pub async fn session(robot: &Robot, state: &AgentState) -> Result<String> {
             continue;
         };
         state.log(format!("> {text}"));
-        add_message(&mut sink, &text, image.as_deref()).await?;
+        let mut pictures = Vec::new();
+        add_message(&mut sink, &text, None).await?;
+        if let Some(jpeg) = image.as_deref() {
+            pictures.push(add_picture(&mut sink, "(what your camera sees)", jpeg).await?);
+        }
+        let mut context = 0;
         // Something of its own (not someone talking to it): it decides in silence first, so an
         // action is not announced ("I'm going to look around..."). If it only wanted to talk,
         // what it wrote is then said; after an action it reports in the next response, or not.
@@ -120,7 +128,8 @@ pub async fn session(robot: &Robot, state: &AgentState) -> Result<String> {
             };
             send(&mut sink, create).await?;
             let silent = std::mem::take(&mut decide_silently);
-            let (calls, held) = respond(&mut events, robot, state, robot_voice, silent).await?;
+            let (calls, held, used) = respond(&mut events, robot, state, robot_voice, silent).await?;
+            context = context.max(used);
             if calls.is_empty() {
                 if silent && !held.trim().is_empty() {
                     say_decided(&mut sink, &mut events, robot, state, robot_voice, held.trim()).await?;
@@ -140,7 +149,7 @@ pub async fn session(robot: &Robot, state: &AgentState) -> Result<String> {
                     }
                     Outcome::Image(t, jpeg) => {
                         again = true;
-                        add_message(&mut sink, "(your camera)", Some(&jpeg)).await?;
+                        pictures.push(add_picture(&mut sink, "(your camera)", &jpeg).await?);
                         t
                     }
                     Outcome::Quiet => "ok".into(),
@@ -159,7 +168,47 @@ pub async fn session(robot: &Robot, state: &AgentState) -> Result<String> {
                 break;
             }
         }
+        // Pictures are the bulk of the context and only matter for the answer just given (which
+        // says what was in them).
+        for id in pictures {
+            send(
+                &mut sink,
+                json!({ "type": "conversation.item.delete", "item_id": id }),
+            )
+            .await?;
+        }
+        if context > CONTEXT_LIMIT && !robot.ears.window_open() {
+            state.log(format!("context at {context} tokens: starting fresh"));
+            return Ok("fresh session (context)".into());
+        }
     }
+}
+
+/// A picture as its own conversation item, so it can be deleted after use; returns its id.
+async fn add_picture(sink: &mut Sink, caption: &str, jpeg: &[u8]) -> Result<String> {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let id = format!(
+        "pic_{}_{}",
+        crate::hub::now_ms(),
+        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    send(
+        sink,
+        json!({
+            "type": "conversation.item.create",
+            "item": {
+                "id": id,
+                "type": "message",
+                "role": "user",
+                "content": [
+                    { "type": "input_text", "text": caption },
+                    { "type": "input_image", "image_url": super::picture_url(jpeg) },
+                ],
+            },
+        }),
+    )
+    .await?;
+    Ok(id)
 }
 
 /// Say what it decided to say in a silent response: in the robot's voice, or as an out-of-band
@@ -208,8 +257,9 @@ async fn respond(
     state: &AgentState,
     robot_voice: bool,
     silent: bool,
-) -> Result<(Vec<Call>, String)> {
+) -> Result<(Vec<Call>, String, u64)> {
     let mut speech = (robot_voice && !silent).then(|| super::Speech::start(robot));
+    let used: u64;
     let mut held = String::new();
     let hushes = robot.hush_count();
     let mut speaker = None;
@@ -258,6 +308,7 @@ async fn respond(
             "response.done" => {
                 let r = &v["response"];
                 state.add_usage(&r["usage"]);
+                used = r["usage"]["input_tokens"].as_u64().unwrap_or(0);
                 for item in r["output"].as_array().into_iter().flatten() {
                     if item["type"] == "function_call" {
                         calls.push(Call {
@@ -286,7 +337,7 @@ async fn respond(
         state.log(format!("< {}", said.trim()));
         robot.note_said(said.trim()).await;
     }
-    Ok((calls, held))
+    Ok((calls, held, used))
 }
 
 async fn send(sink: &mut Sink, v: Value) -> Result<()> {

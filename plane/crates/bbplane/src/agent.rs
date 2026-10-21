@@ -148,8 +148,8 @@ pub async fn with_context(robot: &Robot, persona: &str) -> String {
             owner.as_str()
         };
         owner_line.push_str(&format!(
-            "- {who} enjoy hearing about recent developments in: {}. When you start a chat, bring \
-up something new in these (look it up first) rather than jokes.",
+            "- {who} are into: {}. Keep that in mind when you talk with them, but don't volunteer \
+news or headlines unprompted; if they ask what's new, look it up.",
             interests.join(", ")
         ));
     }
