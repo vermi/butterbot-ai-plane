@@ -129,6 +129,8 @@ struct State {
     battery: Option<(u32, bool, Instant)>,
     session_started: Instant,
     activity: Activity,
+    /// How its mood stretches or shortens the waits (see `crate::mood`).
+    mood_pace: f64,
     rng: u64,
 }
 
@@ -156,6 +158,7 @@ impl Life {
             battery: None,
             session_started: Instant::now(),
             activity: cfg.activity,
+            mood_pace: 1.0,
             rng: seed,
         };
         reschedule(&cfg, &mut state);
@@ -185,6 +188,12 @@ impl Life {
         let mut s = self.state.lock().unwrap();
         s.activity = a;
         reschedule(&self.cfg, &mut s);
+    }
+
+    /// Its mood stretches (sleepy, sad) or shortens (bored, curious) the waits between its own
+    /// ideas, on top of the activity level.
+    pub fn set_mood_pace(&self, pace: f64) {
+        self.state.lock().unwrap().mood_pace = pace.clamp(0.3, 4.0);
     }
 
     /// Stay quiet (no nudges) for `d`, or until called by name.
@@ -350,7 +359,8 @@ impl Life {
             s.wait_in_view
         } else {
             s.wait_alone
-        };
+        }
+        .mul_f64(s.mood_pace);
         if quiet < due {
             return None;
         }

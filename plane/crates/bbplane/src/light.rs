@@ -125,6 +125,7 @@ pub fn state(robot: &Robot) -> State {
 /// What the handheld controller's top bar shows (see `ToRobot::AiStatus`).
 fn ai_status(robot: &Robot, s: State) -> ToRobot {
     use crate::life::Activity;
+    let mood = robot.mood.now();
     ToRobot::AiStatus {
         mode: match s {
             State::Listening => 1,
@@ -144,6 +145,9 @@ fn ai_status(robot: &Robot, s: State) -> ToRobot {
             .focused()
             .map(|d| d.as_secs().div_ceil(60).min(255) as u8)
             .unwrap_or(0),
+        emotion: mood.emotion.wire(),
+        // In tens: it fades a little all the time, and the face only needs a rough idea.
+        intensity: ((mood.intensity * 10.0).round() * 10.0) as u8,
     }
 }
 

@@ -226,6 +226,17 @@ pub struct ActivityArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct FeelArgs {
+    /// content, happy, excited, curious, playful, calm, sleepy, bored, sad, grumpy, surprised or
+    /// worried.
+    pub emotion: String,
+    /// 0.1 (a touch) to 1 (overwhelming); default 0.6.
+    pub intensity: Option<f32>,
+    /// A few words on why.
+    pub why: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RememberArgs {
     /// One short sentence worth knowing next time, with names.
     pub fact: String,
@@ -680,6 +691,28 @@ restarts. Use it when someone asks the robot to be livelier, calmer or quieter (
             }
             None => Err(McpError::invalid_params(
                 "level must be quiet, calm, normal or lively",
+                None,
+            )),
+        }
+    }
+
+    #[tool(
+        description = "Say how the robot feels now. It lasts (fading over an hour or so), comes back with every \
+event as `mood`, sets how soon its own ideas come, and shows on the controller's face."
+    )]
+    async fn feel(&self, Parameters(a): Parameters<FeelArgs>) -> Result<CallToolResult, McpError> {
+        match crate::mood::Emotion::parse(&a.emotion) {
+            Some(e) => {
+                self.robot.mood.feel(
+                    e,
+                    a.intensity.unwrap_or(0.6),
+                    a.why.as_deref().unwrap_or_default(),
+                );
+                ok_json(self.robot.mood.for_agent())
+            }
+            None => Err(McpError::invalid_params(
+                "emotion must be content, happy, excited, curious, playful, calm, sleepy, bored, \
+sad, grumpy, surprised or worried",
                 None,
             )),
         }

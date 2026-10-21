@@ -31,7 +31,7 @@
 struct LinkRequest {
 	enum class Type : uint8_t {
 		EnterRemote, ExitRemote, Drive, Stop, Say, SpkBegin, SpkEnd, SpkAbort, Volume,
-		Camera, Snapshot, Mic, Led, StatusLight, Phone, AiStatus, HomeInfo, Scenario, IrList, IrSend, Modules, Safety
+		Camera, Snapshot, Mic, Led, StatusLight, Phone, AiStatus, HomeInfo, Peek, Scenario, IrList, IrSend, Modules, Safety
 	} type = Type::Stop;
 
 	uint32_t id = 0;
@@ -61,7 +61,8 @@ struct LinkRequest {
 	uint32_t scenario = 0;
 	uint8_t arg = 0;
 	uint8_t index = 0;
-	std::string text;      // Say: what to say; Phone: the action
+	std::string text;      // Say: what to say; Phone: the action; Peek: the JPEG
+	std::string caption;   // Peek: what is in the picture
 };
 
 /**

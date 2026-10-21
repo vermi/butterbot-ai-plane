@@ -209,6 +209,8 @@ void RemoteState::tick(float deltaTime){
 		homeSentAt = millis();
 	}
 
+	relayPeek();
+
 	if(abortRequested || (linkDeadline != 0 && millis() > linkDeadline)){
 		// Without this the robot just went back to idle, and nobody could tell a short press had
 		// done anything at all.
@@ -353,7 +355,12 @@ void RemoteState::onRequest(LinkRequest req){
 				remoteIdle();
 			}
 			aiStatus = req.ai;
+			aiStatus.speaking = speaking; // the robot knows that one itself
 			sendAiStatus();
+			break;
+
+		case T::Peek:
+			peekFrame(std::move(req.text), req.caption);
 			break;
 
 		case T::HomeInfo:
@@ -532,7 +539,75 @@ void RemoteState::sendAiStatus(){
 void RemoteState::onRemoteConn(Com::ConnStatus status){
 	if(status == Com::ConnStatus::Connected){
 		sendAiStatus();
+	}else if(peeking){
+		peek(false);
 	}
+}
+
+void RemoteState::peek(bool on){
+	if(on == peeking){
+		return;
+	}
+	peeking = on;
+	peekJpeg.clear();
+	peekNext.clear();
+	peekCaption.clear();
+	// Shorter connection events while pictures go out (the phone shares them, briefly).
+	if(on){
+		ConMan.goHiPow();
+	}else{
+		ConMan.goLowPow();
+	}
+	sendRemote("scenario", ",\"scenario\":" + std::to_string((uint32_t) BB::Action::Scenario::AiPeek) +
+					 ",\"arg\":" + (on ? "1" : "0"));
+}
+
+void RemoteState::peekFrame(std::string jpeg, const std::string& caption){
+	if(!peeking || jpeg.empty()){
+		return;
+	}
+	if(caption != peekCaption){
+		peekCaption = caption;
+		if(Com* com = Application::getApp()->getService<Com>()){
+			com->sendData(BB::State::AI, BB::Action::AI::PeekCaption, PeekCaptionData{ .text = caption });
+		}
+	}
+	// Still sending the last one: this one goes next, replacing any older one waiting.
+	if(!peekJpeg.empty()){
+		peekNext = std::move(jpeg);
+		return;
+	}
+	peekJpeg = std::move(jpeg);
+	peekIndex = 0;
+	peekSeq++;
+}
+
+// One piece per tick (20 ms), which the Bluetooth link keeps up with next to Wi-Fi.
+void RemoteState::relayPeek(){
+	if(peekJpeg.empty()){
+		return;
+	}
+	Com* com = Application::getApp()->getService<Com>();
+	const size_t count = (peekJpeg.size() + PeekChunkHeader::MaxBytes - 1) / PeekChunkHeader::MaxBytes;
+	if(com == nullptr || count > 255){
+		peekJpeg.clear();
+		return;
+	}
+	const size_t offset = (size_t) peekIndex * PeekChunkHeader::MaxBytes;
+	const size_t len = std::min(PeekChunkHeader::MaxBytes, peekJpeg.size() - offset);
+	uint8_t buf[sizeof(PeekChunkHeader) + PeekChunkHeader::MaxBytes];
+	const PeekChunkHeader header{ .frame = peekSeq, .index = peekIndex, .count = (uint8_t) count };
+	memcpy(buf, &header, sizeof(header));
+	memcpy(buf + sizeof(header), peekJpeg.data() + offset, len);
+	com->sendData(BB::State::AI, BB::Action::AI::PeekChunk, sizeof(header) + len, buf);
+
+	if(++peekIndex < count){
+		return;
+	}
+	peekJpeg = std::move(peekNext);
+	peekNext.clear();
+	peekIndex = 0;
+	peekSeq++;
 }
 
 void RemoteState::remoteIdle(){
@@ -637,6 +712,10 @@ void RemoteState::onPhoneNotif(Phone::NotifEvent event){
 
 void RemoteState::onAudioStatus(bool playing){
 	speaking = playing;
+	if(aiStatus.speaking != playing){
+		aiStatus.speaking = playing; // the controller's face moves its mouth
+		sendAiStatus();
+	}
 	if(!playing){
 		speakingUntil = millis() + TalkingHoldMs;
 	}
@@ -730,6 +809,10 @@ namespace {
 void RemoteState::onRemoteScenario(BB::Action::Scenario scenario, ScenarioData data){
 	using S = BB::Action::Scenario;
 	const uint32_t id = static_cast<uint32_t>(scenario);
+	if(scenario == S::AiPeek){
+		peek(data.raw != 0);
+		return;
+	}
 	if(needsModels(id) || scenario == S::ReadNotifs || scenario == S::PhoneListNotifs || scenario >= S::AiSee){
 		sendRemote("scenario", ",\"scenario\":" + std::to_string(id) + ",\"arg\":" + std::to_string(data.raw));
 		remoteIdle(); // nothing for its screen: the agent answers out loud

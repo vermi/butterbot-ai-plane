@@ -47,6 +47,7 @@ struct BB {
 			WhatsThis,
 			// AI mode only (the controller lists them then); the laptop's agent handles them.
 			AiSee, AiNews, AiWeather, AiExplore, AiStory, AiFocus, AiActivity,
+			AiPeek, // the controller shows the camera (ScenarioData 1) or stops (0)
 		} scenario;
 
 		enum class Listen {
@@ -57,7 +58,9 @@ struct BB {
 		} remoteControl;
 
 		enum class AI {
-			Status
+			Status,
+			PeekChunk,   // part of a camera picture for the controller (PeekChunkHeader + JPEG bytes)
+			PeekCaption, // what is in the picture (PeekCaptionData)
 		} ai;
 	} action;
 
@@ -81,6 +84,41 @@ struct AIStatusData : BBData {
 		Quiet, Calm, Normal, Lively
 	} activity = Activity::Normal;
 	uint8_t focusMinutes = 0; // left in focus mode (255: more)
+	bool speaking = false;    // the robot is talking (it sets this itself)
+	uint8_t emotion = 0;      // its mood, in the plane's order: content, happy, excited, curious,
+	                          // playful, calm, sleepy, bored, sad, grumpy, surprised, worried
+	uint8_t intensity = 0;    // 0-100
+};
+
+/**
+ * The camera on the controller's screen in AI mode (Scenario::AiPeek): the plane shrinks frames
+ * to small JPEGs and the robot passes them on in pieces that each fit one notification.
+ */
+struct PeekChunkHeader {
+	static constexpr size_t MaxBytes = 460; // JPEG bytes after the header, per piece
+
+	uint8_t frame; // counts up per picture
+	uint8_t index;
+	uint8_t count;
+};
+
+struct PeekCaptionData : BBData {
+	static constexpr uint8_t MaxText = 64;
+
+	std::string text;
+
+	std::vector<uint8_t> serialize() const{
+		std::vector<uint8_t> buf;
+		ComSerial::writeString(buf, text, MaxText);
+		return buf;
+	}
+
+	static PeekCaptionData deserialize(const uint8_t* data, size_t size){
+		PeekCaptionData d;
+		const uint8_t* cur = data;
+		d.text = ComSerial::readString(cur, data + size);
+		return d;
+	}
 };
 
 /**
@@ -92,6 +130,7 @@ struct HomeInfoData : BBData {
 	static constexpr uint8_t MaxNext = 48;
 	static constexpr uint8_t MaxSeen = 32;
 	static constexpr uint8_t MaxSaid = 100;
+	static constexpr uint8_t MaxPlaying = 64;
 
 	uint8_t botPercent = 0;
 	bool clockSet = false;
@@ -103,6 +142,7 @@ struct HomeInfoData : BBData {
 	std::string seen;      // the latest thing noticed, "Saw Kiwi"
 	uint16_t seenSecs = 0; // how long ago
 	std::string said;      // the last thing it said
+	std::string playing;   // the phone's music, "Title - Artist" (any mode; empty unless playing)
 
 	std::vector<uint8_t> serialize() const{
 		std::vector<uint8_t> buf;
@@ -118,6 +158,7 @@ struct HomeInfoData : BBData {
 		ComSerial::writeU8(buf, seenSecs & 0xff);
 		ComSerial::writeU8(buf, seenSecs >> 8);
 		ComSerial::writeString(buf, said, MaxSaid);
+		ComSerial::writeString(buf, playing, MaxPlaying);
 		return buf;
 	}
 
@@ -137,6 +178,7 @@ struct HomeInfoData : BBData {
 		d.seenSecs = ComSerial::readU8(cur, end);
 		d.seenSecs |= ComSerial::readU8(cur, end) << 8;
 		d.said = ComSerial::readString(cur, end);
+		d.playing = ComSerial::readString(cur, end);
 		return d;
 	}
 };

@@ -30,6 +30,8 @@ private:
 	SignalElement* signalEl;
 	ShutUpElement* shutupEl;
 	lv_obj_t* aiLabel;
+	lv_obj_t* clockLabel;
+	uint64_t lastClock = 0;
 
 	void updateShutUpEl() const;
 	void updateAi(const std::vector<uint8_t>& data) const;

@@ -281,7 +281,10 @@ async fn handle(s: &mut Sim, f: Frame, tx: &mpsc::Sender<Frame>) -> Result<()> {
             tx.send(ack(id, Value::Null)).await?;
         }
         ToRobot::Led { id, .. } => tx.send(ack(id, Value::Null)).await?,
-        ToRobot::StatusLight(_) | ToRobot::AiStatus { .. } | ToRobot::HomeInfo { .. } => {}
+        ToRobot::StatusLight(_)
+        | ToRobot::AiStatus { .. }
+        | ToRobot::HomeInfo { .. }
+        | ToRobot::Peek { .. } => {}
         ToRobot::Phone { id, .. } => {
             tx.send(ack(
                 id,

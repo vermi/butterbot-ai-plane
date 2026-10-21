@@ -214,11 +214,14 @@ pub enum ToRobot {
     StatusLight(Rhythm),
     /// AI mode's state for the handheld controller's screen: `mode` 1 listening for the name,
     /// 2 in a conversation, 3 thinking, 4 focus, 5 no agent; `activity` 0 quiet .. 3 lively;
-    /// minutes left in focus mode. Not acknowledged.
+    /// minutes left in focus mode; its mood (`emotion` in `bbplane::mood::Emotion` order,
+    /// `intensity` 0-100). Not acknowledged.
     AiStatus {
         mode: u8,
         activity: u8,
         focus_minutes: u8,
+        emotion: u8,
+        intensity: u8,
     },
     /// The handheld controller's home screen in AI mode: the local `clock` (year, month 1-12,
     /// day, hour, minute, second; the robot sets its own clock from it), the next reminder, the
@@ -229,6 +232,12 @@ pub enum ToRobot {
         seen: String,
         seen_secs: u32,
         said: String,
+    },
+    /// A small camera picture for the handheld controller's screen (base64 JPEG) and what is in
+    /// it. Not acknowledged.
+    Peek {
+        jpeg: String,
+        caption: String,
     },
     /// Run a stock scenario routine (`BB::Action::Scenario` value + `ScenarioData.raw`).
     Scenario {
@@ -291,7 +300,8 @@ impl ToRobot {
             | Volume { .. }
             | StatusLight(_)
             | AiStatus { .. }
-            | HomeInfo { .. } => None,
+            | HomeInfo { .. }
+            | Peek { .. } => None,
         }
     }
 }

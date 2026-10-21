@@ -3,28 +3,31 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
-#include <ctime>
 #include <Util/stdafx.h>
 #include "Fonts/font.hpp"
 
 namespace {
-	// Rows, from the top of the 120x112 area under the top bar.
+	// The 120x112 area under the top bar: the face top left, a column beside it, lines below.
 	constexpr int32_t Width = 120;
-	constexpr int32_t ClockY = -1; // the clock font's digits are 33 px tall
-	constexpr int32_t DateY = 32;
-	constexpr int32_t BotY = 43;
-	constexpr int32_t CtrlY = 56;
-	constexpr int32_t BarGap = 8; // from a battery row to its bar
-	constexpr int32_t ModeY = 70;
-	constexpr int32_t NextY = 80;
-	constexpr int32_t SeenY = 90;
-	constexpr int32_t SaidY = 100;
+	constexpr int32_t ColX = 64;
+	constexpr int32_t ColW = Width - ColX;
+	constexpr int32_t MoodY = 2;
+	constexpr int32_t ModeY = 12;
+	constexpr int32_t ActivityY = 22;
+	constexpr int32_t BotY = 34;
+	constexpr int32_t CtrlY = 46;
+	constexpr int32_t BarGap = 8; // from a battery line to its bar
+	constexpr int32_t NextY = 65;
+	constexpr int32_t SeenY = 75;
+	constexpr int32_t SaidY = 86;
+	constexpr int32_t PlayingY = 97;
 
-	constexpr const char* Weekdays[] = { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
-	constexpr const char* Months[] = { "January", "February", "March", "April", "May", "June", "July", "August",
-									   "September", "October", "November", "December" };
+	// The plane's emotions (AIStatusData::emotion).
+	constexpr const char* Emotions[] = { "content", "happy", "excited", "curious", "playful", "calm", "sleepy",
+										 "bored", "sad", "grumpy", "surprised", "worried" };
+	constexpr const char* Activities[] = { "quiet", "calm", "normal", "lively" };
 
-	constexpr const char* Hints = "AI mode is off\nHold Override: drive\nPress the stick: menu";
+	constexpr const char* Hints = "Hold Override: drive\nPress the stick: menu\nSummon: listen, hold: come";
 }
 
 HomeDash::HomeDash(lv_obj_t* parent) : LVObject(parent){
@@ -37,9 +40,18 @@ HomeDash::HomeDash(lv_obj_t* parent) : LVObject(parent){
 }
 
 void HomeDash::loop(){
-	if(lv_obj_has_flag(*this, LV_OBJ_FLAG_HIDDEN) || millis() - lastRefresh < RefreshMs){
+	if(lv_obj_has_flag(*this, LV_OBJ_FLAG_HIDDEN)){
 		return;
 	}
+	face->loop();
+	if(millis() - lastRefresh >= RefreshMs){
+		refresh();
+	}
+}
+
+void HomeDash::showActivity(const AIStatusData::Activity level){
+	activityShown = level;
+	activityShownUntil = millis() + ActivityShowMs;
 	refresh();
 }
 
@@ -47,55 +59,30 @@ void HomeDash::refresh(){
 	lastRefresh = millis();
 	const HomeInfoData home = robotState->getHome();
 	const uint64_t homeAt = robotState->getHomeAt();
-	showClock(home, homeAt);
 	showBatteries(home, homeAt);
 	showAi(home, homeAt);
-}
 
-// The robot's clock (set from the phone or, in AI mode, the laptop), kept running here since it
-// was sent.
-void HomeDash::showClock(const HomeInfoData& home, const uint64_t homeAt){
-	if(homeAt == 0 || !home.clockSet){
-		lv_obj_add_flag(clock, LV_OBJ_FLAG_HIDDEN);
-		setText(date, homeAt == 0 ? "" : "The clock is not set yet");
-		return;
-	}
-	tm t{};
-	t.tm_year = home.year - 1900;
-	t.tm_mon = home.month - 1;
-	t.tm_mday = home.day;
-	t.tm_hour = home.hour;
-	t.tm_min = home.minute;
-	t.tm_sec = home.second;
-	// No time zone is set here, so this round trip only does the calendar arithmetic.
-	const time_t now = mktime(&t) + (time_t) ((millis() - homeAt) / 1000);
-	localtime_r(&now, &t);
-
-	char text[32];
-	snprintf(text, sizeof(text), "%d:%02d", t.tm_hour, t.tm_min);
-	setText(clock, text);
-	lv_obj_remove_flag(clock, LV_OBJ_FLAG_HIDDEN);
-	snprintf(text, sizeof(text), "%s %d %s", Weekdays[t.tm_wday % 7], t.tm_mday, Months[t.tm_mon % 12]);
-	setText(date, text);
+	const std::string music = home.playing.empty() ? "" : "Playing: " + home.playing;
+	setText(playing, music.c_str());
 }
 
 void HomeDash::showBatteries(const HomeInfoData& home, const uint64_t homeAt){
 	char text[24];
 	if(homeAt == 0){
-		setText(botPct, "...");
+		setText(botPct, "Bot ...");
 		setBar(botBar, 0);
 	}else{
 		switch(robotState->getChargeState()){
-			case ChargeStatus::Charging: snprintf(text, sizeof(text), "charging %u%%", home.botPercent); break;
-			case ChargeStatus::Full: snprintf(text, sizeof(text), "full"); break;
-			default: snprintf(text, sizeof(text), "%u%%", home.botPercent); break;
+			case ChargeStatus::Charging: snprintf(text, sizeof(text), "Bot %u%% chg", home.botPercent); break;
+			case ChargeStatus::Full: snprintf(text, sizeof(text), "Bot full"); break;
+			default: snprintf(text, sizeof(text), "Bot %u%%", home.botPercent); break;
 		}
 		setText(botPct, text);
 		setBar(botBar, robotState->getChargeState() == ChargeStatus::Full ? 100 : home.botPercent);
 	}
 
 	const uint8_t own = battery ? battery->getPerc() : 0;
-	snprintf(text, sizeof(text), "%u%%", own);
+	snprintf(text, sizeof(text), "Remote %u%%", own);
 	setText(ctrlPct, text);
 	setBar(ctrlBar, own);
 }
@@ -103,26 +90,36 @@ void HomeDash::showBatteries(const HomeInfoData& home, const uint64_t homeAt){
 void HomeDash::showAi(const HomeInfoData& home, const uint64_t homeAt){
 	const bool ai = robotState->isAi();
 	lv_obj_update_flag(hints, LV_OBJ_FLAG_HIDDEN, ai);
-	for(lv_obj_t* l : { mode, activity, next, seen, seenAge, said }){
+	for(lv_obj_t* l : { next, seen, seenAge, said }){
 		lv_obj_update_flag(l, LV_OBJ_FLAG_HIDDEN, !ai);
 	}
 	if(!ai){
+		setText(mood, "");
+		setText(mode, "AI mode off");
+		setText(activity, "");
+		lv_obj_set_style_bg_opa(activity, LV_OPA_TRANSP, 0);
 		return;
 	}
 
-	using M = AIStatusData::Mode;
+	// His mood, faint when it is faint
+	const uint8_t emotion = robotState->getAiEmotion();
+	const uint8_t strength = robotState->getAiIntensity();
 	char text[48];
+	snprintf(text, sizeof(text), "%s%s", strength >= 70 ? "very " : "", emotion < std::size(Emotions) ? Emotions[emotion] : "");
+	setText(mood, text);
+
+	using M = AIStatusData::Mode;
 	switch(robotState->getAiMode()){
-		case M::Listening: snprintf(text, sizeof(text), "Listening"); break;
-		case M::Attentive: snprintf(text, sizeof(text), "Chatting"); break;
-		case M::Thinking: snprintf(text, sizeof(text), "Thinking..."); break;
-		case M::NoBrain: snprintf(text, sizeof(text), "No agent running"); break;
+		case M::Listening: snprintf(text, sizeof(text), "listening"); break;
+		case M::Attentive: snprintf(text, sizeof(text), "chatting"); break;
+		case M::Thinking: snprintf(text, sizeof(text), "thinking..."); break;
+		case M::NoBrain: snprintf(text, sizeof(text), "no agent"); break;
 		case M::Focus: {
 			const uint8_t m = robotState->getAiFocusMinutes();
 			if(m == 0 || m == 255){
-				snprintf(text, sizeof(text), "Focus mode");
+				snprintf(text, sizeof(text), "focus");
 			}else{
-				snprintf(text, sizeof(text), "Focus, %u min left", m);
+				snprintf(text, sizeof(text), "focus %um", m);
 			}
 			break;
 		}
@@ -130,17 +127,22 @@ void HomeDash::showAi(const HomeInfoData& home, const uint64_t homeAt){
 	}
 	setText(mode, text);
 
-	using A = AIStatusData::Activity;
-	switch(robotState->getAiActivity()){
-		case A::Quiet: setText(activity, "quiet"); break;
-		case A::Calm: setText(activity, "calm"); break;
-		case A::Normal: setText(activity, "normal"); break;
-		case A::Lively: setText(activity, "lively"); break;
-	}
+	// The activity level, shown inverted for a moment after the joystick changed it
+	const bool flash = millis() < activityShownUntil;
+	const auto level = (uint8_t) (flash ? activityShown : robotState->getAiActivity());
+	snprintf(text, sizeof(text), "pace: %s", level < std::size(Activities) ? Activities[level] : "");
+	setText(activity, text);
+	lv_obj_set_style_bg_opa(activity, flash ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+	lv_obj_set_style_text_color(activity, flash ? theme->getTertiaryColor() : theme->getSecondaryColor(), 0);
 
 	const std::string nextText = home.next.empty() ? "No reminders" : "Next " + home.next;
 	setText(next, nextText.c_str());
 
+	// A new sighting: he looks surprised for a moment.
+	if(!home.seen.empty() && home.seen != lastSeen && !lastSeen.empty() && home.seenSecs < 30){
+		face->startled();
+	}
+	lastSeen = home.seen;
 	setText(seen, home.seen.c_str());
 	text[0] = 0;
 	if(!home.seen.empty()){
@@ -173,21 +175,18 @@ void HomeDash::buildUI(){
 	const lv_color_t prim = theme->getPrimaryColor();
 	const lv_color_t second = theme->getSecondaryColor();
 
-	clock = addLabel(0, ClockY, Width, LV_TEXT_ALIGN_CENTER, prim);
-	lv_obj_set_style_text_font(clock, &lv_font_butter_clock, 0);
-	lv_obj_set_style_text_letter_space(clock, 2, 0);
-	lv_obj_set_height(clock, 33);
-	date = addLabel(0, DateY, Width, LV_TEXT_ALIGN_CENTER, prim);
+	face = new BotFace(*this);
+	lv_obj_set_pos(*face, 0, 0);
 
-	lv_label_set_text_static(addLabel(0, BotY, 60, LV_TEXT_ALIGN_LEFT, second), "Butter Bot");
-	botPct = addLabel(50, BotY, 70, LV_TEXT_ALIGN_RIGHT, prim);
-	botBar = addBar(BotY + BarGap);
-	lv_label_set_text_static(addLabel(0, CtrlY, 60, LV_TEXT_ALIGN_LEFT, second), "Remote");
-	ctrlPct = addLabel(50, CtrlY, 70, LV_TEXT_ALIGN_RIGHT, prim);
-	ctrlBar = addBar(CtrlY + BarGap);
+	mood = addLabel(ColX, MoodY, ColW, LV_TEXT_ALIGN_LEFT, prim);
+	mode = addLabel(ColX, ModeY, ColW, LV_TEXT_ALIGN_LEFT, second);
+	activity = addLabel(ColX, ActivityY, ColW, LV_TEXT_ALIGN_LEFT, second);
+	lv_obj_set_style_bg_color(activity, prim, 0);
+	botPct = addLabel(ColX, BotY, ColW, LV_TEXT_ALIGN_LEFT, prim);
+	botBar = addBar(ColX, BotY + BarGap, ColW);
+	ctrlPct = addLabel(ColX, CtrlY, ColW, LV_TEXT_ALIGN_LEFT, prim);
+	ctrlBar = addBar(ColX, CtrlY + BarGap, ColW);
 
-	mode = addLabel(0, ModeY, 90, LV_TEXT_ALIGN_LEFT, prim);
-	activity = addLabel(80, ModeY, 40, LV_TEXT_ALIGN_RIGHT, second);
 	next = addLabel(0, NextY, Width, LV_TEXT_ALIGN_LEFT, prim);
 	lv_label_set_long_mode(next, LV_LABEL_LONG_DOT);
 	seen = addLabel(0, SeenY, 100, LV_TEXT_ALIGN_LEFT, prim);
@@ -195,8 +194,10 @@ void HomeDash::buildUI(){
 	seenAge = addLabel(100, SeenY, 20, LV_TEXT_ALIGN_RIGHT, second);
 	said = addLabel(0, SaidY, Width, LV_TEXT_ALIGN_LEFT, second);
 	lv_label_set_long_mode(said, LV_LABEL_LONG_SCROLL_CIRCULAR);
+	playing = addLabel(0, PlayingY, Width, LV_TEXT_ALIGN_LEFT, second);
+	lv_label_set_long_mode(playing, LV_LABEL_LONG_DOT);
 
-	hints = addLabel(0, ModeY, Width, LV_TEXT_ALIGN_LEFT, second);
+	hints = addLabel(0, NextY, Width, LV_TEXT_ALIGN_LEFT, second);
 	lv_obj_set_height(hints, LV_SIZE_CONTENT);
 	lv_label_set_long_mode(hints, LV_LABEL_LONG_WRAP);
 	lv_obj_set_style_text_line_space(hints, 3, 0);
@@ -211,14 +212,14 @@ lv_obj_t* HomeDash::addLabel(const int32_t x, const int32_t y, const int32_t w, 
 	lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
 	lv_obj_set_size(l, w, 8);
 	lv_obj_set_pos(l, x, y);
-	lv_label_set_text_static(l, "");
+	lv_label_set_text(l, "");
 	return l;
 }
 
-lv_obj_t* HomeDash::addBar(const int32_t y){
+lv_obj_t* HomeDash::addBar(const int32_t x, const int32_t y, const int32_t w){
 	lv_obj_t* b = lv_bar_create(*this);
-	lv_obj_set_size(b, Width, 2);
-	lv_obj_set_pos(b, 0, y);
+	lv_obj_set_size(b, w, 2);
+	lv_obj_set_pos(b, x, y);
 	lv_bar_set_range(b, 0, 100);
 	lv_obj_set_style_radius(b, 0, LV_PART_MAIN);
 	lv_obj_set_style_radius(b, 0, LV_PART_INDICATOR);

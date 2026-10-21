@@ -82,6 +82,7 @@ pub const SCENARIOS: &[&str] = &[
     "ai_story",
     "ai_focus",
     "ai_activity",
+    "ai_peek",
 ];
 
 /// Scenarios that load on-robot speech/vision models; the firmware refuses them in AI mode
@@ -167,7 +168,7 @@ mod tests {
 
     #[test]
     fn names_match_enum_order() {
-        assert_eq!(SCENARIOS.len(), 48);
+        assert_eq!(SCENARIOS.len(), 49);
         assert_eq!(scenario_id("whats_this"), Some(40));
         assert_eq!(scenario_id("dance"), Some(10));
         assert_eq!(IDLE_ACTIONS.len(), 25);

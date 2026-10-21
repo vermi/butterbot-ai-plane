@@ -66,6 +66,7 @@
 #include "Components/HomeWindows/HoldPopupWindow.h"
 #include "RCScreen.h"
 #include "Util/WiFiAccessPoint.h"
+#include "Periph/Joystick.h"
 
 static constexpr const char* TAG = "HomeScreen";
 
@@ -121,6 +122,8 @@ HomeScreen::HomeScreen(){
 HomeScreen::~HomeScreen(){
 	LVGL* lvgl = Object::getApp()->getService<LVGL>();
 
+	closePeek(); // the robot stops sending pictures
+
 	lv_anim_delete(activeWindow, nullptr);
 	com->onData.unbind(lvgl);
 	com->onConnStatus.unbind(lvgl);
@@ -134,6 +137,15 @@ HomeScreen::~HomeScreen(){
 void HomeScreen::handleButtonEvent(const Button btn, const ButtonInput::Action action){
 	// All input is disabled while waiting for the RC feed to start
 	if(rcWaitStartTime != 0){
+		return;
+	}
+
+	// The camera view closes on any button, which then does nothing else
+	if(peek != nullptr){
+		if(action == ButtonInput::Action::Press){
+			closePeek();
+			actionDismissBtn = btn;
+		}
 		return;
 	}
 
@@ -190,6 +202,7 @@ void HomeScreen::handleButtonEvent(const Button btn, const ButtonInput::Action a
 
 	if(btn == Button::Poke){
 		com->sendCommand(Ctrl::Command::Poke);
+		dash->getFace()->poked();
 	} else if(btn == Button::Summon){
 		if(summonPressTime != 0 && millis() - summonPressTime < SummonShortPressMaxMs && listenSendCount < MaxListenSends){
 			com->sendCommand(Ctrl::Command::Listen);
@@ -239,9 +252,16 @@ void HomeScreen::loop(){
 
 	// Show the dashboard only when nothing else is on screen
 	const bool busy = activeWindow != nullptr || animActive || !windowQueue.empty() || clearPending || popup != nullptr ||
-		actionElement != nullptr || rcWaitStartTime != 0;
+		actionElement != nullptr || rcWaitStartTime != 0 || peek != nullptr;
 	lv_obj_update_flag(*dash, LV_OBJ_FLAG_HIDDEN, busy);
 	dash->loop();
+
+	if(peek != nullptr && (millis() - peekOpenedAt >= PeekMaxMs || !robotState->isAi())){
+		closePeek();
+	}
+	if(actionElement == nullptr){
+		handleStick();
+	}
 
 	// Show hold popup if btn held past the short-press window
 	if(summonHoldEnabled && summonPressTime != 0 && popup == nullptr && millis() - summonPressTime >= SummonShortPressMaxMs){
@@ -261,6 +281,76 @@ void HomeScreen::loop(){
 	if(overrideHintShownAt != 0 && millis() - overrideHintShownAt >= OverrideHintDurationMs){
 		clearPopupFor(Button::ManualOverride);
 	}
+}
+
+void HomeScreen::handleStick(){
+	const Joystick* joystick = Object::getApp()->getDevice<Joystick>();
+	if(joystick == nullptr){
+		return;
+	}
+	const int h = joystick->getHorizontal();
+	const int v = joystick->getVertical();
+	if(stickPushed){
+		stickPushed = std::abs(h) >= StickRest || std::abs(v) >= StickRest;
+		return;
+	}
+	if(std::abs(h) < StickPush && std::abs(v) < StickPush){
+		return;
+	}
+	stickPushed = true;
+
+	if(peek != nullptr){
+		closePeek();
+		return;
+	}
+	// Only on the plain home screen, in AI mode
+	if(lv_obj_has_flag(*dash, LV_OBJ_FLAG_HIDDEN) || !robotState->isAi()){
+		return;
+	}
+	if(std::abs(v) >= std::abs(h)){
+		if(v > 0){
+			openPeek();
+		}
+	}else{
+		stepActivity(h > 0 ? 1 : -1);
+	}
+}
+
+void HomeScreen::openPeek(){
+	if(peek != nullptr){
+		return;
+	}
+	peek = new PeekView(*this);
+	peekOpenedAt = millis();
+	ScenarioData data{};
+	data.raw = 1;
+	com->sendScenario(BB::Action::Scenario::AiPeek, data);
+}
+
+void HomeScreen::closePeek(){
+	if(peek == nullptr){
+		return;
+	}
+	delete peek;
+	peek = nullptr;
+	ScenarioData data{};
+	data.raw = 0;
+	com->sendScenario(BB::Action::Scenario::AiPeek, data);
+}
+
+void HomeScreen::stepActivity(const int step){
+	using A = AIStatusData::Activity;
+	const A from = millis() - askedActivityAt < 3000 ? askedActivity : robotState->getAiActivity();
+	const int to = std::clamp((int) from + step, (int) A::Quiet, (int) A::Lively);
+	askedActivity = (A) to;
+	askedActivityAt = millis();
+	dash->showActivity(askedActivity);
+	if(to == (int) from){
+		return;
+	}
+	ScenarioData data{};
+	data.raw = (uint8_t) to | 0x80; // bit 7: quietly (the screen shows it)
+	com->sendScenario(BB::Action::Scenario::AiActivity, data);
 }
 
 void HomeScreen::startRC(){
@@ -289,6 +379,15 @@ void HomeScreen::handleDataEvent(const BB::State state, const BB::Action action,
 
 	if(state == BB::State::RC){
 		return;
+	}
+
+	// The camera view's pictures and caption
+	if(state == BB::State::AI && peek != nullptr){
+		if(action.ai == BB::Action::AI::PeekChunk){
+			peek->onChunk(data);
+		}else if(action.ai == BB::Action::AI::PeekCaption){
+			peek->onCaption(data);
+		}
 	}
 
 	// AI mode's status is for the top bar (and the action list), the home info for the dashboard;

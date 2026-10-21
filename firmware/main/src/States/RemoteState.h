@@ -93,6 +93,17 @@ private:
 	// The controller's home screen (see HomeInfo): refreshed with the plane's news and every minute.
 	uint64_t homeSentAt = 0;
 	static constexpr uint64_t HomeRefreshMs = 60000;
+	// The camera on the controller's screen: the plane sends small JPEGs while it is open, and they
+	// go out over Bluetooth one piece per tick. A newer picture replaces one still waiting.
+	bool peeking = false;
+	std::string peekJpeg;   // being sent
+	std::string peekNext;   // waiting
+	std::string peekCaption;
+	uint8_t peekSeq = 0;
+	uint8_t peekIndex = 0;
+	void peek(bool on);
+	void peekFrame(std::string jpeg, const std::string& caption);
+	void relayPeek();
 	// The controller shows its listening window after Summon's short press, until the agent has
 	// the command (or a while has passed).
 	bool remoteListening = false;

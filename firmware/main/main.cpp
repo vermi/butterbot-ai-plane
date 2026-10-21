@@ -280,7 +280,10 @@ protected:
 		srand(esp_random());
 
 		auto com = registerService<Com>(server, /*internalStack=*/false);
-		registerService<Phone>(server, client);
+		Phone* phone = registerService<Phone>(server, client);
+		// The home screen on the controller shows the music.
+		phone->onMediaInfoEvent.bind(this, [](MediaInfo){ HomeInfo::send(); });
+		phone->onMediaStateEvent.bind(this, [](MediaState){ HomeInfo::send(); });
 
 		com->OnConnStatus.bind(this, &Butterbot::onConnStatus);
 		com->OnCommand.bind(this, &Butterbot::onCommand);

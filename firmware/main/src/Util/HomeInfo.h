@@ -18,7 +18,8 @@ void clearAi();
 /** Set the robot's clock from the plane's when it is unset or more than a few seconds off. */
 void syncClock(const HomeInfoData& plane);
 
-/** Send it all to the controller (a no-op while none is connected). */
+/** Send it all to the controller (a no-op while none is connected). Also sent when the phone's
+ *  music changes. */
 void send();
 
 }

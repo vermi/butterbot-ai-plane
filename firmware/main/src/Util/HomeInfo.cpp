@@ -5,6 +5,7 @@
 #include <Core/Application.h>
 #include <Util/stdafx.h>
 #include "Battery/Battery.h"
+#include "Phone/Phone.h"
 #include "Services/Com.h"
 #include "Services/Time.h"
 
@@ -12,6 +13,18 @@ namespace {
 	std::mutex lock;
 	HomeInfoData news;
 	uint64_t newsAt = 0; // when the plane sent it (seenSecs counts from then)
+
+	/** `s` without bytes outside ASCII: the controller's font has nothing else. */
+	std::string ascii(const std::string& s){
+		std::string out;
+		out.reserve(s.size());
+		for(const char c : s){
+			if((unsigned char) c >= 0x20 && (unsigned char) c < 0x7f){
+				out += c;
+			}
+		}
+		return out;
+	}
 
 	/** Local time fields as a time_t (the robot keeps local time; the C library has no zone set). */
 	time_t toTime(tm t){
@@ -72,6 +85,11 @@ void HomeInfo::send(){
 
 	if(const Battery* battery = app->getService<Battery>()){
 		d.botPercent = (uint8_t) std::clamp(battery->getPerc(), 0.0f, 100.0f);
+	}
+
+	if(Phone* phone = app->getService<Phone>(); phone != nullptr && phone->getMediaState() == MediaState::Playing){
+		const MediaInfo media = phone->getMedia();
+		d.playing = ascii(media.artist.empty() ? media.title : media.title + " - " + media.artist);
 	}
 
 	if(Time* time = app->getService<Time>(); time != nullptr && time->isConfigured()){

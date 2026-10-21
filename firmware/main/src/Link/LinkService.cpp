@@ -2,6 +2,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cJSON.h>
+#include <mbedtls/base64.h>
 #include <esp_heap_caps.h>
 #include <esp_mac.h>
 #include <esp_wifi.h>
@@ -81,6 +82,7 @@ namespace {
 		{ "phone", LinkRequest::Type::Phone },
 		{ "ai_status", LinkRequest::Type::AiStatus },
 		{ "home_info", LinkRequest::Type::HomeInfo },
+		{ "peek", LinkRequest::Type::Peek },
 		{ "scenario", LinkRequest::Type::Scenario },
 		{ "ir_list", LinkRequest::Type::IrList },
 		{ "ir_send", LinkRequest::Type::IrSend },
@@ -797,6 +799,8 @@ void LinkService::handleCtrl(const char* json, size_t len){
 		req.ai.mode = static_cast<AIStatusData::Mode>(std::clamp<double>(num(root, "mode", 0), 0, 5));
 		req.ai.activity = static_cast<AIStatusData::Activity>(std::clamp<double>(num(root, "activity", 2), 0, 3));
 		req.ai.focusMinutes = static_cast<uint8_t>(std::clamp<double>(num(root, "focus_minutes", 0), 0, 255));
+		req.ai.emotion = static_cast<uint8_t>(std::clamp<double>(num(root, "emotion", 0), 0, 11));
+		req.ai.intensity = static_cast<uint8_t>(std::clamp<double>(num(root, "intensity", 0), 0, 100));
 	}
 	if(req.type == T::HomeInfo){
 		// clock: [year, month 1-12, day, hour, minute, second], local time
@@ -819,7 +823,22 @@ void LinkService::handleCtrl(const char* json, size_t len){
 		if(const char* v = str(root, "said")) req.home.said = v;
 		req.home.seenSecs = static_cast<uint16_t>(std::clamp<double>(num(root, "seen_secs", 0), 0, UINT16_MAX));
 	}
-	if(const char* text = str(root, req.type == T::Phone ? "action" : "text")){
+	if(req.type == T::Peek){
+		// A small JPEG for the controller's screen, base64 in the JSON.
+		if(const char* b64 = str(root, "jpeg")){
+			const size_t len = strlen(b64);
+			req.text.resize(len * 3 / 4 + 3);
+			size_t out = 0;
+			if(mbedtls_base64_decode((unsigned char*) req.text.data(), req.text.size(), &out, (const unsigned char*) b64, len) == 0){
+				req.text.resize(out);
+			}else{
+				req.text.clear();
+			}
+		}
+		if(const char* caption = str(root, "caption")){
+			req.caption = caption;
+		}
+	}else if(const char* text = str(root, req.type == T::Phone ? "action" : "text")){
 		req.text = text;
 	}
 	cJSON_Delete(root);

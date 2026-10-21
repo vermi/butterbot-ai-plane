@@ -47,6 +47,10 @@ pub struct Robot {
     pub life: Arc<crate::life::Life>,
     pub agent: Arc<crate::agent::AgentState>,
     pub light: Arc<crate::light::Light>,
+    /// The camera on the controller's screen.
+    pub peek: Arc<crate::peek::Peek>,
+    /// How it feels (see `crate::mood`).
+    pub mood: Arc<crate::mood::Mood>,
     /// Serialises wake attempts: many tool calls / clicks share one BLE wake.
     wake_lock: Arc<Mutex<()>>,
     speaker: Arc<Mutex<Option<CancellationToken>>>,
@@ -105,10 +109,12 @@ impl Robot {
             sounds: Arc::new(crate::sounds::Sounds::new(&hub)),
             reminders: Arc::new(crate::reminders::Reminders::load(&hub.config.data_dir())),
             memory: Arc::new(crate::memory::Memory::load(&hub.config.data_dir())),
+            mood: Arc::new(crate::mood::Mood::load(&hub.config.data_dir())),
             ears: Arc::new(crate::ears::Ears::new(hub.clone())),
             life: Arc::new(crate::life::Life::new(hub.config.life.clone())),
             agent: Default::default(),
             light: Default::default(),
+            peek: Default::default(),
             streams: Arc::new(Mutex::new(Streams::defaults(&hub.config))),
             hub,
             wake_lock: Default::default(),
@@ -678,6 +684,11 @@ goodbye). Say bye and keep listening."
     pub async fn hush(&self) {
         self.hushes
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.mood.appraise(
+            crate::mood::Emotion::Sad,
+            0.25,
+            "I was told to stop talking",
+        );
         if let Err(e) = self.stop_audio().await {
             tracing::debug!("hush: {e:#}");
         }
@@ -847,6 +858,47 @@ impl Robot {
     /// The next thing for the agent: a command (see `Ears`), a nudge (see `Life`), the end of
     /// its session, or nothing within `timeout`. `include_image`: attach the camera frame to a
     /// command (default: only when it is about seeing).
+    /// How what just happened moves its mood (unless it feels something stronger already).
+    fn appraise(&self, n: &crate::life::Nudge, company: bool) {
+        use crate::life::Nudge;
+        use crate::mood::Emotion::*;
+        let pets = &self.hub.config.life.pets;
+        let (e, i, why) = match n {
+            Nudge::Arrived { name } if name.eq_ignore_ascii_case(self.life.owner()) => {
+                (Happy, 0.7, format!("{name} is here"))
+            }
+            Nudge::Arrived { name } => (Happy, 0.55, format!("{name} is here")),
+            Nudge::Noticed { what } if !pets.is_empty() && crate::objects::is_animal(what) => {
+                let pet = pets[0].split(',').next().unwrap_or_default().trim();
+                (Happy, 0.5, format!("saw {pet}"))
+            }
+            Nudge::Noticed { what } => (Curious, 0.45, format!("spotted a {what}")),
+            Nudge::Heard { what } if crate::sounds::ALARMS.contains(&what.as_str()) => {
+                (Worried, 0.8, format!("heard: {what}"))
+            }
+            Nudge::Heard { what } => (Curious, 0.35, format!("heard: {what}")),
+            Nudge::Poked => (Surprised, 0.4, "got poked".into()),
+            Nudge::Handled { how } => match how.as_str() {
+                "pickup" => (Surprised, 0.5, "picked up".into()),
+                "shake" => (Grumpy, 0.55, "got shaken".into()),
+                "fall" | "upside_down" => (Worried, 0.6, format!("{}", how.replace('_', " "))),
+                _ => return,
+            },
+            Nudge::Battery {
+                plugged_in: false, ..
+            } => (Sleepy, 0.5, "battery is low".into()),
+            Nudge::Battery { .. } => (Content, 0.5, "charging".into()),
+            Nudge::Call { from } => (Excited, 0.35, format!("{from} is calling")),
+            Nudge::Idle {
+                quiet_for_minutes, ..
+            } if *quiet_for_minutes >= 60 && !company => {
+                (Bored, 0.45, "nothing has happened for a while".into())
+            }
+            Nudge::Idle { .. } => return,
+        };
+        self.mood.appraise(e, i, &why);
+    }
+
     pub async fn next_event(
         &self,
         timeout: Duration,
@@ -874,6 +926,14 @@ impl Robot {
                         .any(|n| n.eq_ignore_ascii_case(&owner))
                         .into();
                 }
+                {
+                    use crate::mood::Emotion;
+                    if matches!(self.mood.now().emotion, Emotion::Bored | Emotion::Sad) {
+                        self.mood
+                            .appraise(Emotion::Happy, 0.4, "someone talked to me");
+                    }
+                }
+                info["mood"] = self.mood.for_agent();
                 let image = if want_image { frame().await } else { None };
                 self.light.thinking();
                 return Ok(AgentEvent::Command { info, image });
@@ -910,7 +970,9 @@ impl Robot {
                     serde_json::to_string(&n).unwrap_or_default(),
                     seen.len()
                 );
+                self.appraise(&n, company);
                 let mut info = serde_json::to_value(&n).unwrap_or_default();
+                info["mood"] = self.mood.for_agent();
                 let names: Vec<String> = seen
                     .iter()
                     .map(|s| s.name.clone().unwrap_or_else(|| "someone".into()))
@@ -1099,6 +1161,14 @@ async fn remote_button(robot: &Robot, data: &Value) {
             let arg = data["arg"].as_u64().unwrap_or(0);
             // AI mode's own menu entries that need no agent.
             match name {
+                "ai_peek" => {
+                    if arg == 1 {
+                        robot.peek.start(robot.clone());
+                    } else {
+                        robot.peek.stop();
+                    }
+                    return;
+                }
                 "ai_focus" => {
                     let minutes = robot.hub.config.life.default_focus_minutes;
                     robot.focus(Duration::from_secs(minutes * 60));
@@ -1112,10 +1182,14 @@ async fn remote_button(robot: &Robot, data: &Value) {
                         Activity::Normal,
                         Activity::Lively,
                     ]
-                    .get(arg as usize)
+                    .get((arg & 0x03) as usize)
                     .copied()
                     .unwrap_or_default();
                     robot.set_activity(level);
+                    // The joystick's quick change (bit 7) shows on the screen; it says nothing.
+                    if arg & 0x80 != 0 {
+                        return;
+                    }
                     let text = format!("Activity: {}.", level.name());
                     if let Err(e) = robot.say(&text, Some("robot"), false).await {
                         tracing::debug!("activity: {e:#}");

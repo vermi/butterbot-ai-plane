@@ -37,6 +37,8 @@ pub async fn run(robot: Robot) {
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tick.tick().await;
+        // Its mood fades: keep the pace of its own ideas in step.
+        robot.life.set_mood_pace(robot.mood.pace());
         // Sent again whenever the robot (re)enters AI mode: it forgets the news when it leaves.
         if !robot.hub.is_connected().await || robot.mode().await.as_deref() != Some("remote") {
             sent = None;

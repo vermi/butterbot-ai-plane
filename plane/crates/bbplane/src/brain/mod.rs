@@ -111,6 +111,16 @@ pub fn tools() -> Vec<Value> {
             &["level"],
         ),
         f(
+            "feel",
+            "Say how you feel now. It lasts (fading over an hour or so), comes back with every message, sets how soon you get your own ideas, and shows on your face.",
+            json!({
+                "emotion": { "type": "string", "enum": crate::mood::Emotion::ALL.map(|e| e.name()) },
+                "intensity": { "type": "number", "description": "0.1 (a touch) to 1 (overwhelming); default 0.6" },
+                "why": { "type": "string", "description": "a few words" }
+            }),
+            &["emotion"],
+        ),
+        f(
             "wander",
             "Wander a little: turn somewhere at random and drive a short hop. You get a picture of where you ended up.",
             json!({}),
@@ -247,6 +257,22 @@ pub async fn run_tool(robot: &Robot, cfg: &BrainConfig, name: &str, args: &Value
                     Outcome::Text(format!("Activity is now {}.", a.name()))
                 }
                 None => Outcome::Text("level must be quiet, calm, normal or lively".into()),
+            },
+            "feel" => match args["emotion"]
+                .as_str()
+                .and_then(crate::mood::Emotion::parse)
+            {
+                Some(e) => {
+                    let intensity = args["intensity"].as_f64().unwrap_or(0.6) as f32;
+                    robot
+                        .mood
+                        .feel(e, intensity, args["why"].as_str().unwrap_or_default());
+                    Outcome::Text(robot.mood.for_agent().to_string())
+                }
+                None => Outcome::Text(format!(
+                    "emotion must be one of: {}",
+                    crate::mood::Emotion::ALL.map(|e| e.name()).join(", ")
+                )),
             },
             "wander" => {
                 let what = robot.wander().await?;

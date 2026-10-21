@@ -78,26 +78,36 @@ void Com::sendData(BB::State state, BB::Action::RC action, size_t size, const ui
 	sendData(state, _action, size, data);
 }
 
+void Com::sendData(BB::State state, BB::Action::AI action, size_t size, const uint8_t* data){
+	BB::Action _action = {
+		.ai = action
+	};
+	sendData(state, _action, size, data);
+}
+
 void Com::sendData(BB::State state, BB::Action action, size_t size, const uint8_t* data){
 	BB bbData = {
 			.state = state,
 			.action = action,
 			.dataSize = size
 	};
-	txBuf.resize(sizeof(BB));
-	memcpy(txBuf.data(), &bbData, sizeof(BB));
+	{
+		std::lock_guard guard(txMut);
+		txBuf.resize(sizeof(BB));
+		memcpy(txBuf.data(), &bbData, sizeof(BB));
 
-	if(txBuf.size() + size >= BufSize){
-		CMF_LOG(Com, LogLevel::Error, "sendData: Data is bigger than buffer (%d >= %d)", txBuf.size() + size, BufSize);
+		if(txBuf.size() + size >= BufSize){
+			CMF_LOG(Com, LogLevel::Error, "sendData: Data is bigger than buffer (%d >= %d)", txBuf.size() + size, BufSize);
+			txBuf.clear();
+			return;
+		}
+
+		txBuf.resize(txBuf.size() + size);
+		memcpy(txBuf.data() + txBuf.size() - size, data, size);
+
+		txChar->sendNotif(txBuf);
 		txBuf.clear();
-		return;
 	}
-
-	txBuf.resize(txBuf.size() + size);
-	memcpy(txBuf.data() + txBuf.size() - size, data, size);
-
-	txChar->sendNotif(txBuf);
-	txBuf.clear();
 
 	// Same telemetry for the AI control plane.
 	if(LinkService* link = LinkService::instance()){

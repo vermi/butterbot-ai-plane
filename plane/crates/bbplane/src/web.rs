@@ -240,6 +240,7 @@ async fn agent_status(State(r): State<Robot>) -> Json<Value> {
     v["kind"] = serde_json::to_value(r.hub.config.agent.kind).unwrap_or_default();
     v["focus_minutes_left"] = r.life.focused().map(|d| d.as_secs().div_ceil(60)).into();
     v["activity"] = r.life.activity_level().name().into();
+    v["mood"] = r.mood.for_agent();
     Json(v)
 }
 

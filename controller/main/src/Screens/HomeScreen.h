@@ -13,6 +13,7 @@
 #include "Components/TopBar.h"
 #include "Components/HomeWindow.h"
 #include "Components/HomeDash.h"
+#include "Components/PeekView.h"
 #include "Components/ActionElement.h"
 
 class HomeScreen : public LVScreen {
@@ -105,6 +106,26 @@ private:
 	bool actionsClosePending = false;
 	// Focused entry when the list was last closed
 	uint16_t lastActionIndex = 0;
+
+	// The joystick on the home screen in AI mode: up shows the robot's camera, left and right
+	// change the activity level. One step per push (back to the middle in between).
+	static constexpr int StickPush = 60;
+	static constexpr int StickRest = 25;
+	bool stickPushed = false;
+	void handleStick();
+
+	// The robot's camera, over everything but the top bar (see PeekView). Any button or stick push
+	// closes it, as does time.
+	PeekView* peek = nullptr;
+	uint64_t peekOpenedAt = 0;
+	static constexpr uint64_t PeekMaxMs = 120000;
+	void openPeek();
+	void closePeek();
+
+	// The activity level last asked for: quick pushes step on from it before the robot confirms.
+	AIStatusData::Activity askedActivity = AIStatusData::Activity::Normal;
+	uint64_t askedActivityAt = 0;
+	void stepActivity(int step);
 
 	void loop() override;
 

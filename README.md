@@ -231,18 +231,35 @@ amount (stock snapped it to eight directions). Entering AI mode with a phone lin
 The remote's firmware is in [`controller/`](controller) (from CircuitMess's
 ButterBotCtrl-Firmware, MIT). Its screen in AI mode:
 
-- **Top bar:** the mute icon (only while muted), AI mode's state in the middle (`AI` listening
+- **Top bar:** the robot's clock on the left, AI mode's state in the middle (`AI` listening
   for its name, `AI CHAT` in a conversation, `AI ...` thinking, `FOCUS 42` minutes left in focus
-  mode, `AI -` no agent running) and the signal on the right. The battery icons are gone.
-- **Home screen**, whenever nothing else is on it: a big clock with the date, both batteries as
-  percentages with a bar, and in AI mode what it is doing, its activity level, the next reminder,
-  the latest thing it saw or heard (and how long ago) and the last thing it said, scrolling.
-  Outside AI mode, a few button hints instead. The clock is the robot's: set from the phone, or
-  from the computer in AI mode (the robot keeps it after that).
+  mode, `AI -` no agent running), the mute icon (only while muted) and the signal on the right.
+  The clock is set from the phone, or from the computer in AI mode (the robot keeps it after).
+- **Home screen**, whenever nothing else is on it: Butter Bot's face (pixel art, see Mood below)
+  with his mood, what he is doing, his pace and both batteries beside it; below, in AI mode, the
+  next reminder, the latest thing he saw or heard (and how long ago) and the last thing he said,
+  scrolling; at the bottom, the phone's music while it plays. Outside AI mode, button hints
+  instead of the AI lines.
+- **Joystick on the home screen (AI mode):** up shows the robot's camera (small pictures over
+  Bluetooth, a few a second, with who and what is in view underneath; any button or push closes
+  it); left and right step the activity level down and up, quietly.
 - **Joystick menu:** in AI mode, AI entries come first: What do you see?, News, Weather, Go
   explore, Tell me a story, Focus 1 hour and the four activity levels (the current one is marked).
   After Summon's short press the screen shows the listening window until the agent has the
   command.
+
+## Mood
+
+Butter Bot has feelings that last, and they are the agent's own: content, happy, excited, curious,
+playful, calm, sleepy, bored, sad, grumpy, surprised or worried, with a strength. The agent sets
+them with `feel` whenever something moves it and gets its mood back with every event, so a
+feeling carries over between moments and sessions (it is kept in `mood.json` and fades back to
+content over an hour or so). What happens to him moves it too unless he already feels something
+stronger: someone arriving cheers him up, being shaken makes him grumpy, a poke surprises him, an
+hour of nothing alone bores him, the small hours make him sleepy, being told to stop talking
+saddens him a little. His mood sets how soon his own ideas come (bored or curious sooner, sleepy or
+sad later) on top of the activity level, colours what he says, and shows on the remote's face.
+Focus mode still wins: no ideas of his own, whatever he feels.
 
 ## Status light
 

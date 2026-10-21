@@ -8,6 +8,7 @@
 #include <Scenarios.h>
 #include <Entity/AsyncEntity.h>
 #include <Event/EventBroadcaster.h>
+#include <mutex>
 
 class Com : public AsyncEntity {
 	GENERATED_BODY(Com, AsyncEntity, CONSTRUCTOR_PACK(BLE::Server* ))
@@ -40,6 +41,7 @@ public:
 	void sendData(BB::State state, BB::Action::Idle action, size_t size, const uint8_t* data);
 	void sendData(BB::State state, BB::Action::Scenario action, size_t size, const uint8_t* data);
 	void sendData(BB::State state, BB::Action::RC action, size_t size, const uint8_t* data);
+	void sendData(BB::State state, BB::Action::AI action, size_t size, const uint8_t* data);
 
 	template<typename T>
 	void sendData(BB::State state, BB::Action::Listen none, const T& data){
@@ -109,8 +111,10 @@ private:
 
 	ConnStatus status = ConnStatus::Disconnected;
 
-	static constexpr size_t BufSize = 256;
+	// One notification: the MTU both ends ask for is 500 (less the ATT header and a margin).
+	static constexpr size_t BufSize = 496;
 	PSRAMByteBuffer txBuf;
+	std::mutex txMut; // the state machine, the app and the link thread all send
 
 	void sendData(BB::State state, BB::Action action);
 	void sendData(BB::State state, BB::Action action, size_t size, const uint8_t* data);
