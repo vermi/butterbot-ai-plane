@@ -144,6 +144,7 @@ ul.list .empty { color: var(--muted); border: 0; padding: 4px 0; }
 .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
 .form { display: flex; gap: 8px; margin-top: 12px; }
 .form input { flex: 1; }
+.form.stacked { flex-direction: column; align-items: stretch; }
 .dpad { position: relative; width: 196px; height: 196px; margin: 6px auto 16px; border-radius: 50%; background: var(--surface-2); }
 .dpad button { position: absolute; width: 58px; height: 58px; padding: 0; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 3px rgb(0 0 0 / .12); font-size: 18px; touch-action: none; }
 .dpad [data-d=f] { top: 8px; left: 69px; } .dpad [data-d=b] { bottom: 8px; left: 69px; }
@@ -161,6 +162,12 @@ ul.list .empty { color: var(--muted); border: 0; padding: 4px 0; }
 .transport button.big { width: 58px; height: 58px; background: var(--ink); color: var(--surface); font-size: 20px; }
 pre.log { font: 11px/1.5 var(--mono); max-height: 300px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 8px 0 0; background: var(--surface-2); border-radius: 12px; padding: 10px 12px; }
 details { margin-top: 10px; } details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.training { margin-top: 14px; padding: 16px; border-radius: 16px; background: var(--butter-soft); display: grid; gap: 10px; }
+.training .phrase { font-size: 20px; font-weight: 600; line-height: 1.35; }
+.training .dots { display: flex; gap: 6px; }
+.training .dots span { width: 10px; height: 10px; border-radius: 50%; background: color-mix(in srgb, var(--ink) 18%, transparent); }
+.training .dots span.done { background: var(--ok); }
+.training .dots span.now { background: var(--butter); box-shadow: 0 0 0 3px color-mix(in srgb, var(--butter) 35%, transparent); }
 .setting { display: grid; gap: 6px; padding: 10px 0; border-top: 1px solid var(--line); }
 .setting:first-child { border-top: 0; padding-top: 0; }
 
@@ -255,11 +262,21 @@ details { margin-top: 10px; } details summary { cursor: pointer; color: var(--mu
     </div>
     <div class="pane" data-pane="people" hidden>
       <ul class="list" id="people"></ul>
-      <form class="form" id="faceform">
+      <form class="form stacked" id="faceform">
         <input type="text" id="facename" placeholder="Your name" autocomplete="off" maxlength="40">
-        <button class="primary" id="remember">Learn my face</button>
+        <div class="row">
+          <button class="primary" id="remember">Learn my face</button>
+          <button type="button" id="trainvoice">Train my voice</button>
+        </div>
       </form>
-      <p class="muted" id="facemsg" style="margin:8px 0 0">Face him from about an arm's length, alone in view. For your voice, say “Butterbot, remember my voice.”</p>
+      <p class="muted" id="facemsg" style="margin:8px 0 0">For your face, look at him from about an arm's length, alone in view. For your voice, you read a few phrases to him.</p>
+      <div class="training" id="training" hidden>
+        <div class="muted" id="trainhead">Read this to Butter Bot, from where you usually talk to him:</div>
+        <div class="phrase" id="phrase"></div>
+        <div class="dots" id="dots"></div>
+        <div class="muted" id="trainheard"></div>
+        <button class="quiet" type="button" id="traincancel">Cancel</button>
+      </div>
     </div>
     <div class="pane" data-pane="tv" hidden>
       <div class="row" style="margin-bottom:10px"><span class="muted" id="atvstate"></span></div>
@@ -607,6 +624,46 @@ $('faceform').onsubmit = async (e) => {
   $('facemsg').textContent = j.ok ? `Got it, ${j.enrolled.name} (${j.enrolled.samples_added} looks).` + (j.enrolled.resembles ? ` You look a bit like ${j.enrolled.resembles}.` : '') : (j.error || 'That did not work.');
   showFaces(await api('/api/faces'));
 };
+
+// training a voice: read phrases to him through his own microphone
+const PHRASES = [
+  "Butterbot, what's the weather going to be like this afternoon?",
+  "Could you remind me to call my sister tomorrow at noon?",
+  "Kiwi, come here! Who's a good girl? You are!",
+  "I think quantum computers are going to change everything.",
+  "Let's go and explore the living room together.",
+  "The quick brown fox jumps over the lazy dog.",
+  "Turn on the TV and play something relaxing, please.",
+  "My favourite part of the day is the quiet evening.",
+];
+let trainTimer = null;
+async function trainRefresh() {
+  const t = await api('/api/voices/train');
+  const box = $('training');
+  if (!t.active) {
+    if (!box.hidden) {
+      $('trainhead').textContent = 'Done. He knows your voice now.';
+      $('phrase').textContent = ''; $('dots').replaceChildren(); $('traincancel').textContent = 'Close';
+      clearInterval(trainTimer); trainTimer = null; lifeRefresh();
+    }
+    return;
+  }
+  box.hidden = false;
+  $('trainhead').textContent = t.listening ? 'Read this to Butter Bot, from where you usually talk to him:' : 'He is not listening (AI mode and the agent need to be on).';
+  $('phrase').textContent = `“${PHRASES[t.got % PHRASES.length]}”`;
+  $('dots').replaceChildren(...Array.from({ length: t.needed }, (_, i) => el('span', { className: i < t.got ? 'done' : i === t.got ? 'now' : '' })));
+  $('trainheard').textContent = t.last_heard ? (t.last_ok ? `Got it: “${t.last_heard}”` : `Too short, try that one again: “${t.last_heard}”`) : '';
+}
+$('trainvoice').onclick = async () => {
+  const name = $('facename').value.trim();
+  if (!name) { $('facemsg').textContent = 'Type your name first.'; return; }
+  const j = await api('/api/voices/train', { name, phrases: 6 });
+  if (!j.httpOk) { $('facemsg').textContent = j.error || 'Could not start.'; return; }
+  $('traincancel').textContent = 'Cancel';
+  trainRefresh();
+  if (!trainTimer) trainTimer = setInterval(trainRefresh, 600);
+};
+$('traincancel').onclick = async () => { await api('/api/voices/train/stop', {}); clearInterval(trainTimer); trainTimer = null; $('training').hidden = true; };
 
 // the Apple TV
 let atv = {}, atvFound = null, atvPairing = null, atvBusy = false;

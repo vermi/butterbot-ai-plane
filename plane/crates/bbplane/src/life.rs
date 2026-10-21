@@ -43,6 +43,7 @@ const MUSE: &str = "think out loud to yourself for a moment: a passing thought, 
 wondered about or noticed, as if nobody is listening";
 const REST_IN_VIEW: &str = "stay quiet for now";
 const REST: &str = "stay quiet and rest";
+const PLAN: &str = "think of something you would like to do or find out later, and keep it as a plan (intend)";
 
 /// How much the robot does of its own accord. Set by voice (`set_activity`) or the live view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, serde::Deserialize)]
@@ -461,6 +462,7 @@ impl Life {
                     (LOOK.into(), 1),
                     (WANDER.into(), 1),
                     (MUSE.into(), 1),
+                    (PLAN.into(), 1),
                 ]),
                 Lively => {
                     ideas.extend([
@@ -468,6 +470,7 @@ impl Life {
                         (EXPLORE.into(), 1),
                         (LOOK.into(), 1),
                         (MUSE.into(), 2),
+                        (PLAN.into(), 1),
                     ]);
                     if let Some(p) = pets {
                         ideas.push((p, 1));

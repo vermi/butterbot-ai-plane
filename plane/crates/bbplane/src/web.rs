@@ -63,6 +63,8 @@ pub fn router(robot: Robot) -> Router {
         .route("/api/life", get(life))
         .route("/api/plans/done", post(plan_done))
         .route("/api/voices/forget", post(forget_voice))
+        .route("/api/voices/train", get(voice_training).post(train_voice))
+        .route("/api/voices/train/stop", post(stop_voice_training))
         .route("/api/tell", post(tell))
         .route("/api/diary/{day}", get(diary_day))
         .nest_service("/mcp", mcp)
@@ -456,6 +458,32 @@ async fn tell(State(r): State<Robot>, Json(b): Json<TellBody>) -> Response {
     r.ears.command(text);
     r.light.thinking();
     Json(json!({ "ok": true })).into_response()
+}
+
+async fn voice_training(State(r): State<Robot>) -> Json<Value> {
+    let mut v = r.voices.training_json();
+    v["listening"] = (r.mode().await.as_deref() == Some("remote")
+        && r.life.agent_running.load(std::sync::atomic::Ordering::Relaxed))
+    .into();
+    Json(v)
+}
+
+#[derive(Deserialize)]
+struct TrainBody {
+    name: String,
+    phrases: Option<u32>,
+}
+
+async fn train_voice(State(r): State<Robot>, Json(b): Json<TrainBody>) -> Response {
+    match r.voices.start_training(&b.name, b.phrases.unwrap_or(6)) {
+        Ok(()) => Json(r.voices.training_json()).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+async fn stop_voice_training(State(r): State<Robot>) -> Json<Value> {
+    r.voices.stop_training();
+    Json(json!({ "ok": true }))
 }
 
 async fn forget_voice(State(r): State<Robot>, Json(b): Json<FaceBody>) -> Response {

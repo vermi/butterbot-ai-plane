@@ -50,7 +50,23 @@ struct Profile {
     samples: u32,
 }
 
+/// Training a voice like a voice assistant's setup: the next few utterances, whatever they say,
+/// build `name`'s voiceprint from scratch.
+#[derive(Debug, Clone)]
+struct Training {
+    name: String,
+    needed: u32,
+    got: u32,
+    last_heard: String,
+    last_ok: bool,
+    started: std::time::Instant,
+}
+
+/// A training session left unfinished this long is dropped.
+const TRAINING_MAX: std::time::Duration = std::time::Duration::from_secs(300);
+
 pub struct Voices {
+    training: Mutex<Option<Training>>,
     path: PathBuf,
     models_dir: PathBuf,
     engine: OnceCell<std::sync::Arc<Engine>>,
@@ -67,6 +83,7 @@ impl Voices {
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
         Voices {
+            training: Mutex::new(None),
             path,
             models_dir: data_dir.join("models"),
             engine: OnceCell::new(),
@@ -155,6 +172,83 @@ impl Voices {
             *m += (e - *m) * k;
         }
         self.save(&profiles)
+    }
+
+    /// Start training `name`'s voice from scratch with the next `needed` utterances.
+    pub fn start_training(&self, name: &str, needed: u32) -> Result<()> {
+        let name = name.trim();
+        if name.is_empty() {
+            bail!("whose voice?");
+        }
+        let mut profiles = self.profiles.lock().unwrap();
+        profiles.remove(name);
+        self.save(&profiles)?;
+        *self.training.lock().unwrap() = Some(Training {
+            name: name.to_string(),
+            needed: needed.clamp(3, 12),
+            got: 0,
+            last_heard: String::new(),
+            last_ok: true,
+            started: std::time::Instant::now(),
+        });
+        tracing::info!("voice training for {name}");
+        Ok(())
+    }
+
+    pub fn stop_training(&self) {
+        *self.training.lock().unwrap() = None;
+    }
+
+    /// Whether utterances go to training now (instead of being commands).
+    pub fn training(&self) -> bool {
+        let mut t = self.training.lock().unwrap();
+        if t.as_ref().is_some_and(|t| t.started.elapsed() > TRAINING_MAX) {
+            *t = None;
+        }
+        t.is_some()
+    }
+
+    pub fn training_json(&self) -> serde_json::Value {
+        match self.training.lock().unwrap().as_ref() {
+            Some(t) => serde_json::json!({
+                "active": true, "name": t.name, "got": t.got, "needed": t.needed,
+                "last_heard": t.last_heard, "last_ok": t.last_ok,
+            }),
+            None => serde_json::json!({ "active": false }),
+        }
+    }
+
+    /// One training utterance (`heard`: its transcript, for feedback).
+    pub async fn train(&self, pcm: Vec<i16>, heard: &str) {
+        let Some(name) = self.training.lock().unwrap().as_ref().map(|t| t.name.clone()) else {
+            return;
+        };
+        let emb = match self.engine().await {
+            Ok(engine) => tokio::task::spawn_blocking(move || engine.embed(&pcm))
+                .await
+                .map_err(|e| anyhow!("{e}"))
+                .and_then(|r| r),
+            Err(e) => Err(e),
+        };
+        let ok = match emb {
+            Ok(e) => self.learn(&name, &e).is_ok(),
+            Err(e) => {
+                tracing::debug!("voice training: {e:#}");
+                false
+            }
+        };
+        let mut t = self.training.lock().unwrap();
+        if let Some(tr) = t.as_mut() {
+            tr.last_heard = heard.chars().take(120).collect();
+            tr.last_ok = ok;
+            if ok {
+                tr.got += 1;
+            }
+            if tr.got >= tr.needed {
+                tracing::info!("voice training for {} done ({} samples)", tr.name, tr.got);
+                *t = None;
+            }
+        }
     }
 
     /// Keep the latest command's voice as `name`'s.

@@ -25,6 +25,10 @@ const DRIVE_REFRESH: Duration = Duration::from_millis(250);
 const COMPANY: Duration = Duration::from_secs(180);
 /// Hard cap for one drive/turn tool call.
 pub const MAX_DRIVE_MS: u64 = 10_000;
+/// After a conversation of at least this many things said to it, and this long without another,
+/// it gets a moment to keep what matters (`remember`, `intend`).
+const REFLECT_AFTER_TURNS: u32 = 2;
+const REFLECT_AFTER_QUIET: Duration = Duration::from_secs(90);
 /// Open-loop calibration: a full-speed spin in place turns about 180 degrees in this time
 /// (stock firmware `WanderRoutine`/`VoiceTurn180Routine`).
 pub const MS_PER_180_AT_FULL: f64 = 4000.0;
@@ -47,6 +51,8 @@ pub struct Robot {
     pub life: Arc<crate::life::Life>,
     pub agent: Arc<crate::agent::AgentState>,
     pub light: Arc<crate::light::Light>,
+    /// Things said to it since it last reflected, and when the last one was (see `next_event`).
+    talk: Arc<std::sync::Mutex<(u32, Option<std::time::Instant>)>>,
     /// What it is up to right now and until when, for the controller's screen (see `doing`).
     doing: Arc<std::sync::Mutex<Option<(String, std::time::Instant)>>>,
     /// The camera settings to go back to after the controller's camera view (see `camera_fast`).
@@ -130,6 +136,7 @@ impl Robot {
             light: Default::default(),
             camera_before_view: Default::default(),
             doing: Default::default(),
+            talk: Default::default(),
             streams: Arc::new(Mutex::new(Streams::defaults(&hub.config))),
             hub,
             wake_lock: Default::default(),
@@ -978,6 +985,10 @@ impl Robot {
         let frame = async || self.hub.latest_frame().await.map(|f| f.jpeg.clone());
         loop {
             if let Some(c) = self.ears.take_command() {
+                {
+                    let mut t = self.talk.lock().unwrap();
+                    *t = (t.0 + 1, Some(std::time::Instant::now()));
+                }
                 if self.life.focused().is_some() {
                     // Called by name: awake again.
                     self.unfocus();
@@ -1021,6 +1032,28 @@ impl Robot {
                     }),
                     image: None,
                 });
+            }
+            // A conversation is over: a quiet moment to keep what matters from it.
+            if self.life.focused().is_none() {
+                let reflect = {
+                    let mut t = self.talk.lock().unwrap();
+                    let due = t.0 >= REFLECT_AFTER_TURNS
+                        && t.1.is_some_and(|at| at.elapsed() >= REFLECT_AFTER_QUIET);
+                    if due {
+                        let turns = t.0;
+                        *t = (0, None);
+                        Some(turns)
+                    } else {
+                        None
+                    }
+                };
+                if let Some(turns) = reflect {
+                    tracing::info!("reflection for the agent ({turns} things said)");
+                    return Ok(AgentEvent::Nudge {
+                        info: json!({ "nudge": "reflect", "turns": turns, "mood": self.mood.for_agent() }),
+                        image: None,
+                    });
+                }
             }
             // Its own plans and diary wait for focus mode to end; plans also wait while quiet.
             if self.life.focused().is_none() {

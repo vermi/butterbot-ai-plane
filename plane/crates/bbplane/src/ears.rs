@@ -610,6 +610,15 @@ fn handle_utterance(ears: Arc<Ears>, robot: Robot, utterance: Vec<i16>) {
             return;
         }
         *ears.last_speech.lock().unwrap() = Some(Instant::now());
+        // Training a voice: whatever is said trains it, and is not a command.
+        if robot.voices.training() {
+            robot.voices.train(pcm, &said).await;
+            robot
+                .hub
+                .push_event("voice_training", robot.voices.training_json())
+                .await;
+            return;
+        }
         let (text, follow_up) = match crate::stt::addressed(&said, &ears.cfg.wake_word) {
             // Just the name, then (probably) a pause: the command comes next.
             Some("") => {

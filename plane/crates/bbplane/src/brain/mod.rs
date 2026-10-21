@@ -572,16 +572,17 @@ pub fn describe(ev: &crate::control::AgentEvent) -> Option<(String, Option<Bytes
                 })
                 .unwrap_or_default();
             who.dedup();
-            // Faces only say who is in front of the camera, not who spoke.
-            let prefix = match who.as_slice() {
-                [] => String::new(),
-                [one] => format!("({one} is in view, so probably the one talking) "),
-                many => format!(
+            // A known voice says who spoke; faces only say who is in front of the camera.
+            let prefix = match (info["speaker"].as_str(), who.as_slice()) {
+                (Some(name), _) => format!("({name}, by voice) "),
+                (None, []) => String::new(),
+                (None, [one]) => format!("({one} is in view, so probably the one talking) "),
+                (None, many) => format!(
                     "({} are in view; you can't tell which of them is talking) ",
                     many.join(", ")
                 ),
             };
-            Some((format!("{prefix}{text}"), image.clone()))
+            Some((format!("{prefix}{text}{}", mood_note(info)), image.clone()))
         }
         AgentEvent::Nudge { info, image } => {
             let in_view = info["in_view"]
@@ -689,16 +690,73 @@ pub fn describe(ev: &crate::control::AgentEvent) -> Option<(String, Option<Bytes
                         "[{seen} just came into view. In view: {in_view}. React if you like, or call stay_quiet.]"
                     )
                 }
-                _ => format!(
-                    "[Time to yourself (nobody has talked with you for {} minutes). In view: {in_view}. Do whatever you are curious about, or rest (stay_quiet). An idea, if you want one: {}.]",
-                    info["quiet_for_minutes"].as_u64().unwrap_or(0),
-                    info["suggestion"].as_str().unwrap_or("rest")
+                Some("diary") => format!(
+                    "[Evening: time to write your diary for {}. What happened that day:\n{}\nWrite it with write_diary, in your own words and for yourself: what stood out, how you felt, what you wonder about. Nobody needs to hear it, so don't say anything.]",
+                    info["day"].as_str().unwrap_or("today"),
+                    info["what_happened"].as_str().unwrap_or("(nothing noted)")
                 ),
+                Some("reflect") => "[That conversation is over. Is anything from it worth keeping? Facts about people (what they like, their plans, names, what happened) go in remember; things you want to do or find out later go in intend. If nothing is, call stay_quiet. Don't say anything either way.]".to_string(),
+                Some("plan") => format!(
+                    "[Your own plan is due (you made it {}): {}. Do it, put it off (intend again), or let it go (plans, done).]",
+                    info["planned_at"].as_str().unwrap_or("earlier"),
+                    info["text"].as_str().unwrap_or_default()
+                ),
+                Some("music") => format!(
+                    "[Music: {}{}. In view: {in_view}. {}.]",
+                    info["what"].as_str().unwrap_or("music is playing"),
+                    info["bpm"]
+                        .as_u64()
+                        .map(|b| format!(" (about {b} beats a minute)"))
+                        .unwrap_or_default(),
+                    info["suggestion"].as_str().unwrap_or("Enjoy it")
+                ),
+                _ => {
+                    let plans = info["your_plans"]
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|p| p["text"].as_str())
+                                .collect::<Vec<_>>()
+                                .join("; ")
+                        })
+                        .filter(|p| !p.is_empty())
+                        .map(|p| format!(" Your some-day plans: {p}."))
+                        .unwrap_or_default();
+                    format!(
+                        "[Time to yourself (nobody has talked with you for {} minutes). In view: {in_view}. Do whatever you are curious about, or rest (stay_quiet). An idea, if you want one: {}.{plans}]",
+                        info["quiet_for_minutes"].as_u64().unwrap_or(0),
+                        info["suggestion"].as_str().unwrap_or("rest")
+                    )
+                }
             };
-            Some((text, image.clone()))
+            let cable = if info["plugged_in"].is_string() {
+                " (You are on a cable: you cannot drive.)"
+            } else {
+                ""
+            };
+            Some((format!("{text}{cable}{}", mood_note(info)), image.clone()))
         }
         _ => None,
     }
+}
+
+/// How it feels, from an event's `mood`, as a short note after the message.
+fn mood_note(info: &Value) -> String {
+    let m = &info["mood"];
+    let Some(feeling) = m["feeling"].as_str() else {
+        return String::new();
+    };
+    let strength = match m["intensity"].as_f64().unwrap_or(0.0) {
+        i if i >= 0.7 => "very ",
+        i if i < 0.35 => "a little ",
+        _ => "",
+    };
+    let why = m["why"]
+        .as_str()
+        .filter(|w| !w.is_empty())
+        .map(|w| format!(", because {w}"))
+        .unwrap_or_default();
+    format!(" (You feel {strength}{feeling}{why}.)")
 }
 
 /// OpenAI's speech endpoint returns 24 kHz PCM.
