@@ -42,6 +42,8 @@ private:
 	// Joined activation phrases per scenario button. reserve()d before any label is created,
 	// and never mutated afterwards — the labels hold the c_str() pointers (text_static)
 	std::vector<std::string> phraseTexts;
+	// What each entry after SETTINGS sends (AI entries first in AI mode, then the stock ones).
+	std::vector<std::pair<BB::Action::Scenario, ScenarioData>> actions;
 
 	LVStyle buttonStyle;
 	LVStyle buttonFocusedStyle;

@@ -15,14 +15,16 @@ static constexpr uint16_t UDPPort = 6001;
 
 struct BB {
 	enum class State {
-		Idle, Listen, Scenario, RC
+		Idle, Listen, Scenario, RC,
+		AI, // AI mode (the laptop control plane): its status for the controller
 	} state;
 
 	union Action {
 		enum class Idle {
 			None, Wander, Ramble, Person, Poke, Summon, Fall, UpsideDown, PickUp, Shake, ModuleChange, Gas, Intruder,
 			BatteryLow, Charging, ChargingFull, PhoneNotif, PhoneConnect, Observe, GasConfigureStart, GasConfigureEnd,
-			BatteryLevel, ShutUp, CantMove
+			BatteryLevel, ShutUp, CantMove,
+			Home, // the controller's home screen (HomeInfoData): telemetry like BatteryLevel, not an action
 		} idle;
 
 		enum class Scenario {
@@ -43,6 +45,8 @@ struct BB {
 			PhonePlayMusic,
 			PhoneStopMusic,
 			WhatsThis,
+			// AI mode only (the controller lists them then); the laptop's agent handles them.
+			AiSee, AiNews, AiWeather, AiExplore, AiStory, AiFocus, AiActivity,
 		} scenario;
 
 		enum class Listen {
@@ -51,6 +55,10 @@ struct BB {
 		enum class RC {
 			FeedStatus
 		} remoteControl;
+
+		enum class AI {
+			Status
+		} ai;
 	} action;
 
 	size_t dataSize;
@@ -62,6 +70,75 @@ struct ListenData : BBData {
 	enum class Phase : uint8_t {
 		Listening, NotUnderstand, Abort
 	} phase;
+};
+
+/** AI mode's state for the controller (BB::State::AI, BB::Action::AI::Status). */
+struct AIStatusData : BBData {
+	enum class Mode : uint8_t {
+		Off, Listening, Attentive, Thinking, Focus, NoBrain
+	} mode = Mode::Off;
+	enum class Activity : uint8_t {
+		Quiet, Calm, Normal, Lively
+	} activity = Activity::Normal;
+	uint8_t focusMinutes = 0; // left in focus mode (255: more)
+};
+
+/**
+ * The controller's home screen (BB::State::Idle, BB::Action::Idle::Home): the robot's battery and
+ * clock, and in AI mode the agent's latest news. Sent on connect, on battery changes, every
+ * minute in AI mode and whenever the plane has news. The controller keeps the clock running.
+ */
+struct HomeInfoData : BBData {
+	static constexpr uint8_t MaxNext = 48;
+	static constexpr uint8_t MaxSeen = 32;
+	static constexpr uint8_t MaxSaid = 100;
+
+	uint8_t botPercent = 0;
+	bool clockSet = false;
+	// Local time; month 1-12, weekday 0 = Sunday.
+	uint16_t year = 0;
+	uint8_t month = 0, day = 0, weekday = 0, hour = 0, minute = 0, second = 0;
+	// AI mode only (empty otherwise).
+	std::string next;      // the next reminder, "15:00 Call mom"
+	std::string seen;      // the latest thing noticed, "Saw Kiwi"
+	uint16_t seenSecs = 0; // how long ago
+	std::string said;      // the last thing it said
+
+	std::vector<uint8_t> serialize() const{
+		std::vector<uint8_t> buf;
+		ComSerial::writeU8(buf, botPercent);
+		ComSerial::writeU8(buf, clockSet);
+		ComSerial::writeU8(buf, year & 0xff);
+		ComSerial::writeU8(buf, year >> 8);
+		for(uint8_t v : { month, day, weekday, hour, minute, second }){
+			ComSerial::writeU8(buf, v);
+		}
+		ComSerial::writeString(buf, next, MaxNext);
+		ComSerial::writeString(buf, seen, MaxSeen);
+		ComSerial::writeU8(buf, seenSecs & 0xff);
+		ComSerial::writeU8(buf, seenSecs >> 8);
+		ComSerial::writeString(buf, said, MaxSaid);
+		return buf;
+	}
+
+	static HomeInfoData deserialize(const uint8_t* data, size_t size){
+		HomeInfoData d;
+		const uint8_t* cur = data;
+		const uint8_t* end = data + size;
+		d.botPercent = ComSerial::readU8(cur, end);
+		d.clockSet = ComSerial::readU8(cur, end) != 0;
+		d.year = ComSerial::readU8(cur, end);
+		d.year |= ComSerial::readU8(cur, end) << 8;
+		for(uint8_t* v : { &d.month, &d.day, &d.weekday, &d.hour, &d.minute, &d.second }){
+			*v = ComSerial::readU8(cur, end);
+		}
+		d.next = ComSerial::readString(cur, end);
+		d.seen = ComSerial::readString(cur, end);
+		d.seenSecs = ComSerial::readU8(cur, end);
+		d.seenSecs |= ComSerial::readU8(cur, end) << 8;
+		d.said = ComSerial::readString(cur, end);
+		return d;
+	}
 };
 
 struct RambleData : BBData {

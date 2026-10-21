@@ -1097,6 +1097,33 @@ async fn remote_button(robot: &Robot, data: &Value) {
                 .and_then(|i| bbproto::bb::SCENARIOS.get(i as usize).copied())
                 .unwrap_or_default();
             let arg = data["arg"].as_u64().unwrap_or(0);
+            // AI mode's own menu entries that need no agent.
+            match name {
+                "ai_focus" => {
+                    let minutes = robot.hub.config.life.default_focus_minutes;
+                    robot.focus(Duration::from_secs(minutes * 60));
+                    return;
+                }
+                "ai_activity" => {
+                    use crate::life::Activity;
+                    let level = [
+                        Activity::Quiet,
+                        Activity::Calm,
+                        Activity::Normal,
+                        Activity::Lively,
+                    ]
+                    .get(arg as usize)
+                    .copied()
+                    .unwrap_or_default();
+                    robot.set_activity(level);
+                    let text = format!("Activity: {}.", level.name());
+                    if let Err(e) = robot.say(&text, Some("robot"), false).await {
+                        tracing::debug!("activity: {e:#}");
+                    }
+                    return;
+                }
+                _ => {}
+            }
             if let Some(text) = menu_request(name, arg) {
                 robot.ears.command(&text);
                 robot.light.thinking();
@@ -1133,6 +1160,11 @@ fn menu_request(scenario: &str, arg: u64) -> Option<String> {
         "read_notifs" | "phone_list_notifs" => "Do I have any notifications?".into(),
         "ir_train" => "Learn a button from my IR remote.".into(),
         "ir_forget" => "Forget a button from my IR remote.".into(),
+        "ai_see" => "What do you see right now?".into(),
+        "ai_news" => "Tell me about something new in one of the things I'm into.".into(),
+        "ai_weather" => "What's the weather like today?".into(),
+        "ai_explore" => "Go explore for a bit, then tell me what you found.".into(),
+        "ai_story" => "Tell me a very short story.".into(),
         _ => return None,
     })
 }

@@ -24,6 +24,7 @@
 #include "Link/RemoteSession.h"
 #include "Phone/Phone.h"
 #include "BLE/ConMan.h"
+#include "Util/HomeInfo.h"
 #include <Periphery/WiFi.h>
 
 DEFINE_LOG(RemoteState)
@@ -62,6 +63,8 @@ RemoteState::RemoteState(BBStateMachine* sm) : State(sm){
 	enteredAt = millis();
 	planeLed = Online;
 	showLed();
+	aiStatus.mode = AIStatusData::Mode::NoBrain; // until the plane says otherwise
+	sendAiStatus();
 
 	session = new RemoteSession(link, app->getDevice<Camera>(), audio);
 
@@ -84,6 +87,7 @@ RemoteState::RemoteState(BBStateMachine* sm) : State(sm){
 		sm->bindState(com->OnCommand, this, &RemoteState::onRemoteCommand);
 		sm->bindState(com->OnRCData, this, &RemoteState::onRemoteRC);
 		sm->bindState(com->OnScenario, this, &RemoteState::onRemoteScenario);
+		sm->bindState(com->OnConnStatus, this, &RemoteState::onRemoteConn);
 	}
 
 	if(audio){
@@ -168,6 +172,13 @@ RemoteState::~RemoteState(){
 		ServiceLocator::LEDControlInstance->suspend(false);
 		ServiceLocator::LEDControlInstance->startIdle();
 	}
+	if(remoteListening){
+		remoteIdle();
+	}
+	aiStatus = {};
+	sendAiStatus(); // AI mode off: the controller drops its AI entries
+	HomeInfo::clearAi();
+	HomeInfo::send();
 }
 
 int64_t RemoteState::getDynamicTickInterval() const{
@@ -191,6 +202,12 @@ void RemoteState::tick(float deltaTime){
 		link->persist();
 	}
 	showLed();
+
+	// The battery moves on between the plane's updates.
+	if(millis() - homeSentAt >= HomeRefreshMs){
+		HomeInfo::send();
+		homeSentAt = millis();
+	}
 
 	if(abortRequested || (linkDeadline != 0 && millis() > linkDeadline)){
 		// Without this the robot just went back to idle, and nobody could tell a short press had
@@ -221,6 +238,11 @@ void RemoteState::tick(float deltaTime){
 
 	if(driving && millis() >= driveDeadline){
 		stopDriving("watchdog");
+	}
+
+	if(remoteListening && millis() >= remoteListenUntil){
+		remoteListening = false;
+		remoteIdle();
 	}
 }
 
@@ -322,6 +344,23 @@ void RemoteState::onRequest(LinkRequest req){
 
 		case T::StatusLight:
 			planeLed = req.rhythm;
+			break;
+
+		case T::AiStatus:
+			// The agent has what was said (or the window closed): the listening window goes.
+			if(remoteListening && req.ai.mode != AIStatusData::Mode::Attentive){
+				remoteListening = false;
+				remoteIdle();
+			}
+			aiStatus = req.ai;
+			sendAiStatus();
+			break;
+
+		case T::HomeInfo:
+			HomeInfo::syncClock(req.home);
+			HomeInfo::setAi(req.home);
+			HomeInfo::send();
+			homeSentAt = millis();
 			break;
 
 		case T::Scenario:
@@ -484,6 +523,18 @@ void RemoteState::sendRemote(const std::string& button, const std::string& extra
 	link->sendJson("{\"t\":\"remote\",\"button\":\"" + button + "\"" + extra + "}");
 }
 
+void RemoteState::sendAiStatus(){
+	if(Com* com = Application::getApp()->getService<Com>()){
+		com->sendData(BB::State::AI, BB::Action::AI::Status, aiStatus);
+	}
+}
+
+void RemoteState::onRemoteConn(Com::ConnStatus status){
+	if(status == Com::ConnStatus::Connected){
+		sendAiStatus();
+	}
+}
+
 void RemoteState::remoteIdle(){
 	if(Com* com = Application::getApp()->getService<Com>()){
 		com->sendData(BB::State::Idle, BB::Action::Idle::None);
@@ -535,9 +586,18 @@ void RemoteState::onRemoteCommand(Ctrl::Command command){
 		case Ctrl::Summon:
 			sendRemote("summon");
 			break;
-		case Ctrl::Listen:
+		case Ctrl::Listen: {
 			sendRemote("listen");
+			// The controller's own listening window, as stock showed for voice commands.
+			if(Com* com = Application::getApp()->getService<Com>()){
+				ListenData data{};
+				data.phase = ListenData::Phase::Listening;
+				com->sendData(BB::State::Listen, BB::Action::Listen{}, data);
+				remoteListening = true;
+				remoteListenUntil = millis() + 12000;
+			}
 			break;
+		}
 		default:
 			// Anything else the controller sends in AI mode is reported, to see what it does.
 			sendRemote("other", ",\"command\":" + std::to_string(static_cast<int>(command)));
@@ -670,7 +730,7 @@ namespace {
 void RemoteState::onRemoteScenario(BB::Action::Scenario scenario, ScenarioData data){
 	using S = BB::Action::Scenario;
 	const uint32_t id = static_cast<uint32_t>(scenario);
-	if(needsModels(id) || scenario == S::ReadNotifs || scenario == S::PhoneListNotifs){
+	if(needsModels(id) || scenario == S::ReadNotifs || scenario == S::PhoneListNotifs || scenario >= S::AiSee){
 		sendRemote("scenario", ",\"scenario\":" + std::to_string(id) + ",\"arg\":" + std::to_string(data.raw));
 		remoteIdle(); // nothing for its screen: the agent answers out loud
 		return;

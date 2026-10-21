@@ -12,7 +12,7 @@
 #include "Services/RobotState.h"
 #include "Components/TopBar.h"
 #include "Components/HomeWindow.h"
-#include "Components/GuideElement.h"
+#include "Components/HomeDash.h"
 #include "Components/ActionElement.h"
 
 class HomeScreen : public LVScreen {
@@ -53,7 +53,7 @@ private:
 	lv_obj_t* windowContainer;
 	lv_obj_t* scrollOffset;
 	HomeWindow* activeWindow = nullptr;
-	GuideElement* guide = nullptr;
+	HomeDash* dash = nullptr;
 
 	lv_anim_t windowFadeAnim;
 	AnimUserData currentAnimData;

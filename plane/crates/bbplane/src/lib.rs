@@ -7,6 +7,7 @@ pub mod config;
 pub mod control;
 pub mod ears;
 pub mod face;
+pub mod home;
 pub mod hub;
 pub mod life;
 pub mod light;
@@ -74,6 +75,7 @@ pub async fn start(config: config::Config) -> Result<Plane> {
     tokio::spawn(control::on_body(robot.clone()));
     tokio::spawn(control::overdue_reminders(robot.clone()));
     tokio::spawn(light::run(robot.clone()));
+    tokio::spawn(home::run(robot.clone()));
     tokio::spawn({
         let robot = robot.clone();
         async move {

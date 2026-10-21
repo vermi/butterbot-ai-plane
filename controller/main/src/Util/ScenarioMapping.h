@@ -9,6 +9,26 @@ struct Action {
 	ScenarioData data;
 };
 
+/** AI mode's own entries, listed first while the robot is in AI mode; the laptop's agent does them. */
+struct AiMenuEntry {
+	const char* title;
+	const char* subtitle;
+	Action action;
+};
+
+constexpr AiMenuEntry AiMenu[] = {
+	{ "What Do You See?", "AI: look and tell me", { BB::Action::Scenario::AiSee, {} } },
+	{ "News", "AI: something new in what I like", { BB::Action::Scenario::AiNews, {} } },
+	{ "Weather", "AI: today's weather", { BB::Action::Scenario::AiWeather, {} } },
+	{ "Go Explore", "AI: wander off and report back", { BB::Action::Scenario::AiExplore, {} } },
+	{ "Tell Me a Story", "AI: a very short story", { BB::Action::Scenario::AiStory, {} } },
+	{ "Focus 1 Hour", "AI: quiet until called", { BB::Action::Scenario::AiFocus, {} } },
+	{ "Activity: Quiet", "speaks only when spoken to", { BB::Action::Scenario::AiActivity, ScenarioData{ 0 } } },
+	{ "Activity: Calm", "chats now and then", { BB::Action::Scenario::AiActivity, ScenarioData{ 1 } } },
+	{ "Activity: Normal", "the usual", { BB::Action::Scenario::AiActivity, ScenarioData{ 2 } } },
+	{ "Activity: Lively", "chats often, roams about", { BB::Action::Scenario::AiActivity, ScenarioData{ 3 } } },
+};
+
 // Declaration order defines the display order in the action list
 constexpr std::pair<const char*, Action> ScenarioNameMap[] = {
 	{ "Fact", { BB::Action::Scenario::Fact, {} } },

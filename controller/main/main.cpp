@@ -162,6 +162,15 @@ protected:
 				return;
 			}
 
+			// The home screen's info and AI mode's status are telemetry too (TopBar has the latter)
+			if(state == BB::State::Idle && action.idle == BB::Action::Idle::Home){
+				robotState->setHome(HomeInfoData::deserialize(data.data(), data.size()));
+				return;
+			}
+			if(state == BB::State::AI){
+				return;
+			}
+
 			robotState->setIdleNone(state == BB::State::Idle && action.idle == BB::Action::Idle::None);
 		});
 

@@ -506,6 +506,17 @@ impl Hub {
         }
     }
 
+    /// The most recent logged event that `pick` accepts.
+    pub async fn last_event(&self, pick: impl Fn(&Event) -> bool) -> Option<Event> {
+        self.events
+            .lock()
+            .await
+            .iter()
+            .rev()
+            .find(|e| pick(e))
+            .cloned()
+    }
+
     pub async fn last_event_seq(&self) -> u64 {
         *self.event_seq.lock().await
     }

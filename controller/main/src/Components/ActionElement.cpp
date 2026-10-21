@@ -7,6 +7,7 @@
 
 #include "Fonts/font.hpp"
 #include "Util/ScenarioMapping.h"
+#include "Services/RobotState.h"
 
 ActionElement::ActionElement(lv_obj_t* parent, lv_group_t* inputGroup, std::function<void()> settingsCb, std::function<void(BB::Action::Scenario, ScenarioData)> scenarioCb,
                              const uint16_t initialIndex) : LVObject(parent), inputGroup(inputGroup), settingsCb(std::move(settingsCb)), scenarioCb(std::move(scenarioCb)){
@@ -65,13 +66,30 @@ void ActionElement::buildUI(){
 	lv_style_set_bg_opa(subLabelStyle, LV_OPA_TRANSP);
 
 	// BUTTONS
-	buttons.reserve(std::size(ScenarioNameMap) + 1);
-	phraseTexts.reserve(std::size(ScenarioNameMap));
+	// AI mode's entries come first. Labels keep pointers into phraseTexts: reserve it all up front.
+	const RobotState* robot = Application::getApp()->getService<RobotState>();
+	const bool ai = robot != nullptr && robot->isAi();
+	const size_t count = std::size(ScenarioNameMap) + (ai ? std::size(AiMenu) : 0);
+	buttons.reserve(count + 1);
+	phraseTexts.reserve(count);
+	actions.reserve(count);
 
 	addButton(SettingsTitle, nullptr);
+	if(ai){
+		for(const AiMenuEntry& entry : AiMenu){
+			std::string sub = entry.subtitle;
+			if(entry.action.scenario == BB::Action::Scenario::AiActivity && entry.action.data.raw == (uint8_t) robot->getAiActivity()){
+				sub += " (now)";
+			}
+			phraseTexts.push_back(std::move(sub));
+			addButton(entry.title, phraseTexts.back().c_str());
+			actions.emplace_back(entry.action.scenario, entry.action.data);
+		}
+	}
 	for(const auto& [name, action] : ScenarioNameMap){
 		phraseTexts.push_back(collectPhrases(action.scenario, action.data));
 		addButton(name, phraseTexts.back().c_str());
+		actions.emplace_back(action.scenario, action.data);
 	}
 }
 
@@ -169,8 +187,10 @@ void ActionElement::onItemClicked(const lv_obj_t* btn){
 	if(index == 0){
 		if(settingsCb) settingsCb();
 	} else if(scenarioCb){
-		const auto& [scenario, data] = ScenarioNameMap[index - 1].second;
-		scenarioCb(scenario, data);
+		if(index - 1 < (int32_t) actions.size()){
+			const auto& [scenario, data] = actions[index - 1];
+			scenarioCb(scenario, data);
+		}
 	}
 }
 

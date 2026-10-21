@@ -46,6 +46,7 @@
 #include "BLE/Client.h"
 #include "BLE/Server.h"
 #include "Services/Com.h"
+#include "src/Util/HomeInfo.h"
 #include "Services/Settings.h"
 #include "src/Services/IRStorage.h"
 #include "Phone/Phone.h"
@@ -477,6 +478,7 @@ private:
 		com->sendData(BB::State::Idle, BB::Action::Idle::BatteryLevel,
 					  BatteryLevelData{ .level = (uint8_t)battery->getLevel(),
 										.charge = (ChargeStatus)battery->getChargingState() });
+		HomeInfo::send(); // the home screen's percentage (and clock)
 	}
 
 	void onChargeStatusEvent(ChargingState){

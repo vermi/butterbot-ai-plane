@@ -212,6 +212,24 @@ pub enum ToRobot {
     /// What the status LED shows in AI mode, unless the robot is talking (bright) or cannot reach
     /// the plane (it shows those itself). Not acknowledged.
     StatusLight(Rhythm),
+    /// AI mode's state for the handheld controller's screen: `mode` 1 listening for the name,
+    /// 2 in a conversation, 3 thinking, 4 focus, 5 no agent; `activity` 0 quiet .. 3 lively;
+    /// minutes left in focus mode. Not acknowledged.
+    AiStatus {
+        mode: u8,
+        activity: u8,
+        focus_minutes: u8,
+    },
+    /// The handheld controller's home screen in AI mode: the local `clock` (year, month 1-12,
+    /// day, hour, minute, second; the robot sets its own clock from it), the next reminder, the
+    /// latest thing noticed and how long ago, and the last thing said. Not acknowledged.
+    HomeInfo {
+        clock: [u16; 6],
+        next: String,
+        seen: String,
+        seen_secs: u32,
+        said: String,
+    },
     /// Run a stock scenario routine (`BB::Action::Scenario` value + `ScenarioData.raw`).
     Scenario {
         id: u32,
@@ -265,9 +283,15 @@ impl ToRobot {
             | Modules { id }
             | Phone { id, .. }
             | Safety { id, .. } => Some(*id),
-            Hello | Drive { .. } | Stop | SpkEnd | SpkAbort | Volume { .. } | StatusLight(_) => {
-                None
-            }
+            Hello
+            | Drive { .. }
+            | Stop
+            | SpkEnd
+            | SpkAbort
+            | Volume { .. }
+            | StatusLight(_)
+            | AiStatus { .. }
+            | HomeInfo { .. } => None,
         }
     }
 }

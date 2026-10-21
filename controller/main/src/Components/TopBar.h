@@ -3,8 +3,6 @@
 
 #include <LV_Interface/LVObject.h>
 #include "Services/ThemeService.h"
-#include "Services/Battery.h"
-#include "Components/BatteryElement.h"
 #include "Components/SignalElement.h"
 #include "Components/ShutUpElement.h"
 #include "Services/Com.h"
@@ -26,21 +24,16 @@ public:
 
 private:
 	ThemeService* theme;
-	Battery* battery;
 	Com* com;
 	RobotState* robotState;
 
-	uint64_t lastLoopMillis = 0;
-
-	BatteryElement* ctrlBattery;
-	lv_obj_t* ctrlIcon;
-	BatteryElement* botBattery;
-	lv_obj_t* botIcon;
 	SignalElement* signalEl;
 	ShutUpElement* shutupEl;
+	lv_obj_t* aiLabel;
 
 	void updateShutUpEl() const;
-	void updateBotBattery(const std::vector<uint8_t>& data) const;
+	void updateAi(const std::vector<uint8_t>& data) const;
+	void showAi() const;
 
 	void buildUI();
 };

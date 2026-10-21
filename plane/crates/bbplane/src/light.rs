@@ -122,9 +122,36 @@ pub fn state(robot: &Robot) -> State {
     }
 }
 
-/// Keep the robot's status LED in step with `state`. Spawned once by `crate::start`.
+/// What the handheld controller's top bar shows (see `ToRobot::AiStatus`).
+fn ai_status(robot: &Robot, s: State) -> ToRobot {
+    use crate::life::Activity;
+    ToRobot::AiStatus {
+        mode: match s {
+            State::Listening => 1,
+            State::Attentive => 2,
+            State::Thinking => 3,
+            State::Focus => 4,
+            State::NoBrain => 5,
+        },
+        activity: match robot.life.activity_level() {
+            Activity::Quiet => 0,
+            Activity::Calm => 1,
+            Activity::Normal => 2,
+            Activity::Lively => 3,
+        },
+        focus_minutes: robot
+            .life
+            .focused()
+            .map(|d| d.as_secs().div_ceil(60).min(255) as u8)
+            .unwrap_or(0),
+    }
+}
+
+/// Keep the robot's status LED (and the controller's AI status) in step with `state`. Spawned
+/// once by `crate::start`.
 pub async fn run(robot: Robot) {
     let mut shown: Option<State> = None;
+    let mut shown_status: Option<ToRobot> = None;
     let mut tick = tokio::time::interval(Duration::from_millis(150));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
@@ -132,9 +159,14 @@ pub async fn run(robot: Robot) {
         // Sent again whenever the robot (re)enters AI mode: it starts from its own default.
         if !robot.hub.is_connected().await || robot.mode().await.as_deref() != Some("remote") {
             shown = None;
+            shown_status = None;
             continue;
         }
         let s = state(&robot);
+        let status = ai_status(&robot, s);
+        if shown_status.as_ref() != Some(&status) && robot.hub.send(status.clone()).await.is_ok() {
+            shown_status = Some(status);
+        }
         if shown == Some(s) {
             continue;
         }

@@ -86,6 +86,17 @@ private:
 	void onRemoteCommand(Ctrl::Command command);
 	void onRemoteRC(RCData data);
 	void onRemoteScenario(BB::Action::Scenario scenario, ScenarioData data);
+	void onRemoteConn(Com::ConnStatus status);
+	/** AI mode's state, as the plane last reported it, for the controller's screen. */
+	AIStatusData aiStatus;
+	void sendAiStatus();
+	// The controller's home screen (see HomeInfo): refreshed with the plane's news and every minute.
+	uint64_t homeSentAt = 0;
+	static constexpr uint64_t HomeRefreshMs = 60000;
+	// The controller shows its listening window after Summon's short press, until the agent has
+	// the command (or a while has passed).
+	bool remoteListening = false;
+	uint64_t remoteListenUntil = 0;
 	void sendRemote(const std::string& button, const std::string& extra = "");
 	/** Tell the controller the robot is idle again: it clears what a scenario put on its screen. */
 	void remoteIdle();

@@ -237,10 +237,11 @@ void HomeScreen::loop(){
 	}
 	lv_obj_update_flag(rcLoadingLabel, LV_OBJ_FLAG_HIDDEN, rcWaitStartTime == 0);
 
-	// Show the guide only when nothing else is on screen
+	// Show the dashboard only when nothing else is on screen
 	const bool busy = activeWindow != nullptr || animActive || !windowQueue.empty() || clearPending || popup != nullptr ||
 		actionElement != nullptr || rcWaitStartTime != 0;
-	lv_obj_update_flag(*guide, LV_OBJ_FLAG_HIDDEN, busy);
+	lv_obj_update_flag(*dash, LV_OBJ_FLAG_HIDDEN, busy);
+	dash->loop();
 
 	// Show hold popup if btn held past the short-press window
 	if(summonHoldEnabled && summonPressTime != 0 && popup == nullptr && millis() - summonPressTime >= SummonShortPressMaxMs){
@@ -287,6 +288,12 @@ void HomeScreen::handleDataEvent(const BB::State state, const BB::Action action,
 	WiFiAccessPoint* accessPoint = Object::getApp()->getPeriphery<WiFiAccessPoint>();
 
 	if(state == BB::State::RC){
+		return;
+	}
+
+	// AI mode's status is for the top bar (and the action list), the home info for the dashboard;
+	// neither is a window.
+	if(state == BB::State::AI || (state == BB::State::Idle && action.idle == BB::Action::Idle::Home)){
 		return;
 	}
 
@@ -759,9 +766,8 @@ void HomeScreen::buildUI(){
 	lv_obj_set_size(scrollOffset, 1, 200);
 	lv_obj_set_style_opa(scrollOffset, LV_OPA_TRANSP, 0);
 
-	// Guide element
-	guide = new GuideElement(windowContainer);
-	lv_obj_center(*guide);
+	// The dashboard: clock, batteries, AI mode
+	dash = new HomeDash(windowContainer);
 
 	// "Loading RC..." label
 	rcLoadingLabel = lv_label_create(windowContainer);

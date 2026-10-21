@@ -228,6 +228,22 @@ The handheld controller works in AI mode too:
 In RC mode the joystick mixes forward and turning continuously, so every angle curves by its own
 amount (stock snapped it to eight directions). Entering AI mode with a phone linked, it says so.
 
+The remote's firmware is in [`controller/`](controller) (from CircuitMess's
+ButterBotCtrl-Firmware, MIT). Its screen in AI mode:
+
+- **Top bar:** the mute icon (only while muted), AI mode's state in the middle (`AI` listening
+  for its name, `AI CHAT` in a conversation, `AI ...` thinking, `FOCUS 42` minutes left in focus
+  mode, `AI -` no agent running) and the signal on the right. The battery icons are gone.
+- **Home screen**, whenever nothing else is on it: a big clock with the date, both batteries as
+  percentages with a bar, and in AI mode what it is doing, its activity level, the next reminder,
+  the latest thing it saw or heard (and how long ago) and the last thing it said, scrolling.
+  Outside AI mode, a few button hints instead. The clock is the robot's: set from the phone, or
+  from the computer in AI mode (the robot keeps it after that).
+- **Joystick menu:** in AI mode, AI entries come first: What do you see?, News, Weather, Go
+  explore, Tell me a story, Focus 1 hour and the four activity levels (the current one is marked).
+  After Summon's short press the screen shows the listening window until the agent has the
+  command.
+
 ## Status light
 
 In AI mode the robot's status light shows what it is doing. The light sits on an I/O expander pin

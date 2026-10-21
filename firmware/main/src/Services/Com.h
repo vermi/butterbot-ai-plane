@@ -73,6 +73,14 @@ public:
 		sendData(state, _action, data);
 	}
 
+	template<typename T>
+	void sendData(BB::State state, BB::Action::AI action, const T& data){
+		BB::Action _action = {
+			.ai = action
+		};
+		sendData(state, _action, data);
+	}
+
 protected:
 	void tick(float deltaTime) noexcept override;
 

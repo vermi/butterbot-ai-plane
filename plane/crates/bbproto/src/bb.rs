@@ -28,6 +28,7 @@ pub const IDLE_ACTIONS: &[&str] = &[
     "battery_level",
     "shut_up",
     "cant_move",
+    "home",
 ];
 
 /// `BB::Action::Scenario`, in enum order. Index = wire value.
@@ -73,6 +74,14 @@ pub const SCENARIOS: &[&str] = &[
     "phone_play_music",
     "phone_stop_music",
     "whats_this",
+    // AI mode's own entries in the controller's menu.
+    "ai_see",
+    "ai_news",
+    "ai_weather",
+    "ai_explore",
+    "ai_story",
+    "ai_focus",
+    "ai_activity",
 ];
 
 /// Scenarios that load on-robot speech/vision models; the firmware refuses them in AI mode
@@ -158,10 +167,10 @@ mod tests {
 
     #[test]
     fn names_match_enum_order() {
-        assert_eq!(SCENARIOS.len(), 41);
+        assert_eq!(SCENARIOS.len(), 48);
         assert_eq!(scenario_id("whats_this"), Some(40));
         assert_eq!(scenario_id("dance"), Some(10));
-        assert_eq!(IDLE_ACTIONS.len(), 24);
+        assert_eq!(IDLE_ACTIONS.len(), 25);
         assert_eq!(describe(0, 21), "idle/battery_level");
         assert_eq!(describe(2, 3), "scenario/joke");
     }
