@@ -74,6 +74,16 @@ void Battery::calibrate(){
 	CMF_LOG(Battery, LogLevel::Info, "Calibration: Read %.02f mV, expected %.02f mV. Applying %.02f mV offset.", reading, CalExpected, offset);
 }
 
+float Battery::sampleMillivolts(){
+	return readerRef->sample() + readerBattoffsetFilter->getOffset();
+}
+
+bool Battery::onUsb(){
+	const float mv = sampleMillivolts();
+	usb = usb ? mv >= UsbBelowMv : mv >= UsbAboveMv;
+	return usb;
+}
+
 void Battery::sample(const bool fresh){
 	if(shutdown) return;
 

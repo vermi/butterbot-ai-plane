@@ -24,8 +24,9 @@ use crate::control::Robot;
 
 const HELPER: &str = include_str!("atv.py");
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
-/// Try to reconnect this often while the Apple TV is unreachable.
+/// Try to reconnect this often while the Apple TV is unreachable (sooner at first).
 const RECONNECT: Duration = Duration::from_secs(60);
+const RECONNECT_FIRST: Duration = Duration::from_secs(10);
 
 /// What the agent may do with the Apple TV.
 pub const ACTIONS: [&str; 22] = [
@@ -229,6 +230,7 @@ impl AppleTv {
     async fn request(&self, robot: &Robot, cmd: &str, args: Value) -> Result<Value> {
         self.ensure_helper(robot).await?;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        // "id" is the request's own; a device goes as "device".
         let mut msg = args;
         msg["id"] = id.into();
         msg["cmd"] = cmd.into();
@@ -264,7 +266,7 @@ impl AppleTv {
         self.request(
             robot,
             "pair_start",
-            json!({ "address": d.address, "id": d.id, "protocol": protocol }),
+            json!({ "address": d.address, "device": d.id, "protocol": protocol }),
         )
         .await
     }
@@ -287,7 +289,7 @@ impl AppleTv {
         self.request(
             robot,
             "connect",
-            json!({ "address": d.address, "id": d.id }),
+            json!({ "address": d.address, "device": d.id }),
         )
         .await?;
         self.connected.store(true, Ordering::Relaxed);
@@ -373,6 +375,7 @@ async fn on_playing(robot: &Robot, before: Option<&Value>, now: &Value) {
 
 /// Keep connected to the chosen Apple TV. Spawned once by `crate::start`.
 pub async fn run(robot: Robot) {
+    let mut tries = 0u32;
     loop {
         let atv = &robot.appletv;
         if atv.installed() && atv.device().is_some() && !atv.is_connected() {
@@ -380,6 +383,7 @@ pub async fn run(robot: Robot) {
                 tracing::debug!("apple tv: {e:#}");
             }
         }
-        tokio::time::sleep(RECONNECT).await;
+        tries += 1;
+        tokio::time::sleep(if tries < 6 { RECONNECT_FIRST } else { RECONNECT }).await;
     }
 }

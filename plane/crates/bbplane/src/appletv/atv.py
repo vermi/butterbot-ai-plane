@@ -1,9 +1,10 @@
 """Apple TV control for the ButterBot plane, with pyatv.
 
 Run by the plane (bbplane::appletv) in its own virtual environment. Speaks one JSON object a line:
-requests {"id": n, "cmd": ..., ...} on stdin, replies {"id": n, "ok": true, "result": ...} or
-{"id": n, "ok": false, "error": ...} on stdout, and events {"event": "playing", ...} whenever what
-the Apple TV plays changes. Pairing credentials live in the pyatv storage file it is given.
+requests {"id": n, "cmd": ..., ...} on stdin (an Apple TV's identifier goes as "device"), replies
+{"id": n, "ok": true, "result": ...} or {"id": n, "ok": false, "error": ...} on stdout, and events
+{"event": "playing", ...} whenever what the Apple TV plays changes. Pairing credentials live in the
+pyatv storage file it is given.
 """
 
 import argparse
@@ -97,7 +98,7 @@ class Service:
         ]
 
     async def cmd_pair_start(self, req):
-        found = await self.find(req.get("address"), req.get("id"))
+        found = await self.find(req.get("address"), req.get("device"))
         if not found:
             raise RuntimeError("no Apple TV found there")
         self.conf = found[0]
@@ -123,7 +124,7 @@ class Service:
             self.atv.close()
             self.atv = None
         await self.storage.load()
-        found = await self.find(req.get("address"), req.get("id"))
+        found = await self.find(req.get("address"), req.get("device"))
         if not found:
             raise RuntimeError("no Apple TV found there")
         self.conf = found[0]

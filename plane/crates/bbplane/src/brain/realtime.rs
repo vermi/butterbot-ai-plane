@@ -107,12 +107,28 @@ pub async fn session(robot: &Robot, state: &AgentState) -> Result<String> {
         };
         state.log(format!("> {text}"));
         add_message(&mut sink, &text, image.as_deref()).await?;
+        // Something of its own (not someone talking to it): it decides in silence first, so an
+        // action is not announced ("I'm going to look around..."). If it only wanted to talk,
+        // what it wrote is then said; after an action it reports in the next response, or not.
+        let mut decide_silently = matches!(ev, AgentEvent::Nudge { .. });
         // Answer, running tools, until the model has nothing more to do.
         loop {
-            send(&mut sink, json!({ "type": "response.create" })).await?;
-            let calls = respond(&mut events, robot, state, robot_voice).await?;
+            let create = if decide_silently {
+                json!({ "type": "response.create", "response": { "output_modalities": ["text"] } })
+            } else {
+                json!({ "type": "response.create" })
+            };
+            send(&mut sink, create).await?;
+            let silent = std::mem::take(&mut decide_silently);
+            let (calls, held) = respond(&mut events, robot, state, robot_voice, silent).await?;
             if calls.is_empty() {
+                if silent && !held.trim().is_empty() {
+                    say_decided(&mut sink, &mut events, robot, state, robot_voice, held.trim()).await?;
+                }
                 break;
+            }
+            if !held.trim().is_empty() {
+                state.log(format!("(kept to itself: {})", held.trim()));
             }
             let mut again = false;
             for c in calls {
@@ -146,14 +162,55 @@ pub async fn session(robot: &Robot, state: &AgentState) -> Result<String> {
     }
 }
 
-/// Play one response as it streams in; returns the function calls it made.
+/// Say what it decided to say in a silent response: in the robot's voice, or as an out-of-band
+/// spoken response (not added to the conversation, which already has it as text).
+async fn say_decided(
+    sink: &mut Sink,
+    events: &mut mpsc::UnboundedReceiver<Value>,
+    robot: &Robot,
+    state: &AgentState,
+    robot_voice: bool,
+    text: &str,
+) -> Result<()> {
+    if robot_voice {
+        let mut speech = super::Speech::start(robot);
+        speech.push(text);
+        let said = speech.finish().await?;
+        if !said.trim().is_empty() {
+            state.log(format!("< {}", said.trim()));
+            robot.note_said(said.trim()).await;
+        }
+        return Ok(());
+    }
+    send(
+        sink,
+        json!({
+            "type": "response.create",
+            "response": {
+                "conversation": "none",
+                "input": [],
+                "output_modalities": ["audio"],
+                "tool_choice": "none",
+                "instructions": format!("Say this out loud, exactly as written, in your usual voice and manner, and nothing else:\n{text}"),
+            },
+        }),
+    )
+    .await?;
+    respond(events, robot, state, false, false).await?;
+    Ok(())
+}
+
+/// Play one response as it streams in; returns the function calls it made, and with `silent`
+/// (a text-only response, not to be heard) the text it wrote.
 async fn respond(
     events: &mut mpsc::UnboundedReceiver<Value>,
     robot: &Robot,
     state: &AgentState,
     robot_voice: bool,
-) -> Result<Vec<Call>> {
-    let mut speech = robot_voice.then(|| super::Speech::start(robot));
+    silent: bool,
+) -> Result<(Vec<Call>, String)> {
+    let mut speech = (robot_voice && !silent).then(|| super::Speech::start(robot));
+    let mut held = String::new();
     let hushes = robot.hush_count();
     let mut speaker = None;
     let mut said = String::new();
@@ -184,7 +241,9 @@ async fn respond(
                 said.push_str(v["delta"].as_str().unwrap_or_default());
             }
             "response.output_text.delta" | "response.text.delta" => {
-                if let Some(sp) = speech.as_mut() {
+                if silent {
+                    held.push_str(v["delta"].as_str().unwrap_or_default());
+                } else if let Some(sp) = speech.as_mut() {
                     sp.push(v["delta"].as_str().unwrap_or_default());
                 }
             }
@@ -227,7 +286,7 @@ async fn respond(
         state.log(format!("< {}", said.trim()));
         robot.note_said(said.trim()).await;
     }
-    Ok(calls)
+    Ok((calls, held))
 }
 
 async fn send(sink: &mut Sink, v: Value) -> Result<()> {

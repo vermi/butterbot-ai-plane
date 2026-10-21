@@ -1,4 +1,5 @@
 #include "ShutdownService.h"
+#include "Services/Battery.h"
 #include "Pins.hpp"
 #include "Enums.hpp"
 #include "Drivers/Output/OutputGPIO.h"
@@ -72,6 +73,12 @@ void ShutdownService::tick(float deltaTime) noexcept{
 
 	const InactivityTimeout timeout = settings->get().inactivityTimeout;
 	if(timeout == InactivityTimeout::Off) return;
+
+	// On USB there is no battery to save: stay on.
+	if(Battery* battery = Application::getApp()->getService<Battery>(); battery != nullptr && battery->onUsb()){
+		inactivityTime = 0.0f;
+		return;
+	}
 
 	if(inactivityTime >= (float) ((uint32_t) timeout * 60)){
 		shutdown(ShutdownReason::Inactivity);

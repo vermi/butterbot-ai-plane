@@ -105,6 +105,14 @@ public:
 
 	uint8_t getPerc() const;
 	Level getLevel() const;
+	/** The supply's voltage in millivolts (before mapping to a percentage), freshly sampled. */
+	float sampleMillivolts();
+
+	/**
+	 * Powered over USB rather than AA batteries. There is no USB sense line: USB reads about
+	 * 4.73 V here, above any set of AAs under load (VoltFull is 4.5 V), so it goes by that.
+	 */
+	bool onUsb();
 
 private:
 	static constexpr uint32_t MeasureIntverval = 200;
@@ -120,6 +128,10 @@ private:
 	static constexpr float CalExpected = 2500;
 
 	std::unique_ptr<Threaded> batThread;
+
+	static constexpr float UsbAboveMv = 4650;
+	static constexpr float UsbBelowMv = 4600;
+	bool usb = false;
 
 	OutputPin refSwitch;
 

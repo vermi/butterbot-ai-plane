@@ -63,6 +63,7 @@ pub fn router(robot: Robot) -> Router {
         .route("/api/life", get(life))
         .route("/api/plans/done", post(plan_done))
         .route("/api/voices/forget", post(forget_voice))
+        .route("/api/tell", post(tell))
         .route("/api/diary/{day}", get(diary_day))
         .nest_service("/mcp", mcp)
         .layer(middleware::from_fn(move |req, next| {
@@ -433,6 +434,28 @@ async fn life(State(r): State<Robot>) -> Json<Value> {
         "voices": r.voices.names().iter().map(|(n, k)| json!({ "name": n, "samples": k })).collect::<Vec<_>>(),
         "focus_minutes_left": r.life.focused().map(|d| d.as_secs().div_ceil(60)),
     }))
+}
+
+#[derive(Deserialize)]
+struct TellBody {
+    text: String,
+}
+
+/// A typed message for the agent, as if said to the robot by name.
+async fn tell(State(r): State<Robot>, Json(b): Json<TellBody>) -> Response {
+    let text = b.text.trim();
+    if text.is_empty() {
+        return err(anyhow::anyhow!("say something"));
+    }
+    if r.mode().await.as_deref() != Some("remote") || !r.life.agent_running.load(std::sync::atomic::Ordering::Relaxed) {
+        return err(anyhow::anyhow!("he is not listening (not in AI mode, or no agent running)"));
+    }
+    r.hub
+        .push_event("heard", json!({ "text": text, "typed": true }))
+        .await;
+    r.ears.command(text);
+    r.light.thinking();
+    Json(json!({ "ok": true })).into_response()
 }
 
 async fn forget_voice(State(r): State<Robot>, Json(b): Json<FaceBody>) -> Response {
