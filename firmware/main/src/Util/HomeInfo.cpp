@@ -38,6 +38,9 @@ void HomeInfo::setAi(const HomeInfoData& n){
 	news.seen = n.seen;
 	news.seenSecs = n.seenSecs;
 	news.said = n.said;
+	news.heard = n.heard;
+	news.heardLast = n.heardLast;
+	news.doing = n.doing;
 	newsAt = millis();
 }
 

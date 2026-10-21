@@ -32,6 +32,9 @@ private:
 	lv_obj_t* aiLabel;
 	lv_obj_t* clockLabel;
 	uint64_t lastClock = 0;
+	// A lightning bolt while the robot is plugged in
+	lv_obj_t* bolt;
+	alignas(4) uint16_t boltBuf[5 * 7];
 
 	void updateShutUpEl() const;
 	void updateAi(const std::vector<uint8_t>& data) const;

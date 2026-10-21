@@ -2,7 +2,6 @@
 #include <cstring>
 #include <cstdio>
 #include <cJSON.h>
-#include <mbedtls/base64.h>
 #include <esp_heap_caps.h>
 #include <esp_mac.h>
 #include <esp_wifi.h>
@@ -82,7 +81,7 @@ namespace {
 		{ "phone", LinkRequest::Type::Phone },
 		{ "ai_status", LinkRequest::Type::AiStatus },
 		{ "home_info", LinkRequest::Type::HomeInfo },
-		{ "peek", LinkRequest::Type::Peek },
+		{ "peek_caption", LinkRequest::Type::PeekCaption },
 		{ "scenario", LinkRequest::Type::Scenario },
 		{ "ir_list", LinkRequest::Type::IrList },
 		{ "ir_send", LinkRequest::Type::IrSend },
@@ -821,24 +820,12 @@ void LinkService::handleCtrl(const char* json, size_t len){
 		if(const char* v = str(root, "next")) req.home.next = v;
 		if(const char* v = str(root, "seen")) req.home.seen = v;
 		if(const char* v = str(root, "said")) req.home.said = v;
+		if(const char* v = str(root, "heard")) req.home.heard = v;
+		if(const char* v = str(root, "doing")) req.home.doing = v;
+		req.home.heardLast = flag(root, "heard_last", false);
 		req.home.seenSecs = static_cast<uint16_t>(std::clamp<double>(num(root, "seen_secs", 0), 0, UINT16_MAX));
 	}
-	if(req.type == T::Peek){
-		// A small JPEG for the controller's screen, base64 in the JSON.
-		if(const char* b64 = str(root, "jpeg")){
-			const size_t len = strlen(b64);
-			req.text.resize(len * 3 / 4 + 3);
-			size_t out = 0;
-			if(mbedtls_base64_decode((unsigned char*) req.text.data(), req.text.size(), &out, (const unsigned char*) b64, len) == 0){
-				req.text.resize(out);
-			}else{
-				req.text.clear();
-			}
-		}
-		if(const char* caption = str(root, "caption")){
-			req.caption = caption;
-		}
-	}else if(const char* text = str(root, req.type == T::Phone ? "action" : "text")){
+	if(const char* text = str(root, req.type == T::Phone ? "action" : "text")){
 		req.text = text;
 	}
 	cJSON_Delete(root);

@@ -59,7 +59,7 @@ struct BB {
 
 		enum class AI {
 			Status,
-			PeekChunk,   // part of a camera picture for the controller (PeekChunkHeader + JPEG bytes)
+			PeekWiFi,    // how the controller reaches the plane for the camera (PeekWiFiData)
 			PeekCaption, // what is in the picture (PeekCaptionData)
 		} ai;
 	} action;
@@ -91,15 +91,17 @@ struct AIStatusData : BBData {
 };
 
 /**
- * The camera on the controller's screen in AI mode (Scenario::AiPeek): the plane shrinks frames
- * to small JPEGs and the robot passes them on in pieces that each fit one notification.
+ * The camera on the controller's screen in AI mode (Scenario::AiPeek). Bluetooth is far too slow
+ * for video, so the controller joins the home Wi-Fi next to its own access point and the plane
+ * streams to it directly, in the RC feed's format (FeedFrame). The robot hands over what it needs
+ * when the view opens; the controller keeps it in memory only while the view is open.
  */
-struct PeekChunkHeader {
-	static constexpr size_t MaxBytes = 460; // JPEG bytes after the header, per piece
+struct PeekWiFiData : BBData {
+	static constexpr uint16_t PlanePort = 7533; // the controller says hello here; frames come back to UDPPort
 
-	uint8_t frame; // counts up per picture
-	uint8_t index;
-	uint8_t count;
+	char ssid[33];
+	char password[65];
+	uint32_t planeIp; // network byte order
 };
 
 struct PeekCaptionData : BBData {
@@ -131,6 +133,8 @@ struct HomeInfoData : BBData {
 	static constexpr uint8_t MaxSeen = 32;
 	static constexpr uint8_t MaxSaid = 100;
 	static constexpr uint8_t MaxPlaying = 64;
+	static constexpr uint8_t MaxHeard = 80;
+	static constexpr uint8_t MaxDoing = 24;
 
 	uint8_t botPercent = 0;
 	bool clockSet = false;
@@ -143,6 +147,9 @@ struct HomeInfoData : BBData {
 	uint16_t seenSecs = 0; // how long ago
 	std::string said;      // the last thing it said
 	std::string playing;   // the phone's music, "Title - Artist" (any mode; empty unless playing)
+	std::string heard;     // AI mode: the last thing someone said to it
+	bool heardLast = false; // that came after `said`
+	std::string doing;     // AI mode: what it is up to right now ("dancing"), if anything
 
 	std::vector<uint8_t> serialize() const{
 		std::vector<uint8_t> buf;
@@ -159,6 +166,9 @@ struct HomeInfoData : BBData {
 		ComSerial::writeU8(buf, seenSecs >> 8);
 		ComSerial::writeString(buf, said, MaxSaid);
 		ComSerial::writeString(buf, playing, MaxPlaying);
+		ComSerial::writeString(buf, heard, MaxHeard);
+		ComSerial::writeU8(buf, heardLast);
+		ComSerial::writeString(buf, doing, MaxDoing);
 		return buf;
 	}
 
@@ -179,6 +189,9 @@ struct HomeInfoData : BBData {
 		d.seenSecs |= ComSerial::readU8(cur, end) << 8;
 		d.said = ComSerial::readString(cur, end);
 		d.playing = ComSerial::readString(cur, end);
+		d.heard = ComSerial::readString(cur, end);
+		d.heardLast = ComSerial::readU8(cur, end) != 0;
+		d.doing = ComSerial::readString(cur, end);
 		return d;
 	}
 };

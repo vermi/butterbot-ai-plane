@@ -54,6 +54,16 @@ pub fn router(robot: Robot) -> Router {
         .route("/api/memory", get(memory))
         .route("/api/memory/forget", post(forget_memory))
         .route("/api/reminders/cancel", post(cancel_reminder))
+        .route("/api/appletv", get(appletv))
+        .route("/api/appletv/setup", post(appletv_setup))
+        .route("/api/appletv/scan", post(appletv_scan))
+        .route("/api/appletv/pair", post(appletv_pair))
+        .route("/api/appletv/pin", post(appletv_pin))
+        .route("/api/appletv/control", post(appletv_control))
+        .route("/api/life", get(life))
+        .route("/api/plans/done", post(plan_done))
+        .route("/api/voices/forget", post(forget_voice))
+        .route("/api/diary/{day}", get(diary_day))
         .nest_service("/mcp", mcp)
         .layer(middleware::from_fn(move |req, next| {
             guard(allowed.clone(), req, next)
@@ -324,6 +334,129 @@ async fn cancel_reminder(State(r): State<Robot>, Json(b): Json<IdBody>) -> Respo
         Ok(removed) => Json(json!({ "ok": true, "removed": removed })).into_response(),
         Err(e) => err(e),
     }
+}
+
+async fn appletv(State(r): State<Robot>) -> Json<Value> {
+    Json(r.appletv.status_json(&r).await)
+}
+
+async fn appletv_setup(State(r): State<Robot>) -> Response {
+    match r.appletv.setup().await {
+        Ok(msg) => Json(json!({ "ok": true, "message": msg })).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct AddressBody {
+    address: Option<String>,
+}
+
+async fn appletv_scan(State(r): State<Robot>, Json(b): Json<AddressBody>) -> Response {
+    let address = b
+        .address
+        .as_deref()
+        .map(str::trim)
+        .filter(|a| !a.is_empty());
+    match r.appletv.scan(&r, address).await {
+        Ok(found) => Json(json!({ "ok": true, "found": found })).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct PairBody {
+    id: String,
+    address: String,
+    name: String,
+    protocol: String,
+}
+
+async fn appletv_pair(State(r): State<Robot>, Json(b): Json<PairBody>) -> Response {
+    let d = crate::appletv::Device {
+        id: b.id,
+        address: b.address,
+        name: b.name,
+    };
+    match r.appletv.pair_start(&r, d, &b.protocol).await {
+        Ok(v) => Json(json!({ "ok": true, "result": v })).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct PinBody {
+    pin: String,
+}
+
+async fn appletv_pin(State(r): State<Robot>, Json(b): Json<PinBody>) -> Response {
+    match r.appletv.pair_pin(&r, b.pin.trim()).await {
+        Ok(v) => Json(json!({ "ok": true, "result": v })).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct ControlBody {
+    action: String,
+    value: Option<String>,
+}
+
+async fn appletv_control(State(r): State<Robot>, Json(b): Json<ControlBody>) -> Response {
+    match r.appletv.act(&r, &b.action, b.value.as_deref()).await {
+        Ok(v) => Json(json!({ "ok": true, "result": v })).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+/// His inner life: mood, plans, diary days.
+async fn life(State(r): State<Robot>) -> Json<Value> {
+    let plans: Vec<Value> = r
+        .intentions
+        .list()
+        .iter()
+        .map(|p| json!({ "id": p.id, "when": p.when(), "text": p.text }))
+        .collect();
+    let days: Vec<String> = r
+        .diary
+        .days()
+        .iter()
+        .take(60)
+        .map(|d| d.to_string())
+        .collect();
+    Json(json!({
+        "mood": r.mood.for_agent(),
+        "doing": r.doing(),
+        "plans": plans,
+        "diary_days": days,
+        "activity": r.life.activity_level().name(),
+        "voices": r.voices.names().iter().map(|(n, k)| json!({ "name": n, "samples": k })).collect::<Vec<_>>(),
+        "focus_minutes_left": r.life.focused().map(|d| d.as_secs().div_ceil(60)),
+    }))
+}
+
+async fn forget_voice(State(r): State<Robot>, Json(b): Json<FaceBody>) -> Response {
+    match r.voices.forget(&b.name) {
+        Ok(removed) => Json(json!({ "ok": true, "removed": removed })).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+async fn plan_done(State(r): State<Robot>, Json(b): Json<IdBody>) -> Response {
+    match r.intentions.done(b.id) {
+        Ok(removed) => Json(json!({ "ok": true, "removed": removed })).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+async fn diary_day(
+    State(r): State<Robot>,
+    axum::extract::Path(day): axum::extract::Path<String>,
+) -> Response {
+    let Ok(d) = chrono::NaiveDate::parse_from_str(&day, "%Y-%m-%d") else {
+        return err(anyhow::anyhow!("day must look like 2026-10-20"));
+    };
+    Json(json!({ "day": day, "entry": r.diary.read(d) })).into_response()
 }
 
 async fn frame(State(r): State<Robot>) -> Response {

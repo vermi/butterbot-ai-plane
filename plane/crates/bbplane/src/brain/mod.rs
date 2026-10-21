@@ -111,6 +111,16 @@ pub fn tools() -> Vec<Value> {
             &["level"],
         ),
         f(
+            "gesture",
+            "Body language with your tracks: wiggle (happy), nod (yes), shake (no), bounce (playful), twirl (excited), shiver (scared), approach (curious), back_off (shy, sad), sulk (grumpy), or dance (to the beat of music you hear, if any). Use them to show how you feel, without announcing it.",
+            json!({
+                "name": { "type": "string", "enum": crate::gestures::GESTURES.map(|(n, _)| n) },
+                "bpm": { "type": "number", "description": "dance only: beats a minute (default: the music's)" },
+                "seconds": { "type": "integer", "description": "dance only: how long (default 10)" }
+            }),
+            &["name"],
+        ),
+        f(
             "feel",
             "Say how you feel now. It lasts (fading over an hour or so), comes back with every message, sets how soon you get your own ideas, and shows on your face.",
             json!({
@@ -183,6 +193,55 @@ pub fn tools() -> Vec<Value> {
                 "at": { "type": "string", "description": "\"HH:MM\", 24-hour local time" },
             }),
             &["text"],
+        ),
+        f(
+            "apple_tv",
+            "The Apple TV in the living room: what's playing (now_playing, status), play, pause, play_pause, next, previous, volume_up, volume_down, set_volume (value 0-100), turn_on, turn_off, apps, launch (value: app name), and remote buttons (home, menu, select, up, down, left, right).",
+            json!({
+                "action": { "type": "string", "enum": crate::appletv::ACTIONS },
+                "value": { "type": "string", "description": "set_volume: 0-100; launch: the app" }
+            }),
+            &["action"],
+        ),
+        f(
+            "remember_voice",
+            "Remember the voice of the person who just spoke to you, as `name` (only if they ask or agree). After that, messages from them come with `speaker`, even when they are off camera. forget: true drops it.",
+            json!({
+                "name": { "type": "string" },
+                "forget": { "type": "boolean" }
+            }),
+            &["name"],
+        ),
+        f(
+            "intend",
+            "Make a plan of your own: something you mean to do, at a time (in_minutes, or at \"HH:MM\") or some day (neither). A timed plan comes back to you when due; some-day plans come with your free moments as ideas.",
+            json!({
+                "text": { "type": "string", "description": "what you mean to do" },
+                "in_minutes": { "type": "number" },
+                "at": { "type": "string", "description": "\"HH:MM\", 24-hour local time" },
+            }),
+            &["text"],
+        ),
+        f(
+            "plans",
+            "List your own plans, or mark one done (or dropped) by id.",
+            json!({ "done": { "type": "integer", "description": "id of a plan you did or dropped" } }),
+            &[],
+        ),
+        f(
+            "write_diary",
+            "Write your diary entry for a day (default today), in your own words. Replaces that day's entry.",
+            json!({
+                "text": { "type": "string" },
+                "day": { "type": "string", "description": "YYYY-MM-DD (default today)" },
+            }),
+            &["text"],
+        ),
+        f(
+            "read_diary",
+            "Read your diary: a day's entry (default the latest), and which days have one.",
+            json!({ "day": { "type": "string", "description": "YYYY-MM-DD" } }),
+            &[],
         ),
         f(
             "reminders",
@@ -258,6 +317,20 @@ pub async fn run_tool(robot: &Robot, cfg: &BrainConfig, name: &str, args: &Value
                 }
                 None => Outcome::Text("level must be quiet, calm, normal or lively".into()),
             },
+            "gesture" => {
+                let name = args["name"].as_str().unwrap_or_default();
+                let r = if name == "dance" {
+                    crate::gestures::dance(
+                        robot,
+                        args["bpm"].as_f64(),
+                        args["seconds"].as_u64(),
+                    )
+                    .await
+                } else {
+                    crate::gestures::gesture(robot, name).await
+                };
+                Outcome::Text(r.unwrap_or_else(|e| format!("could not: {e:#}")))
+            }
             "feel" => match args["emotion"]
                 .as_str()
                 .and_then(crate::mood::Emotion::parse)
@@ -356,6 +429,75 @@ pub async fn run_tool(robot: &Robot, cfg: &BrainConfig, name: &str, args: &Value
                     chrono::Local::now().format("%H:%M"),
                     r.id
                 ))
+            }
+            "apple_tv" => {
+                let r = robot
+                    .appletv
+                    .act(
+                        robot,
+                        args["action"].as_str().unwrap_or_default(),
+                        args["value"].as_str(),
+                    )
+                    .await;
+                Outcome::Text(match r {
+                    Ok(v) => v.to_string(),
+                    Err(e) => format!("could not: {e:#}"),
+                })
+            }
+            "remember_voice" => {
+                let name = args["name"].as_str().unwrap_or_default();
+                if args["forget"].as_bool() == Some(true) {
+                    let gone = robot.voices.forget(name)?;
+                    Outcome::Text(if gone { "forgotten" } else { "I did not know that voice" }.into())
+                } else {
+                    let n = robot.voices.remember_last(name)?;
+                    Outcome::Text(format!("I'll know {name}'s voice ({n} sample(s); it gets better as they talk to me)."))
+                }
+            }
+            "intend" => {
+                let p = robot.intentions.add(
+                    args["text"].as_str().unwrap_or_default(),
+                    args["in_minutes"].as_f64(),
+                    args["at"].as_str(),
+                )?;
+                Outcome::Text(format!("Planned ({}), id {}.", p.when(), p.id))
+            }
+            "plans" => {
+                if let Some(id) = args["done"].as_u64() {
+                    let gone = robot.intentions.done(id as u32)?;
+                    Outcome::Text(if gone { "done" } else { "no such plan" }.into())
+                } else {
+                    let list: Vec<Value> = robot
+                        .intentions
+                        .list()
+                        .iter()
+                        .map(|p| json!({ "id": p.id, "when": p.when(), "text": p.text }))
+                        .collect();
+                    Outcome::Text(json!({ "plans": list }).to_string())
+                }
+            }
+            "write_diary" => {
+                let day = diary_day(args["day"].as_str())?;
+                robot
+                    .diary
+                    .write(day, args["text"].as_str().unwrap_or_default())?;
+                Outcome::Text(format!("Written for {day}."))
+            }
+            "read_diary" => {
+                let days = robot.diary.days();
+                let day = match args["day"].as_str() {
+                    Some(d) => Some(diary_day(Some(d))?),
+                    None => days.first().copied(),
+                };
+                let entry = day.and_then(|d| robot.diary.read(d));
+                Outcome::Text(
+                    json!({
+                        "day": day.map(|d| d.to_string()),
+                        "entry": entry,
+                        "days_with_entries": days.iter().take(30).map(|d| d.to_string()).collect::<Vec<_>>(),
+                    })
+                    .to_string(),
+                )
             }
             "reminders" => {
                 if let Some(id) = args["cancel"].as_u64() {
@@ -682,6 +824,15 @@ async fn speak(
         st.finish().await?;
     }
     Ok(())
+}
+
+/// A diary day: "YYYY-MM-DD", or today.
+fn diary_day(day: Option<&str>) -> Result<chrono::NaiveDate> {
+    match day {
+        Some(d) => chrono::NaiveDate::parse_from_str(d.trim(), "%Y-%m-%d")
+            .map_err(|_| anyhow::anyhow!("day must look like 2026-10-20")),
+        None => Ok(chrono::Local::now().date_naive()),
+    }
 }
 
 #[cfg(test)]

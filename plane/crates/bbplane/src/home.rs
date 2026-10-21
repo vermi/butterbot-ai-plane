@@ -11,7 +11,7 @@ use crate::control::Robot;
 use crate::hub::Event;
 
 /// Look for news this often.
-const CHECK: Duration = Duration::from_secs(2);
+const CHECK: Duration = Duration::from_millis(500);
 /// Send it again this often even when nothing changed (the clock).
 const REFRESH: Duration = Duration::from_secs(300);
 /// Sightings older than this are not news.
@@ -20,6 +20,8 @@ const SEEN_FOR: Duration = Duration::from_secs(12 * 3600);
 const MAX_NEXT: usize = 48;
 const MAX_SEEN: usize = 32;
 const MAX_SAID: usize = 100;
+const MAX_HEARD: usize = 80;
+const MAX_DOING: usize = 24;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 struct News {
@@ -28,6 +30,9 @@ struct News {
     /// When it was seen, in Unix milliseconds.
     seen_ms: u64,
     said: String,
+    heard: String,
+    heard_last: bool,
+    doing: String,
 }
 
 /// Keep the home screen up to date while the robot is in AI mode. Spawned once by `crate::start`.
@@ -73,23 +78,43 @@ async fn news(robot: &Robot) -> News {
                 .unwrap_or_else(Local::now);
             format!("{} {}", when(due, Local::now()), r.text)
         })
+        .or_else(|| {
+            robot.intentions.next().map(|p| match p.due_ms {
+                Some(ms) => format!(
+                    "Plan {} {}",
+                    when(crate::reminders::local(ms), Local::now()),
+                    p.text
+                ),
+                None => format!("Plan: {}", p.text),
+            })
+        })
         .unwrap_or_default();
     let seen = robot.hub.last_event(|e| sighting(e).is_some()).await;
     let (seen, seen_ms) = seen
         .filter(|e| (now_ms as u64).saturating_sub(e.ts) < SEEN_FOR.as_millis() as u64)
         .and_then(|e| sighting(&e).map(|s| (s, e.ts)))
         .unwrap_or_default();
-    let said = robot
-        .hub
-        .last_event(|e| e.kind == "said")
-        .await
-        .and_then(|e| e.data["text"].as_str().map(str::to_string))
-        .unwrap_or_default();
+    let said_ev = robot.hub.last_event(|e| e.kind == "said").await;
+    let heard_ev = robot.hub.last_event(|e| e.kind == "heard").await;
+    let text = |e: &Option<Event>| {
+        e.as_ref()
+            .and_then(|e| e.data["text"].as_str().map(str::to_string))
+            .unwrap_or_default()
+    };
+    let (said, heard) = (text(&said_ev), text(&heard_ev));
+    let heard_last = match (&said_ev, &heard_ev) {
+        (Some(s), Some(h)) => h.seq > s.seq,
+        (None, Some(_)) => true,
+        _ => false,
+    };
     News {
         next: ascii(&next, MAX_NEXT),
         seen: ascii(&seen, MAX_SEEN),
         seen_ms,
         said: ascii(&said, MAX_SAID),
+        heard: ascii(&heard, MAX_HEARD),
+        heard_last,
+        doing: ascii(&robot.doing().unwrap_or_default(), MAX_DOING),
     }
 }
 
@@ -112,6 +137,9 @@ fn message(n: &News, now: DateTime<Local>) -> ToRobot {
         seen: n.seen.clone(),
         seen_secs: seen_secs.min(u32::MAX as u64) as u32,
         said: n.said.clone(),
+        heard: n.heard.clone(),
+        heard_last: n.heard_last,
+        doing: n.doing.clone(),
     }
 }
 

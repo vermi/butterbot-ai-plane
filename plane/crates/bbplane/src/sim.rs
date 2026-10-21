@@ -284,7 +284,7 @@ async fn handle(s: &mut Sim, f: Frame, tx: &mpsc::Sender<Frame>) -> Result<()> {
         ToRobot::StatusLight(_)
         | ToRobot::AiStatus { .. }
         | ToRobot::HomeInfo { .. }
-        | ToRobot::Peek { .. } => {}
+        | ToRobot::PeekCaption { .. } => {}
         ToRobot::Phone { id, .. } => {
             tx.send(ack(
                 id,

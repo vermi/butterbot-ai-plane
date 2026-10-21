@@ -76,6 +76,9 @@ pub struct Command {
     pub at_ms: u64,
     /// Enrolled people in front of the camera at the time (likely the speaker).
     pub in_view: Vec<String>,
+    /// Who it was, by voice, if it is a voice the robot knows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
     #[serde(skip)]
     heard_at: Option<Instant>,
 }
@@ -275,6 +278,7 @@ impl Ears {
             follow_up: false,
             at_ms: crate::hub::now_ms(),
             in_view: Vec::new(),
+            speaker: None,
             heard_at: Some(Instant::now()),
         });
     }
@@ -586,6 +590,8 @@ fn handle_utterance(ears: Arc<Ears>, robot: Robot, utterance: Vec<i16>) {
         .unwrap_or_else(Instant::now);
     tokio::spawn(async move {
         let started = Instant::now();
+        // Kept for the voiceprint, only if it turns out to be for the robot.
+        let pcm = utterance.clone();
         let said = match ears.transcribe(utterance).await {
             Ok(t) => t,
             Err(e) => {
@@ -625,19 +631,25 @@ fn handle_utterance(ears: Arc<Ears>, robot: Robot, utterance: Vec<i16>) {
             .into_iter()
             .filter_map(|s| s.name)
             .collect();
+        let speaker = robot.voices.hear(pcm, &in_view).await;
+        if let Some((name, score)) = &speaker {
+            tracing::info!("voice: {name} ({score:.2})");
+        }
+        let speaker = speaker.map(|(name, _)| name);
         let c = Command {
             text,
             said: said.clone(),
             follow_up,
             at_ms: now_ms(),
             in_view: in_view.clone(),
+            speaker: speaker.clone(),
             heard_at: Some(Instant::now()),
         };
         robot
             .hub
             .push_event(
                 "heard",
-                json!({ "text": c.text, "follow_up": follow_up, "in_view": in_view }),
+                json!({ "text": c.text, "follow_up": follow_up, "in_view": in_view, "speaker": speaker }),
             )
             .await;
         ears.push(c);

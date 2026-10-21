@@ -31,7 +31,7 @@
 struct LinkRequest {
 	enum class Type : uint8_t {
 		EnterRemote, ExitRemote, Drive, Stop, Say, SpkBegin, SpkEnd, SpkAbort, Volume,
-		Camera, Snapshot, Mic, Led, StatusLight, Phone, AiStatus, HomeInfo, Peek, Scenario, IrList, IrSend, Modules, Safety
+		Camera, Snapshot, Mic, Led, StatusLight, Phone, AiStatus, HomeInfo, PeekCaption, Scenario, IrList, IrSend, Modules, Safety
 	} type = Type::Stop;
 
 	uint32_t id = 0;
@@ -61,8 +61,7 @@ struct LinkRequest {
 	uint32_t scenario = 0;
 	uint8_t arg = 0;
 	uint8_t index = 0;
-	std::string text;      // Say: what to say; Phone: the action; Peek: the JPEG
-	std::string caption;   // Peek: what is in the picture
+	std::string text;      // Say: what to say; Phone: the action; PeekCaption: what is in view
 };
 
 /**
@@ -134,6 +133,8 @@ public:
 	void tune(const LinkTuneData& data);
 
 	bool isOnline() const { return online; }
+	/** The plane's IPv4 address (network byte order), 0 before it is known. */
+	uint32_t planeIp() const { return target.sin_addr.s_addr; }
 
 	void setRemote(bool remote){ this->remote = remote; }
 	bool isRemote() const { return remote; }

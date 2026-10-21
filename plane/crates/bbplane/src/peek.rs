@@ -1,80 +1,136 @@
 //! The camera on the handheld controller's screen in AI mode (the joystick pushed up on its home
-//! screen): while it is open, the latest frame goes to the robot as a small JPEG with a caption of
-//! what is in view, and the robot passes it on over Bluetooth. Closes by itself after a while.
+//! screen).
+//!
+//! Bluetooth is far too slow for video, so the controller joins the home Wi-Fi (the robot gives it
+//! the details) and says hello here every second. While it does, each new camera frame goes to it
+//! shrunk to its screen, in the RC feed's format (`FeedFrame` in ButterBot-Common) so its RC video
+//! code shows it, and what is in view goes through the robot as a caption. Meanwhile the camera
+//! runs at QVGA: more frames a second, at more than the controller can show anyway.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use base64::Engine;
 use bbproto::ctrl::ToRobot;
 use image::imageops::FilterType;
+use tokio::net::UdpSocket;
 
 use crate::control::Robot;
 
+/// `PeekWiFiData::PlanePort`: the controller says hello here.
+pub const PORT: u16 = 7533;
+/// `UDPPort` on the controller: its feed listens here.
+const FEED_PORT: u16 = 6001;
+const HELLO: &[u8] = b"BBPEEK";
+/// No hello for this long: the view is closed.
+const GONE: Duration = Duration::from_secs(3);
 /// The controller's picture: its 128 px wide screen, below the top bar.
 const WIDTH: u32 = 128;
 const HEIGHT: u32 = 96;
-/// About 2 KB a picture (five Bluetooth notifications): a few a second next to Wi-Fi.
-const QUALITY: u8 = 40;
-/// Look for a new camera frame this often.
-const INTERVAL: Duration = Duration::from_millis(300);
-/// Nobody looks this long; the controller closes it too.
-const MAX_OPEN: Duration = Duration::from_secs(120);
+const QUALITY: u8 = 50;
+/// Neither end reassembles fragmented datagrams: a frame goes in pieces of this size, which the
+/// controller's feed puts back together from its stream.
+const DATAGRAM: usize = 1400;
 const MAX_CAPTION: usize = 64;
+/// `FeedFrame::Header`, `Trailer` and `SizeShift`.
+const HEADER: [u8; 8] = [0x18, 0x20, 0x55, 0xf2, 0x5a, 0xc0, 0x4d, 0xaa];
+const TRAILER: [u8; 8] = [0x42, 0x2c, 0xd9, 0xe3, 0xff, 0xa0, 0x11, 0x01];
+const SIZE_SHIFT: [usize; 4] = [2, 3, 1, 0];
 
-/// Whether the controller is showing the camera. Each start gets a new generation; a stop (or a
-/// newer start) ends the stream with an older one.
-#[derive(Default)]
-pub struct Peek {
-    generation: AtomicU64,
-}
-
-impl Peek {
-    pub fn start(&self, robot: Robot) {
-        let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
-        tracing::info!("controller camera on");
-        tokio::spawn(stream(robot, generation));
-    }
-
-    pub fn stop(&self) {
-        self.generation.fetch_add(1, Ordering::Relaxed);
-        tracing::info!("controller camera off");
-    }
-
-    fn current(&self, generation: u64) -> bool {
-        self.generation.load(Ordering::Relaxed) == generation
-    }
-}
-
-async fn stream(robot: Robot, generation: u64) {
-    let started = Instant::now();
-    let mut last_seq = None;
-    while robot.peek.current(generation) && started.elapsed() < MAX_OPEN {
-        if !robot.hub.is_connected().await || robot.mode().await.as_deref() != Some("remote") {
-            break;
+/// Serve the controller's camera view. Spawned once by `crate::start`.
+pub async fn run(robot: Robot) {
+    let sock = match UdpSocket::bind(("0.0.0.0", PORT)).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("controller camera view unavailable (udp {PORT}): {e}");
+            return;
         }
-        if let Some(frame) = robot.hub.latest_frame().await
-            && last_seq != Some(frame.header.seq)
-        {
-            last_seq = Some(frame.header.seq);
-            let jpeg = frame.jpeg.clone();
-            match tokio::task::spawn_blocking(move || thumbnail(&jpeg)).await {
-                Ok(Ok(small)) => {
-                    let msg = ToRobot::Peek {
-                        jpeg: base64::engine::general_purpose::STANDARD.encode(small),
-                        caption: caption(&robot),
-                    };
-                    if let Err(e) = robot.hub.send(msg).await {
-                        tracing::debug!("controller camera: {e:#}");
+    };
+    let mut viewer: Option<(SocketAddr, Instant)> = None;
+    let mut last_seq = None;
+    let mut caption_sent = (String::new(), Instant::now());
+    let mut sent = 0u64;
+    let mut buf = [0u8; 64];
+    let mut tick = tokio::time::interval(Duration::from_millis(40));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            r = sock.recv_from(&mut buf) => {
+                let Ok((n, from)) = r else { continue };
+                if &buf[..n] != HELLO {
+                    continue;
+                }
+                if viewer.is_none() {
+                    tracing::info!("controller camera view open ({})", from.ip());
+                    robot.camera_fast(true).await;
+                    caption_sent.0.clear();
+                }
+                viewer = Some((SocketAddr::new(from.ip(), FEED_PORT), Instant::now()));
+            }
+            _ = tick.tick() => {
+                let Some((to, at)) = viewer else { continue };
+                if at.elapsed() > GONE {
+                    tracing::info!("controller camera view closed");
+                    viewer = None;
+                    robot.camera_fast(false).await;
+                    continue;
+                }
+                if let Some(frame) = robot.hub.latest_frame().await
+                    && last_seq != Some(frame.header.seq)
+                {
+                    last_seq = Some(frame.header.seq);
+                    let jpeg = frame.jpeg.clone();
+                    match tokio::task::spawn_blocking(move || thumbnail(&jpeg)).await {
+                        Ok(Ok(small)) => {
+                            match send_frame(&sock, to, &small).await {
+                                Ok(()) => {
+                                    sent += 1;
+                                    if sent % 20 == 1 {
+                                        tracing::info!(
+                                            "controller camera view: {sent} frames sent to {to} ({} bytes each)",
+                                            small.len()
+                                        );
+                                    }
+                                }
+                                Err(e) => tracing::warn!("controller camera view: {e:#}"),
+                            }
+                        }
+                        Ok(Err(e)) => tracing::debug!("controller camera view: {e:#}"),
+                        Err(e) => tracing::warn!("controller camera view: {e}"),
                     }
                 }
-                Ok(Err(e)) => tracing::debug!("controller camera: {e:#}"),
-                Err(e) => tracing::warn!("controller camera: {e}"),
+                let text = caption(&robot);
+                if (text != caption_sent.0 || caption_sent.1.elapsed() > Duration::from_secs(5))
+                    && robot.hub.send(ToRobot::PeekCaption { text: text.clone() }).await.is_ok()
+                {
+                    caption_sent = (text, Instant::now());
+                }
             }
         }
-        tokio::time::sleep(INTERVAL).await;
     }
+}
+
+/// One frame in the RC feed's framing: header, size, size again byte-shifted, JPEG, trailer.
+fn framed(jpeg: &[u8]) -> Vec<u8> {
+    let size = (jpeg.len() as u32).to_le_bytes();
+    let mut shifted = [0u8; 4];
+    for i in 0..4 {
+        shifted[SIZE_SHIFT[i]] = size[i];
+    }
+    let mut out = Vec::with_capacity(jpeg.len() + 24);
+    out.extend_from_slice(&HEADER);
+    out.extend_from_slice(&size);
+    out.extend_from_slice(&shifted);
+    out.extend_from_slice(jpeg);
+    out.extend_from_slice(&TRAILER);
+    out
+}
+
+async fn send_frame(sock: &UdpSocket, to: SocketAddr, jpeg: &[u8]) -> Result<()> {
+    for piece in framed(jpeg).chunks(DATAGRAM) {
+        sock.send_to(piece, to).await.context("sending a frame")?;
+    }
+    Ok(())
 }
 
 /// `jpeg` shrunk to the controller's picture size.
@@ -84,7 +140,7 @@ fn thumbnail(jpeg: &[u8]) -> Result<Vec<u8>> {
     let small = img
         .resize_exact(WIDTH, HEIGHT, FilterType::Triangle)
         .to_rgb8();
-    let mut out = Vec::with_capacity(4096);
+    let mut out = Vec::with_capacity(6000);
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, QUALITY)
         .encode_image(&small)
         .context("encoding the thumbnail")?;
@@ -129,7 +185,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn thumbnails_fit_the_screen_and_the_link() {
+    fn thumbnails_fit_the_screen() {
         let frame = image::RgbImage::from_fn(640, 480, |x, y| {
             image::Rgb([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8])
         });
@@ -140,6 +196,18 @@ mod tests {
         let small = thumbnail(&jpeg).unwrap();
         let back = image::load_from_memory(&small).unwrap();
         assert_eq!((back.width(), back.height()), (WIDTH, HEIGHT));
+        // The controller's feed takes at most 8000 bytes a frame.
         assert!(small.len() < 8000, "{} bytes", small.len());
+    }
+
+    #[test]
+    fn framing_matches_the_rc_feed() {
+        let f = framed(&[1, 2, 3, 4, 5]);
+        assert_eq!(&f[..8], &HEADER);
+        assert_eq!(&f[8..12], &[5, 0, 0, 0]);
+        // SizeShift {2, 3, 1, 0}: byte i of the size goes to position SizeShift[i]
+        assert_eq!(&f[12..16], &[0, 0, 5, 0]);
+        assert_eq!(&f[16..21], &[1, 2, 3, 4, 5]);
+        assert_eq!(&f[21..], &TRAILER);
     }
 }

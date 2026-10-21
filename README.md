@@ -240,9 +240,15 @@ ButterBotCtrl-Firmware, MIT). Its screen in AI mode:
   next reminder, the latest thing he saw or heard (and how long ago) and the last thing he said,
   scrolling; at the bottom, the phone's music while it plays. Outside AI mode, button hints
   instead of the AI lines.
-- **Joystick on the home screen (AI mode):** up shows the robot's camera (small pictures over
-  Bluetooth, a few a second, with who and what is in view underneath; any button or push closes
-  it); left and right step the activity level down and up, quietly.
+- **Top bar:** a lightning bolt while the robot is plugged in.
+- **Home screen:** a speech bubble shows what he says as he says it, or what you just said to
+  him; beside the face, what he is doing ("dancing!", "wandering"), and the phone's music. The
+  remote's own battery shows only when its AAs run low.
+- **Joystick on the home screen (AI mode):** up opens the robot's camera, left and right step the
+  activity level, quietly. Bluetooth is too slow for video, so the camera view has the remote
+  join your Wi-Fi next to its own access point (the robot hands over the Wi-Fi details over their
+  encrypted link, kept in RAM only) and the laptop streams frames to it in the RC feed's format,
+  about 5 a second, with who and what is in view underneath. Any button or push closes it.
 - **Joystick menu:** in AI mode, AI entries come first: What do you see?, News, Weather, Go
   explore, Tell me a story, Focus 1 hour and the four activity levels (the current one is marked).
   After Summon's short press the screen shows the listening window until the agent has the
@@ -260,6 +266,32 @@ hour of nothing alone bores him, the small hours make him sleepy, being told to 
 saddens him a little. His mood sets how soon his own ideas come (bored or curious sooner, sleepy or
 sad later) on top of the activity level, colours what he says, and shows on the remote's face.
 Focus mode still wins: no ideas of his own, whatever he feels.
+
+## His own life
+
+- **Body language:** `gesture` makes small moves of the tracks that say something (wiggle, nod,
+  shake, bounce, twirl, shiver, creep closer, back off, sulk) or dances. When music plays nearby
+  (YAMNet hears it, and a simple onset tracker finds the beat) or starts on the Apple TV, he gets
+  a `music` nudge and may dance to it.
+- **Plans:** `intend` keeps things he means to do, at a time or some day; timed ones come back as
+  a `plan` nudge (not in focus mode or when quiet), some-day ones come with idle nudges. The
+  remote shows the next one when there is no reminder.
+- **Diary:** the day's moments are logged as they happen; in the evening (`[life] diary_at`,
+  21:30) he gets a digest and writes the day up himself (`write_diary`), or the next morning if
+  he was off. Entries are in `diary/` in the data folder and in the live view.
+- **Voices:** WeSpeaker's ResNet34 (via sherpa-onnx's ONNX export, checked by hash) turns speech
+  addressed to him into a voiceprint, so commands carry `speaker` even off camera. Voiceprints are
+  kept for people who ask (`remember_voice`) and grow by themselves from commands spoken while
+  that person is the only face in view; they are stored in `voices.json` (owner-only).
+- **Apple TV:** `apple_tv` (pyatv in a helper process in its own virtual environment) plays,
+  pauses, skips, changes volume, powers on and off, launches apps and reads what is playing. Set
+  it up and pair it (a PIN for each protocol) from the live view's Apple TV card.
+- When he acts on his own he just acts, without announcing it, and when he speaks up he leads with
+  the point. Ideas that need driving are left out while he is on a cable.
+
+The live view (http://127.0.0.1:7532/) shows his face and mood beside the camera, the
+conversation, his plans, diary, memory and reminders, the people he knows by face and voice, the
+Apple TV, driving, and the agent's output.
 
 ## Status light
 

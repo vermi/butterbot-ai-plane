@@ -289,6 +289,9 @@ pub struct LifeConfig {
     /// Start the agent on a fresh session after this many minutes (at a quiet moment), so its
     /// context stays small. 0 keeps one session.
     pub session_minutes: u64,
+    /// When the robot writes its diary, local time "HH:MM" (a missed evening is caught up the
+    /// next morning). Empty: no diary.
+    pub diary_at: String,
 }
 
 impl Default for LifeConfig {
@@ -303,6 +306,7 @@ impl Default for LifeConfig {
             activity: crate::life::Activity::Normal,
             default_focus_minutes: 60,
             session_minutes: 30,
+            diary_at: "21:30".into(),
         }
     }
 }
@@ -511,4 +515,20 @@ mod tests {
         assert_eq!(c.link_port, 7531);
         assert!(c.mic.gate);
     }
+}
+
+/// Write `bytes` to `path` readable by this user only (atomically, through a temporary file).
+pub fn write_private(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("tmp");
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    let mut f = opts.open(&tmp)?;
+    std::io::Write::write_all(&mut f, bytes)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
 }

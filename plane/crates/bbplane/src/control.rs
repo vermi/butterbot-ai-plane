@@ -47,10 +47,20 @@ pub struct Robot {
     pub life: Arc<crate::life::Life>,
     pub agent: Arc<crate::agent::AgentState>,
     pub light: Arc<crate::light::Light>,
-    /// The camera on the controller's screen.
-    pub peek: Arc<crate::peek::Peek>,
+    /// What it is up to right now and until when, for the controller's screen (see `doing`).
+    doing: Arc<std::sync::Mutex<Option<(String, std::time::Instant)>>>,
+    /// The camera settings to go back to after the controller's camera view (see `camera_fast`).
+    camera_before_view: Arc<Mutex<Option<(Res, u8, u8, bbproto::ctrl::CamOpts)>>>,
     /// How it feels (see `crate::mood`).
     pub mood: Arc<crate::mood::Mood>,
+    /// Its own plans (see `crate::intentions`).
+    pub intentions: Arc<crate::intentions::Intentions>,
+    /// Its diary (see `crate::diary`).
+    pub diary: Arc<crate::diary::Diary>,
+    /// The Apple TV (see `crate::appletv`).
+    pub appletv: Arc<crate::appletv::AppleTv>,
+    /// Who is talking, by voice (see `crate::voices`).
+    pub voices: Arc<crate::voices::Voices>,
     /// Serialises wake attempts: many tool calls / clicks share one BLE wake.
     wake_lock: Arc<Mutex<()>>,
     speaker: Arc<Mutex<Option<CancellationToken>>>,
@@ -110,11 +120,16 @@ impl Robot {
             reminders: Arc::new(crate::reminders::Reminders::load(&hub.config.data_dir())),
             memory: Arc::new(crate::memory::Memory::load(&hub.config.data_dir())),
             mood: Arc::new(crate::mood::Mood::load(&hub.config.data_dir())),
+            intentions: Arc::new(crate::intentions::Intentions::load(&hub.config.data_dir())),
+            diary: Arc::new(crate::diary::Diary::load(&hub.config.data_dir())),
+            appletv: Arc::new(crate::appletv::AppleTv::new(&hub.config.data_dir())),
+            voices: Arc::new(crate::voices::Voices::load(&hub.config.data_dir())),
             ears: Arc::new(crate::ears::Ears::new(hub.clone())),
             life: Arc::new(crate::life::Life::new(hub.config.life.clone())),
             agent: Default::default(),
             light: Default::default(),
-            peek: Default::default(),
+            camera_before_view: Default::default(),
+            doing: Default::default(),
             streams: Arc::new(Mutex::new(Streams::defaults(&hub.config))),
             hub,
             wake_lock: Default::default(),
@@ -264,6 +279,20 @@ impl Robot {
 
     /// Drive with raw motor speeds for `ms`, refreshing the robot-side watchdog.
     /// Returns early if the robot reports that it stopped on its own (obstacle, lifted, ...).
+    /// Plugged in, and not allowed to drive on a cable (`[safety] drive_when_plugged`).
+    pub async fn tethered(&self) -> bool {
+        !self.hub.config.safety.drive_when_plugged
+            && self
+                .hub
+                .status
+                .lock()
+                .await
+                .battery
+                .as_ref()
+                .and_then(|b| b["charging"].as_str().map(|c| c != "unplugged"))
+                .unwrap_or(false)
+    }
+
     pub async fn drive_for(&self, l: i8, r: i8, ms: u64) -> Result<DriveOutcome> {
         self.ensure_remote().await?;
         if self
@@ -272,17 +301,8 @@ impl Robot {
         {
             bail!("someone is driving the robot with the remote (Manual Override) right now");
         }
-        if !self.hub.config.safety.drive_when_plugged {
-            let plugged = self
-                .hub
-                .status
-                .lock()
-                .await
-                .battery
-                .as_ref()
-                .and_then(|b| b["charging"].as_str().map(|c| c != "unplugged"))
-                .unwrap_or(false);
-            if plugged {
+        {
+            if self.tethered().await {
                 bail!(
                     "the robot is plugged in (USB or charger); it does not drive on a cable. \
 Ask to be unplugged first."
@@ -389,6 +409,46 @@ Ask to be unplugged first."
             (s.res, s.fps, s.quality, s.opts) = (res, fps, quality, opts);
         }
         Ok(())
+    }
+
+    /// Say what it is up to for `d` ("dancing"): shown on the controller's screen.
+    pub fn set_doing(&self, what: &str, d: Duration) {
+        *self.doing.lock().unwrap() = Some((what.to_string(), std::time::Instant::now() + d));
+    }
+
+    pub fn doing(&self) -> Option<String> {
+        let mut doing = self.doing.lock().unwrap();
+        match doing.as_ref() {
+            Some((what, until)) if std::time::Instant::now() < *until => Some(what.clone()),
+            _ => {
+                *doing = None;
+                None
+            }
+        }
+    }
+
+    /// The controller's camera view wants frames more than detail: QVGA runs at about three
+    /// times VGA's rate. `false` goes back to what was set before.
+    pub async fn camera_fast(&self, fast: bool) {
+        let mut before = self.camera_before_view.lock().await;
+        let r = if fast {
+            let s = self.streams.lock().await;
+            if !s.camera_on || s.res == Res::Qvga || before.is_some() {
+                return;
+            }
+            let (res, fps, quality, opts) = (s.res, s.fps, s.quality, s.opts);
+            drop(s);
+            *before = Some((res, fps, quality, opts));
+            self.set_camera(true, Res::Qvga, fps, quality, opts).await
+        } else {
+            let Some((res, fps, quality, opts)) = before.take() else {
+                return;
+            };
+            self.set_camera(true, res, fps, quality, opts).await
+        };
+        if let Err(e) = r {
+            tracing::debug!("camera for the controller's view: {e:#}");
+        }
     }
 
     pub async fn set_mic(&self, on: bool) -> Result<()> {
@@ -523,6 +583,7 @@ Ask to be unplugged first."
             rng
         };
         let degrees = (30 + next() % 120) as f64 * if next() % 2 == 0 { 1.0 } else { -1.0 };
+        self.set_doing("wandering", Duration::from_secs(4));
         self.turn(degrees, 55).await?;
         let ms = 500 + next() % 600;
         let out = self.drive_for(50, 50, ms).await?;
@@ -831,6 +892,10 @@ goodbye). Say bye and keep listening."
                 "paused": self.agent.paused.load(std::sync::atomic::Ordering::Relaxed),
             },
             "last_event_seq": self.hub.last_event_seq().await,
+            "ai_state": (s.mode.as_deref() == Some("remote"))
+                .then(|| format!("{:?}", crate::light::state(self)).to_lowercase()),
+            "mood": self.mood.for_agent(),
+            "doing": self.doing(),
         })
     }
 }
@@ -894,6 +959,7 @@ impl Robot {
             } if *quiet_for_minutes >= 60 && !company => {
                 (Bored, 0.45, "nothing has happened for a while".into())
             }
+            Nudge::Music { .. } => (Playful, 0.45, "music is playing".into()),
             Nudge::Idle { .. } => return,
         };
         self.mood.appraise(e, i, &why);
@@ -920,11 +986,12 @@ impl Robot {
                 let want_image = include_image.unwrap_or_else(|| crate::stt::about_seeing(&c.text));
                 let mut info = serde_json::to_value(&c).unwrap_or_default();
                 if !owner.is_empty() {
-                    info["from_owner"] = c
-                        .in_view
-                        .iter()
-                        .any(|n| n.eq_ignore_ascii_case(&owner))
-                        .into();
+                    // By voice, or by face when the voice is not one it knows.
+                    info["from_owner"] = match &c.speaker {
+                        Some(s) => s.eq_ignore_ascii_case(&owner),
+                        None => c.in_view.iter().any(|n| n.eq_ignore_ascii_case(&owner)),
+                    }
+                    .into();
                 }
                 {
                     use crate::mood::Emotion;
@@ -955,6 +1022,43 @@ impl Robot {
                     image: None,
                 });
             }
+            // Its own plans and diary wait for focus mode to end; plans also wait while quiet.
+            if self.life.focused().is_none() {
+                let now = chrono::Local::now();
+                if self.life.activity_level() != crate::life::Activity::Quiet
+                    && let Some(p) = self.intentions.take_due(now.timestamp_millis())
+                {
+                    tracing::info!("plan due for the agent");
+                    self.life.activity();
+                    return Ok(AgentEvent::Nudge {
+                        info: json!({
+                            "nudge": "plan",
+                            "text": p.text,
+                            "planned_at": crate::reminders::local(p.set_ms).format("%a %H:%M").to_string(),
+                            "note": "your own plan, now due: do it, put it off (`intend` again) or let it go",
+                            "mood": self.mood.for_agent(),
+                        }),
+                        image: frame().await,
+                    });
+                }
+                if let Ok(at) =
+                    chrono::NaiveTime::parse_from_str(&self.hub.config.life.diary_at, "%H:%M")
+                    && let Some(day) = self.diary.due(now, at)
+                {
+                    tracing::info!("diary due for the agent ({day})");
+                    self.diary.asked(day);
+                    return Ok(AgentEvent::Nudge {
+                        info: json!({
+                            "nudge": "diary",
+                            "day": day.to_string(),
+                            "what_happened": self.diary.digest(day),
+                            "note": "write your diary for this day with `write_diary`, in your own words: what stood out, how you felt, what you wonder about. Nobody needs to hear it.",
+                            "mood": self.mood.for_agent(),
+                        }),
+                        image: None,
+                    });
+                }
+            }
             if self.life.session_over() {
                 return Ok(AgentEvent::EndSession);
             }
@@ -964,6 +1068,8 @@ impl Robot {
             let company = !seen.is_empty()
                 || self.objects.person_in_view()
                 || self.ears.heard_speech_within(COMPANY);
+            let tethered = self.tethered().await;
+            self.life.set_tethered(tethered);
             if let Some(n) = self.life.poll(company) {
                 tracing::info!(
                     "nudge for the agent: {} (company: {company}, faces in view: {})",
@@ -973,6 +1079,20 @@ impl Robot {
                 self.appraise(&n, company);
                 let mut info = serde_json::to_value(&n).unwrap_or_default();
                 info["mood"] = self.mood.for_agent();
+                if matches!(n, crate::life::Nudge::Idle { .. }) {
+                    let plans: Vec<Value> = self
+                        .intentions
+                        .some_day(3)
+                        .iter()
+                        .map(|p| json!({ "id": p.id, "text": p.text }))
+                        .collect();
+                    if !plans.is_empty() {
+                        info["your_plans"] = plans.into();
+                    }
+                }
+                if tethered {
+                    info["plugged_in"] = "you are on a cable and cannot drive".into();
+                }
                 let names: Vec<String> = seen
                     .iter()
                     .map(|s| s.name.clone().unwrap_or_else(|| "someone".into()))
@@ -1161,14 +1281,8 @@ async fn remote_button(robot: &Robot, data: &Value) {
             let arg = data["arg"].as_u64().unwrap_or(0);
             // AI mode's own menu entries that need no agent.
             match name {
-                "ai_peek" => {
-                    if arg == 1 {
-                        robot.peek.start(robot.clone());
-                    } else {
-                        robot.peek.stop();
-                    }
-                    return;
-                }
+                // The view itself talks to the plane over Wi-Fi (see `crate::peek`).
+                "ai_peek" => return,
                 "ai_focus" => {
                     let minutes = robot.hub.config.life.default_focus_minutes;
                     robot.focus(Duration::from_secs(minutes * 60));

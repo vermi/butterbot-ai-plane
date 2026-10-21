@@ -8,10 +8,11 @@
 #include "Components/BotFace.h"
 
 /**
- * The home screen when nothing else is on it: Butter Bot's face with his mood, what he is doing
- * and both batteries beside it, and below, in AI mode, the next reminder, the latest thing he
- * noticed and the last thing he said. The phone's music at the bottom. Outside AI mode, a few
- * button hints instead of the AI lines.
+ * The home screen when nothing else is on it: Butter Bot's face, with his mood, what he is doing,
+ * his pace, his battery and the phone's music beside it. Below, in AI mode, the next reminder (or
+ * his own next plan), the latest thing he noticed, and a speech bubble: what he is saying as he
+ * says it, or what was just said to him. Outside AI mode, a few button hints instead. The
+ * controller's own battery shows only when its batteries run low (on USB it has none to show).
  * Floating like GuideElement: ignores the parent's layout and scroll. The owner toggles
  * LV_OBJ_FLAG_HIDDEN and calls loop().
  */
@@ -38,14 +39,15 @@ private:
 	lv_obj_t* activity;
 	lv_obj_t* botPct;
 	lv_obj_t* botBar;
-	lv_obj_t* ctrlPct;
-	lv_obj_t* ctrlBar;
+	lv_obj_t* extra; // the phone's music, or the controller's low batteries
 	lv_obj_t* next;
 	lv_obj_t* seen;
 	lv_obj_t* seenAge;
-	lv_obj_t* said;
-	lv_obj_t* playing;
+	lv_obj_t* bubble;
+	lv_obj_t* bubbleText;
 	lv_obj_t* hints;
+	std::string bubbleShown;
+	uint64_t bubbleChangedAt = 0;
 
 	static constexpr uint32_t RefreshMs = 250;
 	uint64_t lastRefresh = 0;
@@ -61,6 +63,7 @@ private:
 
 	lv_obj_t* addLabel(int32_t x, int32_t y, int32_t w, lv_text_align_t align, lv_color_t color);
 	lv_obj_t* addBar(int32_t x, int32_t y, int32_t w);
+	void showBubble(const HomeInfoData& home);
 	/** Set a label's text only when it changed: setting it restarts a scrolling label. */
 	static void setText(lv_obj_t* label, const char* text);
 	static void setBar(lv_obj_t* bar, uint8_t percent);

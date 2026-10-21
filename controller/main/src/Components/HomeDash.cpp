@@ -15,12 +15,16 @@ namespace {
 	constexpr int32_t ModeY = 12;
 	constexpr int32_t ActivityY = 22;
 	constexpr int32_t BotY = 34;
-	constexpr int32_t CtrlY = 46;
-	constexpr int32_t BarGap = 8; // from a battery line to its bar
-	constexpr int32_t NextY = 65;
-	constexpr int32_t SeenY = 75;
-	constexpr int32_t SaidY = 86;
-	constexpr int32_t PlayingY = 97;
+	constexpr int32_t BarGap = 8; // from the battery line to its bar
+	constexpr int32_t ExtraY = 47;
+	constexpr int32_t NextY = 63;
+	constexpr int32_t SeenY = 73;
+	constexpr int32_t BubbleY = 83;
+	constexpr int32_t BubbleH = 29;
+	// The controller runs on AA batteries or USB; only low batteries are worth a word.
+	constexpr uint8_t ControllerLow = 25;
+	// A bubble stays bright this long after it changed
+	constexpr uint64_t BubbleFreshMs = 20000;
 
 	// The plane's emotions (AIStatusData::emotion).
 	constexpr const char* Emotions[] = { "content", "happy", "excited", "curious", "playful", "calm", "sleepy",
@@ -61,9 +65,6 @@ void HomeDash::refresh(){
 	const uint64_t homeAt = robotState->getHomeAt();
 	showBatteries(home, homeAt);
 	showAi(home, homeAt);
-
-	const std::string music = home.playing.empty() ? "" : "Playing: " + home.playing;
-	setText(playing, music.c_str());
 }
 
 void HomeDash::showBatteries(const HomeInfoData& home, const uint64_t homeAt){
@@ -72,25 +73,32 @@ void HomeDash::showBatteries(const HomeInfoData& home, const uint64_t homeAt){
 		setText(botPct, "Bot ...");
 		setBar(botBar, 0);
 	}else{
-		switch(robotState->getChargeState()){
-			case ChargeStatus::Charging: snprintf(text, sizeof(text), "Bot %u%% chg", home.botPercent); break;
-			case ChargeStatus::Full: snprintf(text, sizeof(text), "Bot full"); break;
-			default: snprintf(text, sizeof(text), "Bot %u%%", home.botPercent); break;
+		// Plugged in shows as a bolt in the top bar
+		if(robotState->getChargeState() == ChargeStatus::Full){
+			snprintf(text, sizeof(text), "Bot full");
+		}else{
+			snprintf(text, sizeof(text), "Bot %u%%", home.botPercent);
 		}
 		setText(botPct, text);
 		setBar(botBar, robotState->getChargeState() == ChargeStatus::Full ? 100 : home.botPercent);
 	}
 
-	const uint8_t own = battery ? battery->getPerc() : 0;
-	snprintf(text, sizeof(text), "Remote %u%%", own);
-	setText(ctrlPct, text);
-	setBar(ctrlBar, own);
+	const uint8_t own = battery ? battery->getPerc() : 100;
+	if(own <= ControllerLow){
+		snprintf(text, sizeof(text), "Remote AAs %u%%", own);
+		setText(extra, text);
+		lv_obj_set_style_text_color(extra, theme->getPrimaryColor(), 0);
+	}else{
+		const std::string music = home.playing.empty() ? "" : "Playing: " + home.playing;
+		setText(extra, music.c_str());
+		lv_obj_set_style_text_color(extra, theme->getSecondaryColor(), 0);
+	}
 }
 
 void HomeDash::showAi(const HomeInfoData& home, const uint64_t homeAt){
 	const bool ai = robotState->isAi();
 	lv_obj_update_flag(hints, LV_OBJ_FLAG_HIDDEN, ai);
-	for(lv_obj_t* l : { next, seen, seenAge, said }){
+	for(lv_obj_t* l : { next, seen, seenAge, bubble }){
 		lv_obj_update_flag(l, LV_OBJ_FLAG_HIDDEN, !ai);
 	}
 	if(!ai){
@@ -109,7 +117,9 @@ void HomeDash::showAi(const HomeInfoData& home, const uint64_t homeAt){
 	setText(mood, text);
 
 	using M = AIStatusData::Mode;
-	switch(robotState->getAiMode()){
+	if(!home.doing.empty() && robotState->getAiMode() != M::Focus && robotState->getAiMode() != M::NoBrain){
+		snprintf(text, sizeof(text), "%s", home.doing.c_str());
+	}else switch(robotState->getAiMode()){
 		case M::Listening: snprintf(text, sizeof(text), "listening"); break;
 		case M::Attentive: snprintf(text, sizeof(text), "chatting"); break;
 		case M::Thinking: snprintf(text, sizeof(text), "thinking..."); break;
@@ -135,7 +145,8 @@ void HomeDash::showAi(const HomeInfoData& home, const uint64_t homeAt){
 	lv_obj_set_style_bg_opa(activity, flash ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
 	lv_obj_set_style_text_color(activity, flash ? theme->getTertiaryColor() : theme->getSecondaryColor(), 0);
 
-	const std::string nextText = home.next.empty() ? "No reminders" : "Next " + home.next;
+	// A reminder, or his own next plan ("Plan ...")
+	const std::string nextText = home.next.empty() || home.next.rfind("Plan", 0) == 0 ? home.next : "Next " + home.next;
 	setText(next, nextText.c_str());
 
 	// A new sighting: he looks surprised for a moment.
@@ -159,8 +170,29 @@ void HomeDash::showAi(const HomeInfoData& home, const uint64_t homeAt){
 	}
 	setText(seenAge, text);
 
-	const std::string saidText = home.said.empty() ? "" : "\"" + home.said + "\"";
-	setText(said, saidText.c_str());
+	showBubble(home);
+}
+
+// What he says, as he says it, or what was just said to him. Bright while he talks and for a
+// little while after; then it fades to the secondary colour until something new is said.
+void HomeDash::showBubble(const HomeInfoData& home){
+	std::string text;
+	if(home.heardLast && !home.heard.empty()){
+		text = "You: " + home.heard;
+	}else{
+		text = home.said;
+	}
+	lv_obj_update_flag(bubble, LV_OBJ_FLAG_HIDDEN, text.empty());
+	if(text != bubbleShown){
+		bubbleShown = text;
+		bubbleChangedAt = millis();
+		setText(bubbleText, text.c_str());
+	}
+	const bool bright = robotState->isAiSpeaking() || millis() - bubbleChangedAt < BubbleFreshMs;
+	const lv_color_t c = bright ? theme->getPrimaryColor() : theme->getSecondaryColor();
+	lv_obj_set_style_border_color(bubble, c, 0);
+	lv_obj_set_style_text_color(bubbleText, c, 0);
+	lv_obj_set_style_border_width(bubble, robotState->isAiSpeaking() ? 2 : 1, 0);
 }
 
 void HomeDash::buildUI(){
@@ -184,18 +216,31 @@ void HomeDash::buildUI(){
 	lv_obj_set_style_bg_color(activity, prim, 0);
 	botPct = addLabel(ColX, BotY, ColW, LV_TEXT_ALIGN_LEFT, prim);
 	botBar = addBar(ColX, BotY + BarGap, ColW);
-	ctrlPct = addLabel(ColX, CtrlY, ColW, LV_TEXT_ALIGN_LEFT, prim);
-	ctrlBar = addBar(ColX, CtrlY + BarGap, ColW);
+	extra = addLabel(ColX, ExtraY, ColW, LV_TEXT_ALIGN_LEFT, second);
+	lv_label_set_long_mode(extra, LV_LABEL_LONG_SCROLL_CIRCULAR);
 
 	next = addLabel(0, NextY, Width, LV_TEXT_ALIGN_LEFT, prim);
 	lv_label_set_long_mode(next, LV_LABEL_LONG_DOT);
 	seen = addLabel(0, SeenY, 100, LV_TEXT_ALIGN_LEFT, prim);
 	lv_label_set_long_mode(seen, LV_LABEL_LONG_DOT);
 	seenAge = addLabel(100, SeenY, 20, LV_TEXT_ALIGN_RIGHT, second);
-	said = addLabel(0, SaidY, Width, LV_TEXT_ALIGN_LEFT, second);
-	lv_label_set_long_mode(said, LV_LABEL_LONG_SCROLL_CIRCULAR);
-	playing = addLabel(0, PlayingY, Width, LV_TEXT_ALIGN_LEFT, second);
-	lv_label_set_long_mode(playing, LV_LABEL_LONG_DOT);
+
+	bubble = lv_obj_create(*this);
+	lv_obj_remove_flag(bubble, LV_OBJ_FLAG_SCROLLABLE);
+	lv_obj_set_size(bubble, Width, BubbleH);
+	lv_obj_set_pos(bubble, 0, BubbleY);
+	lv_obj_set_style_bg_opa(bubble, LV_OPA_TRANSP, 0);
+	lv_obj_set_style_border_color(bubble, second, 0);
+	lv_obj_set_style_border_width(bubble, 1, 0);
+	lv_obj_set_style_radius(bubble, 4, 0);
+	lv_obj_set_style_pad_all(bubble, 2, 0);
+	bubbleText = lv_label_create(bubble);
+	lv_obj_set_style_text_font(bubbleText, &lv_font_butter, 0);
+	lv_obj_set_style_text_color(bubbleText, second, 0);
+	lv_obj_set_style_text_line_space(bubbleText, 1, 0);
+	lv_label_set_long_mode(bubbleText, LV_LABEL_LONG_SCROLL);
+	lv_obj_set_size(bubbleText, Width - 6, BubbleH - 6);
+	lv_label_set_text(bubbleText, "");
 
 	hints = addLabel(0, NextY, Width, LV_TEXT_ALIGN_LEFT, second);
 	lv_obj_set_height(hints, LV_SIZE_CONTENT);

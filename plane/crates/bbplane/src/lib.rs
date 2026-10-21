@@ -1,14 +1,18 @@
 //! ButterBot AI control plane: robot link, live view and MCP server.
 
 pub mod agent;
+pub mod appletv;
 pub mod audio;
 pub mod brain;
 pub mod config;
 pub mod control;
+pub mod diary;
 pub mod ears;
 pub mod face;
+pub mod gestures;
 pub mod home;
 pub mod hub;
+pub mod intentions;
 pub mod life;
 pub mod light;
 pub mod link;
@@ -26,6 +30,7 @@ pub mod sounds;
 pub mod stt;
 pub mod summon;
 pub mod tts;
+pub mod voices;
 pub mod web;
 
 use std::sync::Arc;
@@ -78,6 +83,9 @@ pub async fn start(config: config::Config) -> Result<Plane> {
     tokio::spawn(control::overdue_reminders(robot.clone()));
     tokio::spawn(light::run(robot.clone()));
     tokio::spawn(home::run(robot.clone()));
+    tokio::spawn(peek::run(robot.clone()));
+    tokio::spawn(diary::run(robot.clone()));
+    tokio::spawn(appletv::run(robot.clone()));
     tokio::spawn({
         let robot = robot.clone();
         async move {

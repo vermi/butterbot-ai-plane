@@ -7,6 +7,7 @@
 //! a second of audio, so both go by the loudest moment.
 
 pub mod engine;
+pub mod tempo;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -36,6 +37,12 @@ const ALARM_WINDOWS: u32 = 3;
 const ALARM_SCORE: f32 = 0.5;
 /// Quiet windows are brought up at most this much.
 const MAX_GAIN: f32 = 8.0;
+/// Music: YAMNet's "Music" class at least this strong...
+const MUSIC_SCORE: f32 = 0.3;
+/// ...in this many windows (half-second steps, losing one for each window without) means music is
+/// playing; none for `MUSIC_GONE` means it stopped.
+const MUSIC_WINDOWS: u32 = 8;
+const MUSIC_GONE: Duration = Duration::from_secs(30);
 /// After a failed model load (usually the download), wait this long before trying again.
 const LOAD_RETRY: Duration = Duration::from_secs(60);
 
@@ -49,6 +56,13 @@ pub struct Sounds {
     alarm_streak: Mutex<HashMap<String, u32>>,
     /// The most recent sounds heard (any class), for `status`.
     recent: Mutex<VecDeque<(String, f32, Instant)>>,
+    /// Music: windows with it (see `MUSIC_WINDOWS`), when it was last heard, whether it counts
+    /// as playing.
+    music: Mutex<(u32, Option<Instant>, bool)>,
+    /// The beat of what it hears.
+    tempo: Mutex<tempo::Tempo>,
+    /// Music just started (with its beat): for `run` to pass on.
+    music_started: Mutex<Option<Option<f64>>>,
 }
 
 impl Sounds {
@@ -61,7 +75,37 @@ impl Sounds {
             last_heard: Mutex::new(HashMap::new()),
             alarm_streak: Mutex::new(HashMap::new()),
             recent: Mutex::new(VecDeque::new()),
+            music: Mutex::new((0, None, false)),
+            tempo: Mutex::new(tempo::Tempo::default()),
+            music_started: Mutex::new(None),
         }
+    }
+
+    /// Whether music is playing nearby, and its beat if there is a clear one.
+    pub fn music(&self) -> Option<Option<f64>> {
+        let m = self.music.lock().unwrap();
+        m.2.then(|| self.tempo.lock().unwrap().bpm())
+    }
+
+    /// One window's music score; returns true when music just started.
+    fn track_music(&self, score: f32) -> bool {
+        let mut m = self.music.lock().unwrap();
+        let now = Instant::now();
+        if score >= MUSIC_SCORE {
+            m.0 = (m.0 + 1).min(MUSIC_WINDOWS * 2);
+            m.1 = Some(now);
+        } else {
+            m.0 = m.0.saturating_sub(1);
+        }
+        if !m.2 && m.0 >= MUSIC_WINDOWS {
+            m.2 = true;
+            return true;
+        }
+        if m.2 && m.1.is_none_or(|t| now - t >= MUSIC_GONE) {
+            *m = (0, None, false);
+            tracing::info!("music stopped");
+        }
+        false
     }
 
     pub fn status_json(&self) -> Value {
@@ -107,6 +151,7 @@ impl Sounds {
     /// Classify one window; returns the `notice` sounds heard, not heard within the cooldown.
     async fn listen(&self, window: Vec<f32>) -> Result<Vec<(String, f32)>> {
         let Some(scaled) = level(window) else {
+            self.track_music(0.0);
             return Ok(Vec::new());
         };
         let engine = self.engine().await?;
@@ -117,6 +162,15 @@ impl Sounds {
         })
         .await
         .map_err(|e| anyhow!("sound recognition panicked: {e}"))??;
+        let music = ranked
+            .iter()
+            .find(|(c, _)| c == "Music")
+            .map_or(0.0, |(_, s)| *s);
+        if self.track_music(music) {
+            let bpm = self.tempo.lock().unwrap().bpm();
+            tracing::info!("music playing (beat: {bpm:?})");
+            self.music_started.lock().unwrap().replace(bpm);
+        }
         let now = Instant::now();
         if let Some((top, score)) = ranked.first()
             && *score >= self.cfg.threshold
@@ -190,8 +244,10 @@ pub async fn run(robot: Robot) {
         if hub.status.lock().await.speaker_playing {
             buf.clear();
             fresh = 0;
+            sounds.tempo.lock().unwrap().reset();
             continue;
         }
+        sounds.tempo.lock().unwrap().push(&chunk);
         for &s in chunk.iter() {
             if buf.len() == WINDOW {
                 buf.pop_front();
@@ -217,6 +273,14 @@ pub async fn run(robot: Robot) {
                 continue;
             }
         };
+        let started = sounds.music_started.lock().unwrap().take();
+        if let Some(bpm) = started {
+            hub.push_event("sound", json!({ "heard": "music", "bpm": bpm }))
+                .await;
+            robot
+                .life
+                .music("music playing nearby", bpm.map(|b| b.round() as u32));
+        }
         for (what, score) in heard {
             tracing::info!("heard: {what} ({score:.2})");
             hub.push_event("sound", json!({ "heard": what, "score": score }))

@@ -212,7 +212,7 @@ impl Mood {
         let n = self.now();
         let mut v = json!({
             "feeling": n.emotion.name(),
-            "intensity": (n.intensity * 10.0).round() / 10.0,
+            "intensity": (n.intensity as f64 * 10.0).round() / 10.0,
             "for_minutes": n.minutes,
         });
         if !n.why.is_empty() {

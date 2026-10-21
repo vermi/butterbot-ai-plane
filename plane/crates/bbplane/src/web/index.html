@@ -3,156 +3,232 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ButterBot Live</title>
+<title>Butter Bot</title>
 <style>
 :root {
-  --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a66; --line: #e3e1dc;
-  --accent: #d9a400; --accent-ink: #1d1d1b; --ok: #2f8f4e; --bad: #c0392b; --pad: #efede8;
+  --bg: #f4f2ec; --panel: #ffffff; --ink: #1d1c19; --muted: #6f6c64; --line: #e4e0d6;
+  --accent: #e3ac00; --accent-soft: #fbefc6; --accent-ink: #1d1c19; --ok: #2f8f4e; --bad: #c0392b;
+  --pad: #efece4; --screen: #0c0d0b; --pixel: #a0fa00; --pixel-dim: #2f4a00;
+  --radius: 14px; --shadow: 0 1px 2px rgb(0 0 0 / .04), 0 6px 20px rgb(0 0 0 / .05);
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #151514; --panel: #1f1f1d; --ink: #ecebe7; --muted: #9b9a95; --line: #33322f;
-          --accent: #f0c419; --accent-ink: #151514; --pad: #2a2927; }
+  :root { --bg: #121210; --panel: #1b1b18; --ink: #edebe4; --muted: #9d9a90; --line: #2e2d29;
+          --accent: #f2c21b; --accent-soft: #3a3110; --accent-ink: #141410; --pad: #262521;
+          --shadow: 0 1px 2px rgb(0 0 0 / .3); }
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, -apple-system, Segoe UI, sans-serif; }
-header { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
-header h1 { font-size: 16px; margin: 0; font-weight: 650; }
-.pill { padding: 2px 10px; border-radius: 99px; font-size: 12px; border: 1px solid var(--line); color: var(--muted); }
-.pill.on { color: var(--ok); border-color: var(--ok); }
-.pill.off { color: var(--bad); border-color: var(--bad); }
-main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; padding: 16px; max-width: 1280px; margin: 0 auto; }
-@media (max-width: 860px) { main { grid-template-columns: 1fr; } }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
-.card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
-.video { position: relative; aspect-ratio: 4 / 3; background: #000; border-radius: 8px; overflow: hidden; display: grid; place-items: center; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+button, select, input { font: inherit; color: var(--ink); }
+button, select, input[type=text] { background: var(--pad); border: 1px solid var(--line); border-radius: 10px; padding: 7px 12px; }
+button { cursor: pointer; user-select: none; -webkit-user-select: none; touch-action: manipulation; }
+button:hover:not(:disabled) { border-color: var(--muted); }
+button:disabled { opacity: .5; cursor: default; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 650; }
+button.active { outline: 2px solid var(--accent); outline-offset: 1px; }
+button.ghost { background: transparent; }
+button.small { padding: 3px 9px; font-size: 12px; border-radius: 8px; }
+input[type=text] { min-width: 0; }
+.muted { color: var(--muted); font-size: 12px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.grow { flex: 1; }
+
+/* header */
+header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 10px; padding: 10px 20px;
+  background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+header h1 { font-size: 17px; margin: 0 6px 0 0; font-weight: 750; letter-spacing: -.01em; display: flex; align-items: center; gap: 8px; }
+#miniface { width: 30px; height: 30px; border-radius: 7px; background: var(--screen); image-rendering: pixelated; }
+.pill { padding: 3px 10px; border-radius: 99px; font-size: 12px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.pill.on { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+.pill.off { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
+.pill.warm { color: var(--ink); background: var(--accent-soft); border-color: transparent; }
+header .spacer { flex: 1; }
+
+main { max-width: 1320px; margin: 0 auto; padding: 18px 20px 40px; display: grid; gap: 18px; }
+.hero { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(300px, 1fr); gap: 18px; }
+@media (max-width: 920px) { .hero { grid-template-columns: 1fr; } }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 18px; align-items: start; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow); }
+.card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin: 0 0 10px; font-weight: 650; display: flex; align-items: center; gap: 8px; }
+.card h2 .right { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 500; }
+
+/* camera */
+.video { position: relative; aspect-ratio: 4 / 3; background: #000; border-radius: 10px; overflow: hidden; display: grid; place-items: center; }
 .video img { width: 100%; height: 100%; object-fit: contain; }
 .video svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .video svg rect { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .video svg text { font: 600 12px system-ui, sans-serif; paint-order: stroke; stroke: #000; stroke-width: 3px; }
-.known { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
-.known li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.known button { padding: 2px 8px; font-size: 12px; }
-#chat { display: grid; gap: 6px; max-height: 260px; overflow: auto; }
-#chat .msg { padding: 6px 10px; border-radius: 10px; max-width: 85%; }
-#chat .person { background: var(--pad); justify-self: start; }
-#chat .robot { background: var(--accent); color: var(--accent-ink); justify-self: end; }
-#chat .note { color: var(--muted); font-size: 12px; justify-self: center; }
-#agentlog { font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; max-height: 200px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 8px 0 0; }
 .video .none { color: #888; }
-.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.stack { display: grid; gap: 12px; align-content: start; }
-button, select, input[type=text] { font: inherit; color: var(--ink); background: var(--pad); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
-button { cursor: pointer; user-select: none; -webkit-user-select: none; touch-action: none; }
-button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
-button.active { outline: 2px solid var(--accent); }
-input[type=text] { flex: 1; min-width: 0; }
-.pad { display: grid; grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(3, 52px); gap: 6px; justify-content: center; }
-.pad button { font-size: 18px; }
-.pad .stop { color: var(--bad); font-size: 13px; font-weight: 600; }
-.muted { color: var(--muted); font-size: 12px; }
-#log { font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+#inview { margin-top: 8px; }
+
+/* Butter Bot panel */
+.bot { display: grid; gap: 12px; align-content: start; }
+.screen { background: var(--screen); border-radius: 16px; padding: 18px; display: grid; justify-items: center; gap: 10px; }
+#face { width: 180px; height: 180px; image-rendering: pixelated; }
+.screen .mood { color: var(--pixel); font: 600 15px ui-monospace, Menlo, monospace; letter-spacing: .02em; text-align: center; }
+.screen .why { color: #8ea86a; font: 12px ui-monospace, Menlo, monospace; text-align: center; min-height: 1em; }
+.bubble { position: relative; background: var(--accent-soft); border-radius: 12px; padding: 9px 12px; min-height: 2.6em; }
+.bubble::before { content: ""; position: absolute; top: -7px; left: 26px; border: 7px solid transparent; border-top: 0; border-bottom-color: var(--accent-soft); }
+.bubble.quiet { background: var(--pad); color: var(--muted); }
+.bubble.quiet::before { border-bottom-color: var(--pad); }
+.seg { display: inline-flex; background: var(--pad); border: 1px solid var(--line); border-radius: 10px; padding: 2px; }
+.seg button { border: 0; background: transparent; padding: 5px 10px; border-radius: 8px; font-size: 13px; }
+.seg button.on { background: var(--panel); box-shadow: 0 1px 2px rgb(0 0 0 / .12); font-weight: 650; }
+
+/* lists */
+ul.list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+ul.list li { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--line); }
+ul.list li:last-child { border-bottom: 0; }
+ul.list li .when { color: var(--muted); font-size: 12px; white-space: nowrap; }
+ul.list li .text { flex: 1; min-width: 0; }
+.empty { color: var(--muted); font-size: 13px; padding: 4px 0; }
+.tabs { display: flex; gap: 4px; margin: -2px 0 10px; flex-wrap: wrap; }
+.tabs button { border-radius: 99px; padding: 4px 11px; font-size: 12px; }
+.tabs button.on { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+.diary-entry { white-space: pre-wrap; background: var(--pad); border-radius: 10px; padding: 10px 12px; margin-top: 8px; max-height: 320px; overflow: auto; }
+
+/* talk */
+#chat { display: grid; gap: 6px; max-height: 300px; overflow: auto; padding-right: 2px; }
+#chat .msg { padding: 7px 11px; border-radius: 14px; max-width: 85%; }
+#chat .person { background: var(--pad); justify-self: start; border-bottom-left-radius: 4px; }
+#chat .robot { background: var(--accent); color: var(--accent-ink); justify-self: end; border-bottom-right-radius: 4px; }
+#chat .note { color: var(--muted); font-size: 12px; justify-self: center; }
+#chat .who { display: block; font-size: 11px; color: var(--muted); margin-bottom: 1px; }
 #meter { height: 6px; background: var(--pad); border-radius: 3px; overflow: hidden; flex: 1; min-width: 80px; }
 #meter div { height: 100%; width: 0; background: var(--ok); transition: width 80ms linear; }
+
+/* drive */
+.pad { display: grid; grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(3, 52px); gap: 6px; justify-content: center; }
+.pad button { font-size: 18px; touch-action: none; }
+.pad .stop { color: var(--bad); font-size: 13px; font-weight: 650; }
+
+/* apple tv */
+.np { display: grid; grid-template-columns: 52px 1fr; gap: 12px; align-items: center; }
+.np .art { width: 52px; height: 52px; border-radius: 10px; background: linear-gradient(135deg, var(--accent), #e8742a); display: grid; place-items: center; color: #fff; font-size: 22px; }
+.np .t { font-weight: 650; }
+.transport { display: flex; gap: 6px; justify-content: center; margin-top: 10px; }
+.transport button { min-width: 44px; }
+
+pre.log { font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; max-height: 240px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 8px 0 0; background: var(--pad); border-radius: 10px; padding: 8px 10px; }
+details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 </style>
 </head>
 <body>
 <header>
-  <h1>ButterBot Live</h1>
+  <h1><canvas id="miniface" width="30" height="30" aria-hidden="true"></canvas>Butter Bot</h1>
   <span id="link" class="pill off">offline</span>
-  <span id="mode" class="pill">mode: ?</span>
-  <span id="batt" class="pill">battery: ?</span>
+  <span id="mode" class="pill">mode ?</span>
+  <span id="batt" class="pill">battery ?</span>
+  <span id="focuspill" class="pill warm" hidden></span>
+  <span class="spacer"></span>
+  <button class="primary" id="enter">Enter AI mode</button>
+  <button id="exit">Exit</button>
 </header>
 <main>
-  <section class="stack">
+  <section class="hero">
     <div class="card">
+      <h2>Camera <span class="right muted" id="fpsinfo"></span></h2>
       <div class="video"><img id="video" alt="Robot camera" hidden><span class="none" id="novideo">No video yet</span><svg id="boxes" aria-hidden="true"></svg></div>
-      <div class="row" style="margin-top:10px">
-        <select id="res" aria-label="Resolution">
-          <option value="r128">128×128</option><option value="qvga">320×240</option>
-          <option value="vga" selected>640×480</option><option value="svga">800×600</option>
-        </select>
-        <select id="fps" aria-label="Frame rate"><option>5</option><option selected>10</option><option>15</option><option>20</option></select>
-        <button id="camOn">Apply</button>
-        <button id="camOff">Camera off</button>
-        <span class="muted" id="fpsinfo"></span>
+      <div id="inview" class="muted">Nobody in view</div>
+      <details style="margin-top:8px"><summary>Camera settings</summary>
+        <div class="row" style="margin-top:8px">
+          <select id="res" aria-label="Resolution">
+            <option value="r128">128×128</option><option value="qvga">320×240</option>
+            <option value="vga" selected>640×480</option><option value="svga">800×600</option>
+          </select>
+          <select id="fps" aria-label="Frame rate"><option>5</option><option selected>10</option><option>15</option><option>20</option></select>
+          <button id="camOn">Apply</button>
+          <button id="camOff">Camera off</button>
+        </div>
+      </details>
+    </div>
+    <div class="card bot">
+      <div class="screen">
+        <canvas id="face" width="180" height="180" aria-label="Butter Bot's face"></canvas>
+        <div class="mood" id="moodline">…</div>
+        <div class="why" id="whyline"></div>
       </div>
-    </div>
-    <div class="card">
-      <h2>Conversation</h2>
-      <div id="chat"><span class="note">Say "Butterbot, ..." to talk to it.</span></div>
-    </div>
-    <div class="card">
-      <h2>Events</h2>
-      <div id="log"></div>
+      <div class="bubble quiet" id="bubble">Nothing said yet.</div>
+      <div class="row">
+        <span class="muted">Pace</span>
+        <div class="seg" id="activity" role="group" aria-label="Activity level">
+          <button data-a="quiet">Quiet</button><button data-a="calm">Calm</button><button data-a="normal">Normal</button><button data-a="lively">Lively</button>
+        </div>
+      </div>
+      <div class="row">
+        <button id="focus">Focus 1 h</button>
+        <button id="agentpause">Pause agent</button>
+        <span class="muted grow" id="agentstate"></span>
+      </div>
     </div>
   </section>
-  <aside class="stack">
+
+  <section class="cards">
     <div class="card">
-      <h2>Mode</h2>
-      <div class="row">
-        <button class="primary" id="enter">Enter AI mode</button>
-        <button id="exit">Exit</button>
-      </div>
-    </div>
-    <div class="card">
-      <h2>Agent</h2>
-      <div id="agentstate" class="muted">…</div>
-      <div class="row" style="margin-top:8px">
-        <button id="agentpause">Pause</button>
-        <button id="focus">Focus 1 h</button>
-        <select id="activity" aria-label="Activity level">
-          <option value="quiet">Quiet</option><option value="calm">Calm</option>
-          <option value="normal">Normal</option><option value="lively">Lively</option>
-        </select>
-      </div>
-      <details><summary class="muted">Agent output</summary><pre id="agentlog"></pre></details>
-    </div>
-    <div class="card">
-      <h2>Memory</h2>
-      <div class="muted" id="memnone">It remembers nothing yet.</div>
-      <ul class="known" id="facts"></ul>
-      <h2 style="margin-top:10px">Reminders</h2>
-      <div class="muted" id="remnone">No reminders.</div>
-      <ul class="known" id="reminders"></ul>
-    </div>
-    <div class="card">
-      <h2>Faces</h2>
-      <div id="inview" class="muted">Nobody in view</div>
-      <form class="row" id="faceform" style="margin-top:8px">
-        <input type="text" id="facename" placeholder="Your name" autocomplete="off" maxlength="40">
-        <button class="primary" id="remember">Remember me</button>
+      <h2>Talk</h2>
+      <div id="chat"><span class="note">Say "Butterbot, ..." to talk to him.</span></div>
+      <form class="row" id="sayform" style="margin-top:10px">
+        <input type="text" class="grow" id="saytext" placeholder="Make him say…" autocomplete="off">
+        <select id="engine" aria-label="Voice"><option value="robot">robot</option><option value="command">laptop</option></select>
+        <button class="primary">Say</button>
       </form>
-      <p class="muted" id="facemsg" style="margin:6px 0 0">Face the robot from about an arm's length, alone in view.</p>
-      <ul class="known" id="known"></ul>
+      <div class="row" style="margin-top:8px">
+        <button id="listen">Listen live</button>
+        <button id="ptt">Hold to talk</button>
+        <div id="meter"><div></div></div>
+      </div>
+      <p class="muted" style="margin:8px 0 0">His mic is muted while he speaks. Hold to talk with the laptop a few metres away, or his speaker feeds back into your mic.</p>
     </div>
+
     <div class="card">
-      <h2>Drive <span class="muted">(hold, or W A S D)</span></h2>
+      <h2>His life</h2>
+      <div class="tabs" id="lifetabs">
+        <button data-t="plans" class="on">Plans</button><button data-t="diary">Diary</button><button data-t="memory">Memory</button><button data-t="reminders">Reminders</button>
+      </div>
+      <div data-p="plans"><ul class="list" id="plans"></ul></div>
+      <div data-p="diary" hidden>
+        <div class="row"><select id="diarydays" aria-label="Diary day" class="grow"></select></div>
+        <div class="diary-entry" id="diaryentry">No entries yet: he writes one each evening.</div>
+      </div>
+      <div data-p="memory" hidden><ul class="list" id="facts"></ul></div>
+      <div data-p="reminders" hidden><ul class="list" id="reminders"></ul></div>
+    </div>
+
+    <div class="card">
+      <h2>People</h2>
+      <form class="row" id="faceform">
+        <input type="text" class="grow" id="facename" placeholder="Your name" autocomplete="off" maxlength="40">
+        <button class="primary" id="remember">Remember my face</button>
+      </form>
+      <p class="muted" id="facemsg" style="margin:6px 0 10px">Face him from about an arm's length, alone in view. To learn your voice, say "Butterbot, remember my voice".</p>
+      <ul class="list" id="people"></ul>
+    </div>
+
+    <div class="card" id="atvcard">
+      <h2>Apple TV <span class="right muted" id="atvstate"></span></h2>
+      <div id="atvbody"></div>
+    </div>
+
+    <div class="card">
+      <h2>Drive <span class="right muted">hold, or W A S D</span></h2>
       <div class="pad">
         <span></span><button data-d="f" aria-label="Forward">▲</button><span></span>
         <button data-d="l" aria-label="Left">◀</button><button class="stop" id="stop">STOP</button><button data-d="r" aria-label="Right">▶</button>
         <span></span><button data-d="b" aria-label="Backward">▼</button><span></span>
       </div>
-      <div class="row" style="margin-top:10px"><label class="muted" for="speed">Speed</label><input id="speed" type="range" min="20" max="100" value="60" style="flex:1"></div>
+      <div class="row" style="margin-top:10px"><label class="muted" for="speed">Speed</label><input id="speed" type="range" min="20" max="100" value="60" class="grow"></div>
     </div>
+
     <div class="card">
-      <h2>Speak</h2>
-      <form class="row" id="sayform">
-        <input type="text" id="saytext" placeholder="Make the robot say…" autocomplete="off">
-        <select id="engine" aria-label="Voice"><option value="robot">robot</option><option value="command">laptop</option></select>
-        <button class="primary">Say</button>
-      </form>
-      <div class="row" style="margin-top:10px">
-        <button id="listen">Listen live</button>
-        <button id="ptt">Hold to talk</button>
-        <div id="meter"><div></div></div>
-      </div>
-      <p class="muted" style="margin:8px 0 0">Mic is muted on the robot while it speaks (no echo cancellation).
-        Hold to talk with the laptop a few metres from the robot, or its speaker feeds back into your mic.</p>
+      <h2>Under the hood</h2>
+      <div class="muted" id="agentdetail">…</div>
+      <details style="margin-top:8px"><summary>Agent output</summary><pre class="log" id="agentlog"></pre></details>
+      <details style="margin-top:6px"><summary>Events</summary><pre class="log" id="log"></pre></details>
     </div>
-  </aside>
+  </section>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
+const el = (tag, props = {}, ...kids) => { const e = document.createElement(tag); Object.assign(e, props); e.append(...kids); return e; };
 const log = (s) => { const l = $('log'); l.textContent += s + '\n'; if (l.textContent.length > 20000) l.textContent = l.textContent.slice(-15000); l.scrollTop = l.scrollHeight; };
 const api = async (path, body) => {
   const r = await fetch(path, body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -160,194 +236,326 @@ const api = async (path, body) => {
   if (!r.ok) log('! ' + (j.error || r.status));
   return j;
 };
+const every = (ms, fn) => { const run = () => { if (!document.hidden) fn(); }; setInterval(run, ms); fn(); };
 
-// ---- status + events ----
-let since = 0, frames = 0, lastFrames = 0;
+// ---------------------------------------------------------------- the face
+// The same pixel face as on the remote (controller/main/src/Components/BotFace.cpp).
+const EMOTIONS = ['content', 'happy', 'excited', 'curious', 'playful', 'calm', 'sleepy', 'bored', 'sad', 'grumpy', 'surprised', 'worried'];
+class Face {
+  constructor(canvas, ink) { this.c = canvas.getContext('2d'); this.s = canvas.width / 30; this.ink = ink;
+    this.nextBlink = 0; this.blinkUntil = 0; this.nextGlance = 0; this.gx = 0; this.gy = 0; this.nextTalk = 0; this.talkH = 2; this.last = ''; }
+  look(now, st) {
+    const r = (a, b) => a + Math.random() * (b - a);
+    const e = EMOTIONS.indexOf(st.feeling); const strong = st.intensity >= 0.6;
+    const l = { left: 'open', right: 'open', w: 5, h: 7, rh: 0, dx: 0, dy: 0, mouth: 'smile', mw: 8, mh: 2, brows: '', bob: 0, zzz: false };
+    let gmin = 2500, gmax = 7000, bmin = 2500, bmax = 6000, bms = 130;
+    switch (EMOTIONS[e]) {
+      case 'happy': Object.assign(l, { left: 'happy', right: 'happy', mw: 10, mh: strong ? 3 : 2 }); break;
+      case 'excited': Object.assign(l, { w: 6, h: 9, mouth: 'grin', mw: 10, mh: 3, bob: Math.floor(now / 250) % 2 }); gmin = 800; gmax = 2000; bmin = 1500; bmax = 4000; break;
+      case 'curious': Object.assign(l, { rh: 9, brows: 'raised', mouth: 'o', mw: 4, mh: 4 }); gmin = 1200; gmax = 3000; break;
+      case 'playful': Object.assign(l, { right: 'happy', mouth: 'smirk', mw: 9 }); break;
+      case 'calm': Object.assign(l, { left: 'lid', right: 'lid', h: 4, mw: 6, mh: 1 }); gmin = 5000; gmax = 10000; break;
+      case 'sleepy': Object.assign(l, { left: 'lid', right: 'lid', h: 3, mouth: 'flat', mw: 4, zzz: strong }); gmin = 8000; gmax = 15000; bmin = 3000; bmax = 7000; bms = 600; break;
+      case 'bored': Object.assign(l, { left: 'lid', right: 'lid', h: 4, mouth: 'flat', mw: 6 }); gmin = 6000; gmax = 12000; break;
+      case 'sad': Object.assign(l, { brows: 'sad', h: 6, dy: 1, mouth: 'frown', mw: 8, mh: strong ? 2 : 1 }); gmin = 6000; gmax = 12000; break;
+      case 'grumpy': Object.assign(l, { brows: 'angry', left: 'lid', right: 'lid', h: 4, mouth: strong ? 'frown' : 'flat', mw: 8, mh: 1 }); break;
+      case 'surprised': Object.assign(l, { w: 6, h: 9, brows: 'raised', mouth: 'o', mw: 5, mh: 5 }); break;
+      case 'worried': Object.assign(l, { brows: 'sad', mouth: 'wavy', mw: 8 }); gmin = 700; gmax = 1800; break;
+      default: l.mh = 1;
+    }
+    let glances = true;
+    if (st.mode === 'nobrain' || !st.mode) { Object.assign(l, { left: 'closed', right: 'closed', mouth: 'flat', mw: 4, zzz: true, brows: '', bob: 0, dx: 0, dy: 0, w: 5, h: 7, rh: 0 }); glances = false; }
+    else if (st.mode === 'focus') { if (l.left === 'open' || l.left === 'happy') Object.assign(l, { left: 'lid', right: 'lid', h: 4 }); Object.assign(l, { dy: 1, brows: '', mouth: 'flat', mw: 5, bob: 0 }); glances = false; }
+    else if (st.mode === 'thinking') { Object.assign(l, { dx: 2, dy: -2, mouth: 'smirk', mw: 6 }); glances = false; }
+    else if (st.mode === 'attentive') { if (l.left === 'open') l.h = Math.min(l.h + 1, 9); gmin *= 2; gmax *= 2; }
+    if (glances) {
+      if (now >= this.nextGlance) { this.gx = [-2, 0, 0, 2][Math.floor(Math.random() * 4)]; this.gy = [-1, 0, 0, 1][Math.floor(Math.random() * 4)]; this.nextGlance = now + r(gmin, gmax); }
+      l.dx += EMOTIONS[e] === 'bored' ? -2 : this.gx; l.dy += this.gy;
+    }
+    if (st.speaking && st.mode !== 'nobrain') {
+      if (now >= this.nextTalk) { this.talkH = 1 + Math.floor(Math.random() * 4); this.nextTalk = now + r(90, 180); }
+      Object.assign(l, { mouth: 'talk', mw: Math.max(l.mw, 6), mh: this.talkH });
+    }
+    if (l.left !== 'closed') {
+      if (now >= this.nextBlink) { this.blinkUntil = now + bms; this.nextBlink = now + r(bmin, bmax); }
+      if (now < this.blinkUntil) { l.left = l.right = 'closed'; }
+    }
+    if (l.zzz) l.zzz = Math.floor(now / 700) % 3 !== 0;
+    return l;
+  }
+  render(now, st) {
+    const l = this.look(now, st); const key = JSON.stringify(l);
+    if (key === this.last) return; this.last = key;
+    const c = this.c, S = this.s;
+    c.clearRect(0, 0, 30 * S, 30 * S); c.fillStyle = this.ink;
+    const px = (x, y, on = true) => { if (x < 0 || y < 0 || x >= 30 || y >= 30) return; on ? c.fillRect(x * S, y * S, S, S) : c.clearRect(x * S, y * S, S, S); };
+    const rect = (x, y, w, h) => { for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) px(x + i, y + j); };
+    const line = (x0, y0, x1, y1) => { const dx = Math.abs(x1 - x0), sx = x0 < x1 ? 1 : -1, dy = -Math.abs(y1 - y0), sy = y0 < y1 ? 1 : -1; let err = dx + dy;
+      for (;;) { px(x0, y0); if (x0 === x1 && y0 === y1) break; const e2 = 2 * err; if (e2 >= dy) { err += dy; x0 += sx; } if (e2 <= dx) { err += dx; y0 += sy; } } };
+    const eye = (kind, cx, cy, w, h, left) => {
+      const x = cx - Math.floor(w / 2);
+      if (kind === 'open') { const y = cy - Math.floor(h / 2); rect(x, y, w, h); if (w >= 4 && h >= 4) { px(x, y, false); px(x + w - 1, y, false); px(x, y + h - 1, false); px(x + w - 1, y + h - 1, false); } }
+      else if (kind === 'lid') { const b = cy + 3; rect(x, b - h + 1, w, h); px(x, b, false); px(x + w - 1, b, false); }
+      else if (kind === 'closed') { px(x, cy + 1); line(x + 1, cy + 2, x + w - 2, cy + 2); px(x + w - 1, cy + 1); }
+      else if (kind === 'happy') { for (let i = 0; i < w; i++) { const d = Math.min(i, w - 1 - i); px(x + i, cy + 1 - d); px(x + i, cy + 2 - d); } }
+      else if (kind === 'squint') { if (left) { line(cx - 2, cy - 2, cx + 1, cy); line(cx + 1, cy, cx - 2, cy + 2); } else { line(cx + 2, cy - 2, cx - 1, cy); line(cx - 1, cy, cx + 2, cy + 2); } }
+    };
+    const y0 = 11 + l.dy - l.bob, rh = l.rh || l.h;
+    eye(l.left, 9 + l.dx, y0, l.w, l.h, true); eye(l.right, 20 + l.dx, y0, l.w, rh, false);
+    const by = y0 - Math.floor(Math.max(l.h, rh) / 2) - 3;
+    for (const cx of [9 + l.dx, 20 + l.dx]) {
+      const left = cx < 15;
+      if (l.brows === 'raised') { px(cx - 2, by + 1); line(cx - 1, by, cx + 2, by); }
+      else if (l.brows === 'angry') { left ? line(cx - 3, by, cx + 2, by + 2) : line(cx - 2, by + 2, cx + 3, by); }
+      else if (l.brows === 'sad') { left ? line(cx - 3, by + 2, cx + 2, by) : line(cx - 2, by, cx + 3, by + 2); }
+    }
+    const mx = 15 + Math.trunc(l.dx / 2) - Math.floor(l.mw / 2), my = 22 + Math.trunc(l.dy / 2) - l.bob, w = l.mw, h = l.mh;
+    const d = (i) => Math.min(i, w - 1 - i);
+    switch (l.mouth) {
+      case 'flat': line(mx, my, mx + w - 1, my); break;
+      case 'smile': for (let i = 0; i < w; i++) px(mx + i, my + Math.min(d(i), h)); break;
+      case 'grin': for (let i = 0; i < w; i++) line(mx + i, my, mx + i, my + Math.min(d(i), h)); break;
+      case 'frown': for (let i = 0; i < w; i++) px(mx + i, my + h - Math.min(d(i), h)); break;
+      case 'o': { const y = my - Math.floor(h / 2); line(mx + 1, y, mx + w - 2, y); line(mx + 1, y + h - 1, mx + w - 2, y + h - 1); line(mx, y + 1, mx, y + h - 2); line(mx + w - 1, y + 1, mx + w - 1, y + h - 2); break; }
+      case 'talk': { const y = my - Math.floor(h / 2); rect(mx + 1, y, w - 2, h); if (h >= 3) { line(mx, y + 1, mx, y + h - 2); line(mx + w - 1, y + 1, mx + w - 1, y + h - 2); } break; }
+      case 'wavy': for (let i = 0; i < w; i++) px(mx + i, my + (Math.floor(i / 2) % 2)); break;
+      case 'smirk': for (let i = 0; i < w; i++) px(mx + i, i < Math.floor(w / 2) ? my + 1 : my + 1 - Math.floor((i - Math.floor(w / 2) + 1) / 2)); break;
+    }
+    if (l.zzz) { line(24, 1, 27, 1); line(26, 2, 25, 3); line(24, 4, 27, 4); }
+  }
+}
+const pixel = getComputedStyle(document.documentElement).getPropertyValue('--pixel').trim() || '#a0fa00';
+const face = new Face($('face'), pixel), mini = new Face($('miniface'), pixel);
+let botState = { mode: null, feeling: 'content', intensity: 0.3, speaking: false };
+(function animate() { const now = performance.now(); face.render(now, botState); mini.render(now, botState); requestAnimationFrame(animate); })();
+
+// ---------------------------------------------------------------- status, mood, events
+let since = 0, frames = 0, lastFrames = 0, agent = {};
 async function refresh() {
   const s = await api('/api/status');
   const rb = s.robot || {};
   $('link').textContent = rb.connected ? 'connected' : 'offline';
   $('link').className = 'pill ' + (rb.connected ? 'on' : 'off');
-  $('mode').textContent = 'mode: ' + (rb.mode || '?');
-  $('batt').textContent = 'battery: ' + (rb.battery ? Math.round(rb.battery.pct) + '%' + (rb.battery.charging !== 'unplugged' ? ' ⚡' : '') : '?');
+  $('mode').textContent = rb.mode === 'remote' ? 'AI mode' : (rb.mode || 'mode ?');
+  $('enter').hidden = rb.mode === 'remote' || !rb.connected;
+  $('exit').hidden = rb.mode !== 'remote';
+  $('exit').textContent = 'Exit AI mode';
+  $('batt').textContent = rb.battery ? `${rb.battery.charging !== 'unplugged' ? '⚡ ' : ''}${Math.round(rb.battery.pct)}%` : 'battery ?';
   frames = rb.video_frames || 0;
-  $('fpsinfo').textContent = rb.camera_streaming ? `${Math.max(0, frames - lastFrames) / 2} fps` : '';
+  $('fpsinfo').textContent = rb.camera_streaming ? `${Math.max(0, frames - lastFrames)} fps` : '';
   lastFrames = frames;
+  const m = s.mood || {};
+  botState = { mode: s.ai_state, feeling: m.feeling || 'content', intensity: m.intensity || 0, speaking: !!rb.speaker_playing };
+  const strength = (m.intensity || 0) >= 0.7 ? 'very ' : (m.intensity || 0) < 0.35 ? 'a bit ' : '';
+  $('moodline').textContent = s.ai_state ? `${strength}${m.feeling || '…'}${s.doing ? ' · ' + s.doing : ''}` : 'not in AI mode';
+  $('whyline').textContent = s.ai_state ? [m.why, m.for_minutes ? `${m.for_minutes} min` : '', m.your_choice ? 'his choice' : ''].filter(Boolean).join(' · ') : '';
+  $('focuspill').hidden = !s.focus_minutes_left;
+  $('focuspill').textContent = `focus · ${s.focus_minutes_left} min`;
+  for (const b of $('activity').children) b.classList.toggle('on', b.dataset.a === s.activity);
 }
-setInterval(refresh, 2000); refresh();
+setInterval(refresh, 1000); refresh();
 (async function poll() {
   for (;;) {
     try {
       const j = await api(`/api/events?since=${since}&wait_ms=20000`);
       for (const e of j.events || []) {
         since = e.seq;
-        const t = new Date(e.ts).toLocaleTimeString();
-        log(`${t} ${e.kind} ${JSON.stringify(e.data)}`);
-        if (e.kind === 'mode' || e.kind === 'link' || e.kind === 'battery') refresh();
-        if (e.kind === 'heard') chat('person', e.data.text, e.data.in_view && e.data.in_view.length ? e.data.in_view.join(', ') : '');
-        if (e.kind === 'said') chat('robot', e.data.text);
+        log(`${new Date(e.ts).toLocaleTimeString()} ${e.kind} ${JSON.stringify(e.data)}`);
+        if (e.kind === 'heard') { chat('person', e.data.text, e.data.speaker || (e.data.in_view || []).join(', ')); bubble(`You: ${e.data.text}`, false); }
+        if (e.kind === 'said') { chat('robot', e.data.text); bubble(e.data.text, true); }
         if (e.kind === 'face' && e.data.event === 'arrived' && e.data.name) chat('note', `${e.data.name} arrived`);
       }
     } catch { await new Promise(r => setTimeout(r, 2000)); }
   }
 })();
-
-// ---- conversation and agent ----
+function bubble(text, his) { const b = $('bubble'); b.textContent = text; b.classList.toggle('quiet', !his); }
 function chat(who, text, by) {
   const box = $('chat');
-  if (box.firstElementChild && box.firstElementChild.classList.contains('note') && box.children.length === 1 && who !== 'note') box.replaceChildren();
-  const d = document.createElement('div');
-  d.className = 'msg ' + who;
-  d.textContent = who === 'person' && by ? `${by}: ${text}` : text;
+  if (box.children.length === 1 && box.firstElementChild.classList.contains('note') && who !== 'note') box.replaceChildren();
+  const d = el('div', { className: 'msg ' + who });
+  if (who === 'person' && by) d.append(el('span', { className: 'who', textContent: by }));
+  d.append(text);
   box.append(d);
-  while (box.children.length > 60) box.firstElementChild.remove();
+  while (box.children.length > 80) box.firstElementChild.remove();
   box.scrollTop = box.scrollHeight;
 }
-let agent = {};
+
+// ---------------------------------------------------------------- agent
 async function agentRefresh() {
   agent = await api('/api/agent');
-  let st = !agent.enabled ? 'Off (enable [agent] in the config)'
-    : agent.paused ? 'Paused'
-    : agent.running ? `Running: ${agent.kind} brain, session ${agent.sessions}`
-    : 'Waiting for the robot to be in AI mode';
-  if (agent.focus_minutes_left) st += ` · focus mode, ${agent.focus_minutes_left} min left`;
-  const u = agent.usage || {};
-  const k = (n) => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n || 0);
-  if (u.input || u.output) st += ` · tokens in ${k(u.input)} (audio ${k(u.input_audio)}, images ${k(u.input_image)}, cached ${k(u.input_cached)}), out ${k(u.output)} (audio ${k(u.output_audio)})`;
+  const st = !agent.enabled ? 'Agent off (enable [agent] in the config)' : agent.paused ? 'Agent paused' : agent.running ? '' : 'Waiting for AI mode';
   $('agentstate').textContent = st;
-  $('agentpause').textContent = agent.paused ? 'Resume' : 'Pause';
+  const u = agent.usage || {}, k = (n) => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n || 0);
+  $('agentdetail').textContent = `${agent.kind || ''} brain · session ${agent.sessions || 0}` + (u.input || u.output ? ` · tokens in ${k(u.input)} (audio ${k(u.input_audio)}, images ${k(u.input_image)}, cached ${k(u.input_cached)}), out ${k(u.output)}` : '');
+  $('agentpause').textContent = agent.paused ? 'Resume agent' : 'Pause agent';
   $('agentpause').disabled = !agent.enabled;
   $('focus').textContent = agent.focus_minutes_left ? 'End focus' : 'Focus 1 h';
-  if (agent.activity && document.activeElement !== $('activity')) $('activity').value = agent.activity;
-  const log = $('agentlog');
-  const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
-  log.textContent = (agent.log || []).join('\n');
-  if (atEnd) log.scrollTop = log.scrollHeight;
+  const lg = $('agentlog'), atEnd = lg.scrollTop + lg.clientHeight >= lg.scrollHeight - 4;
+  lg.textContent = (agent.log || []).join('\n');
+  if (atEnd) lg.scrollTop = lg.scrollHeight;
 }
-setInterval(() => { if (!document.hidden) agentRefresh(); }, 2000); agentRefresh();
+every(2000, agentRefresh);
 $('agentpause').onclick = async () => { await api('/api/agent', { paused: !agent.paused }); agentRefresh(); };
-$('focus').onclick = async () => { await api('/api/agent', { focus_minutes: agent.focus_minutes_left ? 0 : 60 }); agentRefresh(); };
-$('activity').onchange = async (e) => { await api('/api/agent', { activity: e.target.value }); agentRefresh(); };
+$('focus').onclick = async () => { await api('/api/agent', { focus_minutes: agent.focus_minutes_left ? 0 : 60 }); agentRefresh(); refresh(); };
+for (const b of $('activity').children) b.onclick = async () => { await api('/api/agent', { activity: b.dataset.a }); refresh(); };
 
-// ---- faces ----
-const SVG = 'http://www.w3.org/2000/svg';
-function svgEl(tag, attrs, text) {
-  const el = document.createElementNS(SVG, tag);
-  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
-  if (text !== undefined) el.textContent = text;
-  return el;
+// ---------------------------------------------------------------- his life
+for (const t of $('lifetabs').children) t.onclick = () => {
+  for (const x of $('lifetabs').children) x.classList.toggle('on', x === t);
+  document.querySelectorAll('[data-p]').forEach(p => p.hidden = p.dataset.p !== t.dataset.t);
+};
+function fill(ul, items, empty, row) {
+  ul.replaceChildren(...(items.length ? items.map(row) : [el('li', { className: 'empty', textContent: empty })]));
 }
-let knownShown = '';
+const item = (when, text, action) => { const li = el('li'); if (when) li.append(el('span', { className: 'when', textContent: when })); li.append(el('span', { className: 'text', textContent: text })); if (action) li.append(action); return li; };
+const smallButton = (label, fn) => el('button', { className: 'small ghost', type: 'button', textContent: label, onclick: fn });
+let lifeShown = '', memShown = '', daysShown = '';
+async function lifeRefresh() {
+  const l = await api('/api/life');
+  const key = JSON.stringify([l.plans, l.voices]);
+  if (key !== lifeShown) {
+    lifeShown = key;
+    fill($('plans'), l.plans || [], 'No plans of his own yet.', p => item(p.when, p.text, smallButton('Done', async () => { await api('/api/plans/done', { id: p.id }); lifeRefresh(); })));
+    voices = l.voices || []; showPeople();
+  }
+  const days = (l.diary_days || []).join();
+  if (days !== daysShown) {
+    daysShown = days;
+    const sel = $('diarydays'); const keep = sel.value;
+    sel.replaceChildren(...(l.diary_days || []).map(d => el('option', { value: d, textContent: new Date(d + 'T12:00').toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }) })));
+    if (keep && (l.diary_days || []).includes(keep)) sel.value = keep;
+    showDiary();
+  }
+  const m = await api('/api/memory');
+  const mk = JSON.stringify(m);
+  if (mk !== memShown) {
+    memShown = mk;
+    fill($('facts'), m.facts || [], 'He remembers nothing yet.', f => item(f.date, f.text, smallButton('Forget', async () => { if (confirm(`Forget "${f.text}"?`)) { await api('/api/memory/forget', { id: f.id }); lifeRefresh(); } })));
+    fill($('reminders'), m.reminders || [], 'No reminders.', r => item(r.at, r.text, smallButton('Cancel', async () => { await api('/api/reminders/cancel', { id: r.id }); lifeRefresh(); })));
+  }
+}
+async function showDiary() {
+  const d = $('diarydays').value;
+  if (!d) { $('diaryentry').textContent = 'No entries yet: he writes one each evening.'; return; }
+  const j = await api(`/api/diary/${d}`);
+  $('diaryentry').textContent = j.entry || '(empty)';
+}
+$('diarydays').onchange = showDiary;
+every(4000, lifeRefresh);
+
+// ---------------------------------------------------------------- people: faces and voices
+const SVG = 'http://www.w3.org/2000/svg';
+const svgEl = (tag, attrs, text) => { const e = document.createElementNS(SVG, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (text !== undefined) e.textContent = text; return e; };
+let faces = [], voices = [], peopleShown = '';
 function showFaces(f) {
   if (!f) return;
-  const seen = f.in_view || [];
-  const things = f.objects || [];
-  const kinds = [...new Set(things.map(o => o.class))];
-  $('inview').textContent = (seen.length
-    ? 'In view: ' + seen.map(s => s.name ? `${s.name} (${s.score.toFixed(2)})` : 'unknown').join(', ')
-    : 'Nobody in view') + (kinds.length ? ' · Things: ' + kinds.join(', ') : '');
-  // Boxes in frame pixels; the SVG viewBox matches the frame so they line up with object-fit: contain.
-  const svg = $('boxes');
-  svg.replaceChildren();
+  const seen = f.in_view || [], things = f.objects || [], kinds = [...new Set(things.map(o => o.class))];
+  $('inview').textContent = (seen.length ? 'In view: ' + seen.map(s => s.name ? `${s.name} (${s.score.toFixed(2)})` : 'someone').join(', ') : 'Nobody in view') + (kinds.length ? ' · ' + kinds.join(', ') : '');
+  const svg = $('boxes'); svg.replaceChildren();
   const any = seen[0] || things[0];
   if (any) svg.setAttribute('viewBox', `0 0 ${any.frame_width} ${any.frame_height}`);
-  for (const o of things) {
-    const [x, y, w, h] = o.bbox;
-    svg.append(svgEl('rect', { x, y, width: w, height: h, stroke: '#5aa9ff', 'stroke-dasharray': '4 3' }));
-    svg.append(svgEl('text', { x: x + 2, y: y + h - 4, fill: '#5aa9ff' }, o.class));
-  }
-  for (const s of seen) {
-    const [x, y, w, h] = s.bbox;
-    const color = s.name ? '#3ccf6e' : '#f0c419';
-    svg.append(svgEl('rect', { x, y, width: w, height: h, stroke: color }));
-    svg.append(svgEl('text', { x, y: Math.max(10, y - 3), fill: color }, s.name || 'unknown'));
-  }
-  const names = (f.known || []).join('\n');
-  if (names === knownShown) return;
-  knownShown = names;
-  const ul = $('known');
-  ul.replaceChildren();
-  for (const name of f.known || []) {
-    const li = document.createElement('li');
-    const span = document.createElement('span'); span.textContent = name;
-    const b = document.createElement('button'); b.textContent = 'Forget'; b.type = 'button';
-    b.onclick = async () => {
-      if (!confirm(`Forget ${name}'s face?`)) return;
-      await api('/api/faces/forget', { name });
-      showFaces(await api('/api/faces'));
-    };
-    li.append(span, b); ul.append(li);
-  }
+  for (const o of things) { const [x, y, w, h] = o.bbox; svg.append(svgEl('rect', { x, y, width: w, height: h, stroke: '#5aa9ff', 'stroke-dasharray': '4 3' }), svgEl('text', { x: x + 2, y: y + h - 4, fill: '#5aa9ff' }, o.class)); }
+  for (const s of seen) { const [x, y, w, h] = s.bbox; const c = s.name ? '#3ccf6e' : '#f0c419'; svg.append(svgEl('rect', { x, y, width: w, height: h, stroke: c }), svgEl('text', { x, y: Math.max(10, y - 3), fill: c }, s.name || 'someone')); }
+  faces = f.known || []; showPeople();
 }
-setInterval(async () => { if (!document.hidden) showFaces(await api('/api/faces')); }, 700);
-
-// ---- memory and reminders ----
-let memShown = '';
-function itemList(ul, items, label, onDrop) {
-  ul.replaceChildren();
-  for (const it of items) {
-    const li = document.createElement('li');
-    const span = document.createElement('span'); span.textContent = label(it);
-    const b = document.createElement('button'); b.type = 'button'; b.textContent = 'Remove';
-    b.onclick = async () => { await onDrop(it); memRefresh(); };
-    li.append(span, b); ul.append(li);
-  }
-}
-async function memRefresh() {
-  const m = await api('/api/memory');
-  if (!m) return;
-  const key = JSON.stringify(m);
-  if (key === memShown) return;
-  memShown = key;
-  const facts = m.facts || [], rems = m.reminders || [];
-  $('memnone').hidden = facts.length > 0;
-  $('remnone').hidden = rems.length > 0;
-  itemList($('facts'), facts, f => `${f.text} (${f.date})`, f => {
-    if (confirm(`Forget "${f.text}"?`)) return api('/api/memory/forget', { id: f.id });
+function showPeople() {
+  const names = [...new Set([...faces, ...voices.map(v => v.name)])].sort();
+  const key = JSON.stringify([faces, voices]);
+  if (key === peopleShown) return; peopleShown = key;
+  fill($('people'), names, 'Nobody yet.', name => {
+    const v = voices.find(x => x.name === name);
+    const what = [faces.includes(name) ? 'face' : '', v ? `voice (${v.samples})` : ''].filter(Boolean).join(' + ');
+    const li = item(null, name, null);
+    li.append(el('span', { className: 'when', textContent: what }));
+    if (faces.includes(name)) li.append(smallButton('Forget face', async () => { if (confirm(`Forget ${name}'s face?`)) { await api('/api/faces/forget', { name }); showFaces(await api('/api/faces')); } }));
+    if (v) li.append(smallButton('Forget voice', async () => { if (confirm(`Forget ${name}'s voice?`)) { await api('/api/voices/forget', { name }); lifeRefresh(); } }));
+    return li;
   });
-  itemList($('reminders'), rems, r => `${r.at}: ${r.text}`, r => api('/api/reminders/cancel', { id: r.id }));
 }
-setInterval(() => { if (!document.hidden) memRefresh(); }, 3000); memRefresh();
+every(700, async () => showFaces(await api('/api/faces')));
 $('faceform').onsubmit = async (e) => {
   e.preventDefault();
   const name = $('facename').value.trim();
   if (!name) { $('facemsg').textContent = 'Type your name first.'; return; }
-  $('remember').disabled = true;
-  $('facemsg').textContent = 'Looking at you… hold still for a few seconds.';
+  $('remember').disabled = true; $('facemsg').textContent = 'Looking at you… hold still for a few seconds.';
   const j = await api('/api/faces/remember', { name });
   $('remember').disabled = false;
-  $('facemsg').textContent = j.ok
-    ? `Remembered ${j.enrolled.name} (${j.enrolled.samples_added} samples).` + (j.enrolled.resembles ? ` Also resembles ${j.enrolled.resembles}.` : '')
-    : (j.error || 'Failed.');
+  $('facemsg').textContent = j.ok ? `Remembered ${j.enrolled.name} (${j.enrolled.samples_added} samples).` + (j.enrolled.resembles ? ` Also resembles ${j.enrolled.resembles}.` : '') : (j.error || 'Failed.');
   showFaces(await api('/api/faces'));
 };
 
-// ---- video: poll the newest frame. (An MJPEG <img> never reports loading in Safari and
-// silently freezes when the plane restarts; this works everywhere and recovers by itself.) ----
+// ---------------------------------------------------------------- Apple TV
+let atv = {}, atvFound = null, atvPairing = null, atvBusy = false;
+async function atvRefresh() { if (atvBusy) return; atv = await api('/api/appletv'); atvRender(); }
+function atvRender() {
+  const body = $('atvbody'), st = $('atvstate');
+  const busy = (fn) => async () => { atvBusy = true; try { await fn(); } finally { atvBusy = false; atvRefresh(); } };
+  if (!atv.installed) {
+    st.textContent = 'not set up';
+    body.replaceChildren(el('p', { className: 'muted', textContent: 'Installs pyatv (the Apple TV library) into the plane\'s data folder. Needs the internet once.' }),
+      el('button', { className: 'primary', textContent: 'Set up', onclick: busy(async () => { body.append(el('p', { className: 'muted', textContent: 'Installing…' })); await api('/api/appletv/setup', {}); }) }));
+    return;
+  }
+  if (atvPairing) {
+    st.textContent = `pairing ${atvPairing.protocol}`;
+    const pin = el('input', { type: 'text', placeholder: 'PIN shown on the TV', inputMode: 'numeric', className: 'grow' });
+    body.replaceChildren(el('p', { className: 'muted', textContent: `Your TV shows a PIN for ${atvPairing.protocol === 'companion' ? 'remote control' : 'media'}. Type it here.` }),
+      el('form', { className: 'row', onsubmit: async (e) => { e.preventDefault(); atvBusy = true; const j = await api('/api/appletv/pin', { pin: pin.value }); atvBusy = false; atvPairing = null; if (j.ok) atvFound = null; atvRefresh(); } }, pin, el('button', { className: 'primary', textContent: 'Pair' })),
+      el('button', { className: 'small ghost', textContent: 'Cancel', style: 'margin-top:6px', onclick: () => { atvPairing = null; atvRender(); } }));
+    pin.focus();
+    return;
+  }
+  const d = atv.device;
+  if (atvFound || !d) {
+    st.textContent = d ? `${d.name}` : 'no TV chosen';
+    const addr = el('input', { type: 'text', placeholder: 'Address (optional), e.g. 192.168.86.21', className: 'grow' });
+    const list = el('ul', { className: 'list', style: 'margin-top:8px' });
+    for (const tv of atvFound || []) {
+      const li = item(tv.model || '', `${tv.name} (${tv.address})`, null);
+      for (const p of ['companion', 'airplay']) {
+        const svc = (tv.services || []).find(s => s.protocol === p);
+        if (!svc) continue;
+        li.append(smallButton(svc.paired ? `${p} ✓` : `Pair ${p === 'companion' ? 'remote' : 'media'}`, busy(async () => {
+          const j = await api('/api/appletv/pair', { id: tv.id, address: tv.address, name: tv.name, protocol: p });
+          if (j.ok) atvPairing = { protocol: p };
+        })));
+      }
+      list.append(li);
+    }
+    body.replaceChildren(el('p', { className: 'muted', textContent: 'Pair both: "remote" (apps, power) and "media" (what\'s playing, play/pause). Each shows a PIN on the TV.' }),
+      el('form', { className: 'row', onsubmit: (e) => { e.preventDefault(); busy(async () => { const j = await api('/api/appletv/scan', { address: addr.value }); atvFound = j.found || []; if (!atvFound.length) log('! No Apple TV found; try its address.'); })(); } }, addr, el('button', { textContent: 'Find' })),
+      list, d ? el('button', { className: 'small ghost', textContent: 'Done', style: 'margin-top:6px', onclick: () => { atvFound = null; atvRender(); } }) : '');
+    return;
+  }
+  st.textContent = `${d.name} · ${atv.connected ? 'connected' : 'not connected'}`;
+  const p = (atv.status && atv.status.playing) || atv.playing || {};
+  const playing = p.state === 'playing';
+  const ctl = (label, action, value) => el('button', { textContent: label, title: action, onclick: busy(() => api('/api/appletv/control', { action, value })) });
+  const vol = el('input', { type: 'range', min: 0, max: 100, value: (atv.status && atv.status.volume) || 50, className: 'grow', onchange: busy(() => api('/api/appletv/control', { action: 'set_volume', value: String(vol.value) })) });
+  body.replaceChildren(
+    el('div', { className: 'np' }, el('div', { className: 'art', textContent: p.media_type === 'music' ? '♪' : '▶' }),
+      el('div', {}, el('div', { className: 't', textContent: p.title || (atv.connected ? 'Nothing playing' : 'Not connected') }),
+        el('div', { className: 'muted', textContent: [p.artist, p.album || p.series, p.app].filter(Boolean).join(' · ') }))),
+    el('div', { className: 'transport' }, ctl('⏮', 'previous'), ctl(playing ? '⏸' : '▶', 'play_pause'), ctl('⏭', 'next'), ctl('⏻', (atv.status && atv.status.on === false) ? 'turn_on' : 'turn_off')),
+    el('div', { className: 'row', style: 'margin-top:10px' }, el('span', { className: 'muted', textContent: 'Volume' }), vol),
+    el('button', { className: 'small ghost', textContent: 'Pair or change TV', style: 'margin-top:8px', onclick: () => { atvFound = []; atvRender(); } }));
+}
+every(5000, atvRefresh);
+
+// ---------------------------------------------------------------- camera
 const img = $('video');
 (async function videoLoop() {
   let seq = null, url = null;
   for (;;) {
     let wait = 100;
     try {
-      if (document.hidden) {
-        wait = 500;
-      } else {
+      if (document.hidden) wait = 500;
+      else {
         const r = await fetch('/frame.jpg', { cache: 'no-store' });
         if (r.ok) {
           const s = r.headers.get('x-frame-seq');
-          if (s !== seq) {
-            seq = s;
-            const next = URL.createObjectURL(await r.blob());
-            img.src = next;
-            if (url) URL.revokeObjectURL(url);
-            url = next;
-            img.hidden = false;
-            $('novideo').style.display = 'none';
-          }
-        } else {
-          wait = 1000;
-        }
+          if (s !== seq) { seq = s; const next = URL.createObjectURL(await r.blob()); img.src = next; if (url) URL.revokeObjectURL(url); url = next; img.hidden = false; $('novideo').style.display = 'none'; }
+        } else wait = 1000;
       }
     } catch { wait = 1000; }
     await new Promise(r => setTimeout(r, wait));
@@ -355,29 +563,23 @@ const img = $('video');
 })();
 $('camOn').onclick = () => api('/api/camera', { on: true, res: $('res').value, fps: +$('fps').value });
 $('camOff').onclick = () => api('/api/camera', { on: false });
-
-// ---- mode ----
 $('enter').onclick = () => api('/api/mode', { remote: true }).then(refresh);
 $('exit').onclick = () => api('/api/mode', { remote: false }).then(refresh);
 
-// ---- drive: resend while held so the robot watchdog keeps it moving ----
+// ---------------------------------------------------------------- drive: resend while held so the robot's watchdog keeps it moving
 const held = new Set();
 let driveTimer = null;
 function vector() {
-  const s = +$('speed').value;
-  let l = 0, r = 0;
-  if (held.has('f')) { l += s; r += s; }
-  if (held.has('b')) { l -= s; r -= s; }
-  if (held.has('l')) { l -= s * 0.7; r += s * 0.7; }
-  if (held.has('r')) { l += s * 0.7; r -= s * 0.7; }
+  const s = +$('speed').value; let l = 0, r = 0;
+  if (held.has('f')) { l += s; r += s; } if (held.has('b')) { l -= s; r -= s; }
+  if (held.has('l')) { l -= s * 0.7; r += s * 0.7; } if (held.has('r')) { l += s * 0.7; r -= s * 0.7; }
   const c = (v) => Math.max(-100, Math.min(100, Math.round(v)));
   return { l: c(l), r: c(r) };
 }
 function updateDrive() {
   if (held.size === 0) { clearInterval(driveTimer); driveTimer = null; api('/api/stop', {}); return; }
   const send = () => api('/api/drive', { ...vector(), ms: 1000 });
-  send();
-  if (!driveTimer) driveTimer = setInterval(send, 200);
+  send(); if (!driveTimer) driveTimer = setInterval(send, 200);
 }
 document.querySelectorAll('.pad [data-d]').forEach(b => {
   const d = b.dataset.d;
@@ -387,14 +589,12 @@ document.querySelectorAll('.pad [data-d]').forEach(b => {
 });
 $('stop').onclick = () => { held.clear(); updateDrive(); };
 const keys = { w: 'f', s: 'b', a: 'l', d: 'r', ArrowUp: 'f', ArrowDown: 'b', ArrowLeft: 'l', ArrowRight: 'r' };
-addEventListener('keydown', (e) => { if (e.target.tagName === 'INPUT' || e.repeat) return; const d = keys[e.key]; if (d) { held.add(d); updateDrive(); e.preventDefault(); } if (e.key === ' ') { held.clear(); updateDrive(); } });
+addEventListener('keydown', (e) => { if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.repeat) return; const d = keys[e.key]; if (d) { held.add(d); updateDrive(); e.preventDefault(); } if (e.key === ' ') { held.clear(); updateDrive(); } });
 addEventListener('keyup', (e) => { const d = keys[e.key]; if (d && held.delete(d)) updateDrive(); });
 addEventListener('blur', () => { if (held.size) { held.clear(); updateDrive(); } });
 
-// ---- speak ----
+// ---------------------------------------------------------------- speak, listen, push to talk (one websocket)
 $('sayform').onsubmit = (e) => { e.preventDefault(); const t = $('saytext').value.trim(); if (t) api('/api/say', { text: t, engine: $('engine').value }); $('saytext').value = ''; };
-
-// ---- audio: live mic playback and push-to-talk over one websocket ----
 let ctx = null, ws = null, playHead = 0, listening = false;
 function ensureAudio() {
   if (!ctx) ctx = new AudioContext({ sampleRate: 16000 });
@@ -408,8 +608,7 @@ function ensureAudio() {
       let peak = 0; for (const v of pcm) peak = Math.max(peak, Math.abs(v));
       $('meter').firstElementChild.style.width = Math.min(100, peak / 327.67) + '%';
       if (!listening) return;
-      const buf = ctx.createBuffer(1, pcm.length, 16000);
-      const ch = buf.getChannelData(0);
+      const buf = ctx.createBuffer(1, pcm.length, 16000), ch = buf.getChannelData(0);
       for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
       const src = ctx.createBufferSource(); src.buffer = buf; src.connect(ctx.destination);
       const now = ctx.currentTime;
@@ -419,13 +618,10 @@ function ensureAudio() {
   }
 }
 $('listen').onclick = () => { ensureAudio(); listening = !listening; $('listen').classList.toggle('active', listening); $('listen').textContent = listening ? 'Stop listening' : 'Listen live'; };
-
 let micStream = null, micNode = null, pttWanted = false, pttPress = 0;
 async function pttStart() {
   if (pttWanted) return;
-  pttWanted = true;
-  const press = ++pttPress;
-  ensureAudio();
+  pttWanted = true; const press = ++pttPress; ensureAudio();
   let stream;
   try {
     // No automatic gain: it keeps raising the mic until the robot's speaker howls through it.
@@ -438,12 +634,10 @@ async function pttStart() {
   micNode = ctx.createScriptProcessor(1024, 1, 1);
   let loud = 0;
   micNode.onaudioprocess = (ev) => {
-    const f = ev.inputBuffer.getChannelData(0);
-    const out = new Int16Array(f.length);
+    const f = ev.inputBuffer.getChannelData(0), out = new Int16Array(f.length);
     let sum = 0;
     for (let i = 0; i < f.length; i++) { out[i] = Math.max(-1, Math.min(1, f[i])) * 32767; sum += f[i] * f[i]; }
-    // Speech has gaps; a loop between this mic and the robot's speaker does not. Stop talking
-    // after ~1.3 s of continuous loud input.
+    // Speech has gaps; a loop between this mic and the robot's speaker does not.
     loud = Math.sqrt(sum / f.length) > 0.2 ? loud + 1 : 0;
     if (loud > 20) { log('! feedback between your mic and the robot speaker: stopped talking. Move the laptop away from the robot.'); pttStop(); return; }
     if (ws.readyState === 1) ws.send(out.buffer);

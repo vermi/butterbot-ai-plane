@@ -32,7 +32,7 @@ impl Reminder {
     }
 }
 
-fn local(ms: i64) -> DateTime<Local> {
+pub(crate) fn local(ms: i64) -> DateTime<Local> {
     Local
         .timestamp_millis_opt(ms)
         .single()
@@ -147,7 +147,7 @@ impl Reminders {
 }
 
 /// The next time the clock reads `at` ("HH:MM", or "H:MM").
-fn next_at(now: DateTime<Local>, at: &str) -> Result<DateTime<Local>> {
+pub(crate) fn next_at(now: DateTime<Local>, at: &str) -> Result<DateTime<Local>> {
     let t = NaiveTime::parse_from_str(at.trim(), "%H:%M")
         .with_context(|| format!("\"{at}\" is not a time like 18:30"))?;
     let mut day = now.date_naive();

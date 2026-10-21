@@ -93,6 +93,7 @@ void TopBar::loop(){
 	if(strcmp(lv_label_get_text(clockLabel), text) != 0){
 		lv_label_set_text(clockLabel, text);
 	}
+	lv_obj_update_flag(bolt, LV_OBJ_FLAG_HIDDEN, robotState->getChargeState() == ChargeStatus::Unplugged);
 }
 
 void TopBar::buildUI(){
@@ -107,6 +108,28 @@ void TopBar::buildUI(){
 	lv_obj_set_size(clockLabel, 24, 8);
 	lv_obj_set_pos(clockLabel, 2, 0);
 	lv_label_set_text(clockLabel, "");
+
+	// A 5x7 lightning bolt, in the bar's text colour
+	static constexpr const char* Bolt[] = {
+		"...#.",
+		"..##.",
+		".##..",
+		"#####",
+		"..##.",
+		".##..",
+		".#...",
+	};
+	const uint16_t ink = lv_color_to_u16(theme->getTertiaryColor());
+	const uint16_t paper = lv_color_to_u16(color);
+	for(int y = 0; y < 7; y++){
+		for(int x = 0; x < 5; x++){
+			boltBuf[y * 5 + x] = Bolt[y][x] == '#' ? ink : paper;
+		}
+	}
+	bolt = lv_canvas_create(*this);
+	lv_canvas_set_buffer(bolt, boltBuf, 5, 7, LV_COLOR_FORMAT_RGB565);
+	lv_obj_set_pos(bolt, 96, 0);
+	lv_obj_add_flag(bolt, LV_OBJ_FLAG_HIDDEN);
 
 	shutupEl = new ShutUpElement(*this, robotState->isMuted());
 	signalEl = new SignalElement(*this, 2);

@@ -25,6 +25,8 @@ const HEARD_FRESH: Duration = Duration::from_secs(30);
 const CALL_FRESH: Duration = Duration::from_secs(25);
 /// A battery warning not passed on within this long waits for the next one.
 const BATTERY_FRESH: Duration = Duration::from_secs(300);
+/// Music nudges at most this often.
+const MUSIC_AGAIN: Duration = Duration::from_secs(600);
 /// Someone keeps talking: do not end a session in the middle of a conversation.
 const SESSION_END_QUIET: Duration = Duration::from_secs(90);
 
@@ -34,10 +36,9 @@ const CHAT: &[&str] = &[
     "comment on something you notice in the picture",
     "ask the person in view how their day is going",
 ];
-const LOOK: &str = "look around (turn a little) and say what you find";
-const WANDER: &str = "go for a little wander (call wander) and say what you find";
-const EXPLORE: &str =
-    "explore: call wander two or three times and comment on anything interesting you find";
+const LOOK: &str = "look around (turn a little)";
+const WANDER: &str = "go for a little wander (call wander)";
+const EXPLORE: &str = "explore: call wander two or three times";
 const MUSE: &str = "think out loud to yourself for a moment: a passing thought, something you \
 wondered about or noticed, as if nobody is listening";
 const REST_IN_VIEW: &str = "stay quiet for now";
@@ -107,6 +108,13 @@ pub enum Nudge {
     Noticed { what: String },
     /// A sound worth noticing (a bark, the doorbell, an alarm...).
     Heard { what: String },
+    /// Music started playing: heard nearby (with its beat, if clear) or on the Apple TV.
+    Music {
+        what: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        bpm: Option<u32>,
+        suggestion: String,
+    },
     /// Nobody has said anything to the robot for a while.
     Idle {
         quiet_for_minutes: u64,
@@ -127,10 +135,15 @@ struct State {
     /// What, whether it is urgent (an alarm), when.
     heard: Option<(String, bool, Instant)>,
     battery: Option<(u32, bool, Instant)>,
+    /// Music started: what, its beat, when; and when the last music nudge went out.
+    music: Option<(String, Option<u32>, Instant)>,
+    music_nudged: Option<Instant>,
     session_started: Instant,
     activity: Activity,
     /// How its mood stretches or shortens the waits (see `crate::mood`).
     mood_pace: f64,
+    /// Plugged in and not allowed to drive: no ideas that need moving.
+    tethered: bool,
     rng: u64,
 }
 
@@ -156,9 +169,12 @@ impl Life {
             poked: None,
             heard: None,
             battery: None,
+            music: None,
+            music_nudged: None,
             session_started: Instant::now(),
             activity: cfg.activity,
             mood_pace: 1.0,
+            tethered: false,
             rng: seed,
         };
         reschedule(&cfg, &mut state);
@@ -188,6 +204,11 @@ impl Life {
         let mut s = self.state.lock().unwrap();
         s.activity = a;
         reschedule(&self.cfg, &mut s);
+    }
+
+    /// Plugged in and not allowed to drive: its own ideas leave out moving about.
+    pub fn set_tethered(&self, tethered: bool) {
+        self.state.lock().unwrap().tethered = tethered;
     }
 
     /// Its mood stretches (sleepy, sad) or shortens (bored, curious) the waits between its own
@@ -255,6 +276,14 @@ impl Life {
             return;
         }
         self.state.lock().unwrap().heard = Some((what.to_string(), urgent, Instant::now()));
+    }
+
+    /// Music started playing (`bpm`: its beat, if one was clear).
+    pub fn music(&self, what: &str, bpm: Option<u32>) {
+        if !self.cfg.enabled || self.focused().is_some() {
+            return;
+        }
+        self.state.lock().unwrap().music = Some((what.to_string(), bpm, Instant::now()));
     }
 
     /// Someone pressed Poke on the controller: it comes through focus mode (they want attention).
@@ -348,6 +377,25 @@ impl Life {
             reschedule(&self.cfg, &mut s);
             return Some(Nudge::Arrived { name });
         }
+        // Music: once per tune, and not more than every few minutes.
+        if let Some((what, bpm, at)) = s.music.take()
+            && at.elapsed() < ARRIVAL_FRESH
+            && s.music_nudged.is_none_or(|t| t.elapsed() >= MUSIC_AGAIN)
+        {
+            s.music_nudged = Some(Instant::now());
+            s.last_activity = Instant::now();
+            reschedule(&self.cfg, &mut s);
+            let suggestion = if s.tethered {
+                "enjoy it, hum along, or ignore it (you are on a cable: no dancing)".into()
+            } else {
+                "dance if you feel like it (`gesture` dance), or just enjoy it".into()
+            };
+            return Some(Nudge::Music {
+                what,
+                bpm,
+                suggestion,
+            });
+        }
         s.noticed.retain(|(_, at)| at.elapsed() < ARRIVAL_FRESH);
         if let Some((what, _)) = s.noticed.pop_front() {
             s.last_activity = Instant::now();
@@ -380,7 +428,7 @@ impl Life {
         let news = |rng: &mut u64| match self.cfg.interests.as_slice() {
             [] => "share something interesting you read about recently".to_string(),
             topics => format!(
-                "tell them about an interesting recent development in {} (look it up with web_search first)",
+                "tell them about an interesting recent development in {} (look it up with web_search first): one sentence, the headline first",
                 topics[next_rand(rng) as usize % topics.len()]
             ),
         };
@@ -425,6 +473,15 @@ impl Life {
                         ideas.push((p, 1));
                     }
                 }
+            }
+        }
+        if s.tethered {
+            let moving = |i: &str| {
+                i == LOOK || i == WANDER || i == EXPLORE || i.starts_with("go and see what")
+            };
+            ideas.retain(|(i, _)| !moving(i));
+            if !in_view && s.activity != Quiet {
+                ideas.push((MUSE.into(), 1));
             }
         }
         let total: u64 = ideas.iter().map(|(_, w)| w).sum();

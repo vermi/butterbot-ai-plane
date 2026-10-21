@@ -232,12 +232,16 @@ pub enum ToRobot {
         seen: String,
         seen_secs: u32,
         said: String,
+        /// The last thing someone said to it, and whether that came after `said`.
+        heard: String,
+        heard_last: bool,
+        /// What it is up to right now ("dancing"), if anything.
+        doing: String,
     },
-    /// A small camera picture for the handheld controller's screen (base64 JPEG) and what is in
-    /// it. Not acknowledged.
-    Peek {
-        jpeg: String,
-        caption: String,
+    /// Who and what is in view, for the camera view on the handheld controller (the video goes to
+    /// it directly over Wi-Fi; see `bbplane::peek`). Not acknowledged.
+    PeekCaption {
+        text: String,
     },
     /// Run a stock scenario routine (`BB::Action::Scenario` value + `ScenarioData.raw`).
     Scenario {
@@ -301,7 +305,7 @@ impl ToRobot {
             | StatusLight(_)
             | AiStatus { .. }
             | HomeInfo { .. }
-            | Peek { .. } => None,
+            | PeekCaption { .. } => None,
         }
     }
 }

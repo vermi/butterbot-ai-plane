@@ -259,6 +259,9 @@ void HomeScreen::loop(){
 	if(peek != nullptr && (millis() - peekOpenedAt >= PeekMaxMs || !robotState->isAi())){
 		closePeek();
 	}
+	if(peek != nullptr){
+		peek->loop();
+	}
 	if(actionElement == nullptr){
 		handleStick();
 	}
@@ -288,16 +291,25 @@ void HomeScreen::handleStick(){
 	if(joystick == nullptr){
 		return;
 	}
-	const int h = joystick->getHorizontal();
-	const int v = joystick->getVertical();
+	const int rawH = joystick->getHorizontal();
+	const int rawV = joystick->getVertical();
+	// Learn the rest position while the stick is near it
+	if(!stickPushed && std::abs(rawH - (int) stickRestH) < 10 && std::abs(rawV - (int) stickRestV) < 10){
+		stickRestH += (rawH - stickRestH) * 0.05f;
+		stickRestV += (rawV - stickRestV) * 0.05f;
+	}
+	const int h = rawH - (int) stickRestH;
+	const int v = rawV - (int) stickRestV;
 	if(stickPushed){
-		stickPushed = std::abs(h) >= StickRest || std::abs(v) >= StickRest;
+		stickPushed = std::abs(h) >= StickRelease || std::abs(v) >= StickRelease;
 		return;
 	}
 	if(std::abs(h) < StickPush && std::abs(v) < StickPush){
 		return;
 	}
 	stickPushed = true;
+	ESP_LOGW(TAG, "stick pushed: h %d, v %d (camera %s, dashboard %s, AI %d)", h, v, peek ? "open" : "closed",
+			 lv_obj_has_flag(*dash, LV_OBJ_FLAG_HIDDEN) ? "hidden" : "shown", robotState->isAi());
 
 	if(peek != nullptr){
 		closePeek();
@@ -322,6 +334,7 @@ void HomeScreen::openPeek(){
 	}
 	peek = new PeekView(*this);
 	peekOpenedAt = millis();
+	ESP_LOGW(TAG, "camera view opened");
 	ScenarioData data{};
 	data.raw = 1;
 	com->sendScenario(BB::Action::Scenario::AiPeek, data);
@@ -346,11 +359,13 @@ void HomeScreen::stepActivity(const int step){
 	askedActivityAt = millis();
 	dash->showActivity(askedActivity);
 	if(to == (int) from){
+		ESP_LOGW(TAG, "activity stays %d", to);
 		return;
 	}
 	ScenarioData data{};
 	data.raw = (uint8_t) to | 0x80; // bit 7: quietly (the screen shows it)
 	com->sendScenario(BB::Action::Scenario::AiActivity, data);
+	ESP_LOGW(TAG, "activity %d -> %d sent", (int) from, to);
 }
 
 void HomeScreen::startRC(){
@@ -381,10 +396,10 @@ void HomeScreen::handleDataEvent(const BB::State state, const BB::Action action,
 		return;
 	}
 
-	// The camera view's pictures and caption
+	// The camera view's Wi-Fi details and caption
 	if(state == BB::State::AI && peek != nullptr){
-		if(action.ai == BB::Action::AI::PeekChunk){
-			peek->onChunk(data);
+		if(action.ai == BB::Action::AI::PeekWiFi){
+			peek->onWiFi(data);
 		}else if(action.ai == BB::Action::AI::PeekCaption){
 			peek->onCaption(data);
 		}

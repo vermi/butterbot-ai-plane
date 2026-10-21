@@ -15,7 +15,9 @@ UDPListener::UDPListener() noexcept {
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(UDPPort);
-    inet_pton(AF_INET, ControllerIP, &addr.sin_addr);
+    // Any interface: the robot's RC feed comes over the controller's access point, the AI mode
+    // camera view over the home Wi-Fi.
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
     if(bind(socket, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0){
         CMF_LOG(UDPListener, Error, "Can't bind address to socket, errno=%d: %s", errno, strerror(errno));
         close(socket);

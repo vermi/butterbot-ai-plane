@@ -20,6 +20,10 @@ public:
 
 	bool nextFrame(std::function<void(const Color* img)>);
 
+	/** Bytes received and frames decoded so far (for diagnostics). */
+	std::atomic<uint32_t> bytesIn{ 0 };
+	std::atomic<uint32_t> framesDecoded{ 0 };
+
 private:
 	jpeg_dec_handle_t jpegDec = nullptr;
 	jpeg_dec_io_t jpegIo{};

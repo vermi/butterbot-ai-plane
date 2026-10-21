@@ -109,9 +109,12 @@ private:
 
 	// The joystick on the home screen in AI mode: up shows the robot's camera, left and right
 	// change the activity level. One step per push (back to the middle in between).
-	static constexpr int StickPush = 60;
-	static constexpr int StickRest = 25;
+	// Measured from where the stick rests. This stick's travel is uneven: some directions barely
+	// get past 40 (the driver's dead zone ends at 23).
+	static constexpr int StickPush = 30;
+	static constexpr int StickRelease = 15;
 	bool stickPushed = false;
+	float stickRestH = 0, stickRestV = 0;
 	void handleStick();
 
 	// The robot's camera, over everything but the top bar (see PeekView). Any button or stick push

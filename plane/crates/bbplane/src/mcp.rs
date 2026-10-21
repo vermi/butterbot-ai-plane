@@ -226,6 +226,63 @@ pub struct ActivityArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct VoiceArgs {
+    /// Whose voice it is.
+    pub name: String,
+    /// true: forget that voice instead.
+    pub forget: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct AppleTvArgs {
+    /// now_playing, status, play, pause, play_pause, stop, next, previous, volume_up, volume_down,
+    /// set_volume, turn_on, turn_off, apps, launch, home, menu, select, up, down, left or right.
+    pub action: String,
+    /// set_volume: 0-100; launch: the app's name.
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct IntendArgs {
+    /// What the robot means to do.
+    pub text: String,
+    /// Minutes from now.
+    pub in_minutes: Option<f64>,
+    /// Or a local time, "HH:MM" (24-hour). Neither: some day.
+    pub at: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct PlansArgs {
+    /// Id of a plan it did or dropped (omit to list them).
+    pub done: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct WriteDiaryArgs {
+    /// The entry, in the robot's own words.
+    pub text: String,
+    /// YYYY-MM-DD (default today).
+    pub day: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ReadDiaryArgs {
+    /// YYYY-MM-DD (default the latest entry).
+    pub day: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GestureArgs {
+    /// wiggle, nod, shake, bounce, twirl, shiver, approach, back_off, sulk or dance.
+    pub name: String,
+    /// dance only: beats a minute (default: the beat of music it hears, else 110).
+    pub bpm: Option<f64>,
+    /// dance only: how long, in seconds (default 10).
+    pub seconds: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct FeelArgs {
     /// content, happy, excited, curious, playful, calm, sleepy, bored, sad, grumpy, surprised or
     /// worried.
@@ -694,6 +751,123 @@ restarts. Use it when someone asks the robot to be livelier, calmer or quieter (
                 None,
             )),
         }
+    }
+
+    #[tool(
+        description = "Remember the voice of whoever gave the latest command as `name` (with their agreement), or \
+forget it. Commands then carry `speaker`, even off camera."
+    )]
+    async fn remember_voice(
+        &self,
+        Parameters(a): Parameters<VoiceArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        if a.forget == Some(true) {
+            return ok_json(
+                serde_json::json!({ "forgotten": tryt!(self.robot.voices.forget(&a.name)) }),
+            );
+        }
+        ok_json(serde_json::json!({ "samples": tryt!(self.robot.voices.remember_last(&a.name)) }))
+    }
+
+    #[tool(
+        description = "Control the Apple TV: what's playing, play/pause/skip, volume, power, apps, remote buttons."
+    )]
+    async fn apple_tv(
+        &self,
+        Parameters(a): Parameters<AppleTvArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        ok_json(tryt!(
+            self.robot
+                .appletv
+                .act(&self.robot, &a.action, a.value.as_deref())
+                .await
+        ))
+    }
+
+    #[tool(
+        description = "Make a plan of the robot's own: something it means to do, at a time (in_minutes or \
+at \"HH:MM\") or some day (neither). Timed plans come back from `hear` as a `plan` nudge when due."
+    )]
+    async fn intend(
+        &self,
+        Parameters(a): Parameters<IntendArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = tryt!(
+            self.robot
+                .intentions
+                .add(&a.text, a.in_minutes, a.at.as_deref())
+        );
+        ok_json(serde_json::json!({ "id": p.id, "when": p.when(), "text": p.text }))
+    }
+
+    #[tool(description = "List the robot's own plans, or mark one done (or dropped) by id.")]
+    async fn plans(
+        &self,
+        Parameters(a): Parameters<PlansArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        if let Some(id) = a.done {
+            return ok_json(serde_json::json!({ "done": tryt!(self.robot.intentions.done(id)) }));
+        }
+        let list: Vec<serde_json::Value> = self
+            .robot
+            .intentions
+            .list()
+            .iter()
+            .map(|p| serde_json::json!({ "id": p.id, "when": p.when(), "text": p.text }))
+            .collect();
+        ok_json(serde_json::json!({ "plans": list }))
+    }
+
+    #[tool(description = "Write the robot's diary entry for a day (default today); replaces it.")]
+    async fn write_diary(
+        &self,
+        Parameters(a): Parameters<WriteDiaryArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let day = match a.day.as_deref() {
+            Some(d) => tryt!(chrono::NaiveDate::parse_from_str(d.trim(), "%Y-%m-%d")),
+            None => chrono::Local::now().date_naive(),
+        };
+        tryt!(self.robot.diary.write(day, &a.text));
+        ok_json(serde_json::json!({ "written": day.to_string() }))
+    }
+
+    #[tool(
+        description = "Read the robot's diary: a day's entry (default the latest) and the days with one."
+    )]
+    async fn read_diary(
+        &self,
+        Parameters(a): Parameters<ReadDiaryArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let days = self.robot.diary.days();
+        let day = match a.day.as_deref() {
+            Some(d) => Some(tryt!(chrono::NaiveDate::parse_from_str(
+                d.trim(),
+                "%Y-%m-%d"
+            ))),
+            None => days.first().copied(),
+        };
+        ok_json(serde_json::json!({
+            "day": day.map(|d| d.to_string()),
+            "entry": day.and_then(|d| self.robot.diary.read(d)),
+            "days_with_entries": days.iter().take(30).map(|d| d.to_string()).collect::<Vec<_>>(),
+        }))
+    }
+
+    #[tool(
+        description = "Body language with the tracks: wiggle (happy), nod (yes), shake (no), bounce (playful), \
+twirl (excited), shiver (scared), approach (curious), back_off (shy, sad), sulk (grumpy), or dance (to the \
+beat of music it hears, if any)."
+    )]
+    async fn gesture(
+        &self,
+        Parameters(a): Parameters<GestureArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let r = if a.name == "dance" {
+            crate::gestures::dance(&self.robot, a.bpm, a.seconds).await
+        } else {
+            crate::gestures::gesture(&self.robot, &a.name).await
+        };
+        ok_json(serde_json::json!({ "result": tryt!(r) }))
     }
 
     #[tool(

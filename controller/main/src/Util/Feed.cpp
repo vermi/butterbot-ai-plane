@@ -92,6 +92,7 @@ void Feed::readLoop(){
 		return;
 	}
 
+	bytesIn += bytes;
 	std::lock_guard lock(rxMut);
 	rxBuf->write(readBuf.data(), bytes);
 	xSemaphoreGive(dataAvailable);
@@ -177,6 +178,7 @@ void Feed::decodeLoop(){
 		return;
 	}
 
+	framesDecoded++;
 	std::lock_guard frameLock(readyFrameMut);
 	if(readyFrame != -1){
 		freeImgs[readyFrame] = true;
