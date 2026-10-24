@@ -22,6 +22,23 @@ pub struct Memory {
     facts: Mutex<Vec<Fact>>,
 }
 
+/// A fact without what a model copied from the list it was shown ("12 | 2026-10-24 | ...").
+fn clean(text: &str) -> &str {
+    let mut t = text.trim();
+    loop {
+        let Some((head, rest)) = t.split_once('|') else {
+            return t;
+        };
+        let head = head.trim();
+        let is_id = !head.is_empty() && head.chars().all(|c| c.is_ascii_digit());
+        let is_date = chrono::NaiveDate::parse_from_str(head, "%Y-%m-%d").is_ok();
+        if !(is_id || is_date) {
+            return t;
+        }
+        t = rest.trim();
+    }
+}
+
 /// Facts that no longer fit (the oldest, past `MAX_FACTS`): out of the instructions, but kept,
 /// one JSON line each, for `crate::recall`.
 fn archive_path(path: &Path) -> PathBuf {
@@ -36,10 +53,13 @@ const MAX_FACTS: usize = 100;
 impl Memory {
     pub fn load(data_dir: &Path) -> Memory {
         let path = data_dir.join("memory.json");
-        let facts = std::fs::read(&path)
+        let mut facts: Vec<Fact> = std::fs::read(&path)
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
+        for f in &mut facts {
+            f.text = clean(&f.text).to_string();
+        }
         Memory {
             path,
             facts: Mutex::new(facts),
@@ -71,7 +91,7 @@ impl Memory {
     /// Replace the facts `ids` (two or more, all still there) with one, `text`: the same thing said
     /// several ways, or an older fact a newer one updates. Returns the new fact.
     pub fn merge(&self, ids: &[u32], text: &str) -> Result<Option<Fact>> {
-        let text: String = text.trim().chars().take(MAX_TEXT).collect();
+        let text: String = clean(text).chars().take(MAX_TEXT).collect();
         let mut facts = self.facts.lock().unwrap();
         let merged: Vec<&Fact> = facts.iter().filter(|f| ids.contains(&f.id)).collect();
         if text.is_empty() || ids.len() < 2 || merged.len() != ids.len() {
@@ -229,6 +249,19 @@ mod tests {
             "kept for recall"
         );
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn list_prefixes_are_not_part_of_a_fact() {
+        assert_eq!(
+            clean("2026-10-24 | The window is bright"),
+            "The window is bright"
+        );
+        assert_eq!(clean("12 | 2026-10-24 | Kiwi naps"), "Kiwi naps");
+        assert_eq!(
+            clean("Tea | coffee: Justin likes both"),
+            "Tea | coffee: Justin likes both"
+        );
     }
 
     #[test]
