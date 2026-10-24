@@ -15,9 +15,11 @@ mode. The agent is either its built-in brain on OpenAI's APIs or any MCP agent y
 Codex. You talk to it by name ("Butterbot, what's the weather?"), it answers out loud, and when
 nobody is talking to it, it does things of its own accord. See [Let it run itself](#6-let-it-run-itself-optional).
 
-The handheld controller, RC mode, the idle behaviours, the phone link and the robot's own voice
-keep working. Some stock features had to go to make room for Wi-Fi; see
-[what was removed](#design-notes).
+The firmware is AI-only: the robot starts in AI mode, and goes back to it on its own when it ends
+without being switched off. The handheld controller, RC mode, the phone link and the robot's own
+voice keep working. The stock robot's behaviours of its own are gone; see
+[what was removed](#design-notes). After the first USB flash, new firmware goes over Wi-Fi
+(`bbplane ota`).
 
 ## What an AI can do with it
 
@@ -96,7 +98,19 @@ python tools/flash.py -p /dev/cu.usbserial-XXXX         # after that: just the a
 ```
 
 When it finishes the robot switches itself off. Turn it on as usual by holding the button for a
-second.
+second. It starts in AI mode.
+
+After that first flash, update it over Wi-Fi instead, while it is in AI mode and the plane runs:
+
+```sh
+plane/target/release/bbplane ota firmware/build/ButterBot-Firmware.bin   # ~1.5 min
+```
+
+The robot restarts into an update mode that runs nothing but Wi-Fi and the download (AI mode
+leaves too little RAM for it), installs the image in its spare app slot, and restarts into AI mode
+on it. It keeps the new firmware only once it has reached the plane again; otherwise it goes back
+to the one it had. On any failure it restarts into AI mode on its old firmware. A long press
+switches it off during the update. `bbplane restart` restarts a robot that seems stuck.
 
 > **Why not plain `idf.py flash`?** The firmware switches the robot off whenever it boots without
 > the power button held (the stock hold-to-turn-on check). esptool's own reset at the end of a
@@ -326,8 +340,10 @@ The safety rules copy what the stock firmware does in the same situation:
   move's duration for AI moves.
 - **Losing the link** stops the robot immediately. It leaves AI mode after 15 s without
   `bbplane`.
-- **The agent does not drive while the robot is plugged in**: it would pull on the cable
-  (`[safety] drive_when_plugged`). The live view's drive pad is not limited.
+- **The agent does not drive while the robot is plugged in**: it would roll over the cable or
+  pull itself off a table. The plane refuses (`[safety] drive_when_plugged`, and while it does not
+  know yet whether the robot is plugged in), and so does the robot itself. The live view's drive
+  pad is not limited.
 - **The agent can switch the robot off only when someone asked for that** in the last command
   ("switch off", "shut down", "power off"...). Models have taken a plain "goodbye" for it.
 
@@ -364,6 +380,11 @@ These are the lessons that shaped the firmware. Most of them came from the hardw
     itself off.
   - So, like the stock RC mode, **Wi-Fi only runs in AI mode**, and it is started on the state
     machine thread exactly as RC mode does it.
+- **The firmware is AI-only.** Stock mode is gone: the robot starts in AI mode, tries it again
+  quietly every minute while the plane is out of reach, and outside AI mode it waits without
+  behaviours of its own (no rambling, wandering, poke or motion reactions). The flash went to two
+  app slots for updates over Wi-Fi; the stock models' partitions (wake words, faces, objects) are
+  gone. Restore the stock firmware below to get all of it back.
 - **Some stock features were removed to make room for Wi-Fi.** They are compiled out, so they
   are gone outside AI mode too:
   - on-robot voice commands (a short press of the power button now enters AI mode instead);
@@ -371,8 +392,7 @@ These are the lessons that shaped the firmware. Most of them came from the hardw
     "notice a person" and "observe" behaviours;
   - dice, eight ball, IR learning/forgetting and dance, which needed speech or music input.
 
-  The robot's own speech (flite), the other idle behaviours and scenarios, IR sending, add-on
-  modules and RC mode remain. Free internal RAM went from about 27 KB to about 100 KB. Face
+  The robot's own speech (flite), scenarios, IR sending, add-on modules and RC mode remain. Free internal RAM went from about 27 KB to about 100 KB. Face
   recognition is back in AI mode, running on the computer instead (see step 5).
 - **The phone link is back** (it was removed at first too): notifications, music control and
   clock sync from an iPhone, or an Android phone with the CircuitMess app. In AI mode, with Wi-Fi

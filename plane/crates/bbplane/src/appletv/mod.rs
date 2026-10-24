@@ -378,12 +378,19 @@ pub async fn run(robot: Robot) {
     let mut tries = 0u32;
     loop {
         let atv = &robot.appletv;
-        if atv.installed() && atv.device().is_some() && !atv.is_connected() {
-            if let Err(e) = atv.connect(&robot).await {
-                tracing::debug!("apple tv: {e:#}");
-            }
+        if atv.installed()
+            && atv.device().is_some()
+            && !atv.is_connected()
+            && let Err(e) = atv.connect(&robot).await
+        {
+            tracing::debug!("apple tv: {e:#}");
         }
         tries += 1;
-        tokio::time::sleep(if tries < 6 { RECONNECT_FIRST } else { RECONNECT }).await;
+        tokio::time::sleep(if tries < 6 {
+            RECONNECT_FIRST
+        } else {
+            RECONNECT
+        })
+        .await;
     }
 }

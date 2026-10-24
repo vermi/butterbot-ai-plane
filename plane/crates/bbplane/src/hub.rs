@@ -35,6 +35,8 @@ pub struct RobotStatus {
     pub connected: bool,
     pub peer: Option<String>,
     pub fw: Option<String>,
+    /// Firmware build id (see `crate::ota`).
+    pub build: Option<String>,
     pub mac: Option<String>,
     pub caps: Vec<String>,
     /// `idle`, `listen`, `scenario`, `rc` or `remote`.
@@ -57,6 +59,8 @@ pub struct RobotStatus {
     /// Robot's free internal RAM and its largest free block, in bytes.
     pub ram_free: Option<u32>,
     pub ram_block: Option<u32>,
+    /// The robot's last firmware update report (`state`, `done`, `total`, `error`).
+    pub ota: Option<Value>,
 }
 
 struct Conn {
@@ -176,7 +180,9 @@ impl Hub {
         let quiet_for = now_ms().saturating_sub(self.last_speaker_tx.load(Ordering::Relaxed));
         let mut st = self.status.lock().await;
         if st.speaker_playing
-            && st.speaker_since.is_some_and(|t| t.elapsed() >= SPEAKER_STUCK)
+            && st
+                .speaker_since
+                .is_some_and(|t| t.elapsed() >= SPEAKER_STUCK)
             && quiet_for >= SPEAKER_STUCK.as_millis() as u64
         {
             tracing::info!("speaker still marked playing with nothing sent to it: clearing it");
@@ -326,12 +332,14 @@ impl Hub {
             FromRobot::Hello {
                 proto,
                 fw,
+                build,
                 mac,
                 caps,
             } => {
                 {
                     let mut s = self.status.lock().await;
                     s.fw = Some(fw.clone());
+                    s.build = (!build.is_empty()).then(|| build.clone());
                     s.mac = Some(mac.clone());
                     s.caps = caps.clone();
                 }
@@ -343,7 +351,7 @@ impl Hub {
                 }
                 self.push_event(
                     "hello",
-                    json!({ "proto": proto, "fw": fw, "mac": mac, "caps": caps }),
+                    json!({ "proto": proto, "fw": fw, "build": build, "mac": mac, "caps": caps }),
                 )
                 .await;
             }
@@ -426,6 +434,16 @@ impl Hub {
             }
             FromRobot::PhoneCall { from } => {
                 self.push_event("phone_call", json!({ "from": from })).await
+            }
+            FromRobot::Ota {
+                state,
+                done,
+                total,
+                error,
+            } => {
+                let v = json!({ "state": state, "done": done, "total": total, "error": error });
+                self.status.lock().await.ota = Some(v.clone());
+                self.push_event("ota", v).await;
             }
             FromRobot::Wifi {
                 rssi,

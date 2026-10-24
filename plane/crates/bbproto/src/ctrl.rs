@@ -275,6 +275,19 @@ pub enum ToRobot {
         tilt: bool,
         obstacle: bool,
     },
+    /// Install new firmware: the robot downloads `url` (HTTP) into its spare app slot, checks the
+    /// size and SHA-256 (hex), reports `ota` progress and restarts into it. Acknowledged when the
+    /// download starts.
+    Ota {
+        id: u32,
+        url: String,
+        size: u32,
+        sha256: String,
+    },
+    /// Restart the robot (it comes back in AI mode). Acknowledged just before.
+    Restart {
+        id: u32,
+    },
 }
 
 impl ToRobot {
@@ -295,7 +308,9 @@ impl ToRobot {
             | IrSend { id, .. }
             | Modules { id }
             | Phone { id, .. }
-            | Safety { id, .. } => Some(*id),
+            | Safety { id, .. }
+            | Ota { id, .. }
+            | Restart { id } => Some(*id),
             Hello
             | Drive { .. }
             | Stop
@@ -317,6 +332,9 @@ pub enum FromRobot {
     Hello {
         proto: u32,
         fw: String,
+        /// The firmware build: the start of its ELF's SHA-256 (also in the image, see `bbplane::ota`).
+        #[serde(default)]
+        build: String,
         mac: String,
         #[serde(default)]
         caps: Vec<String>,
@@ -395,6 +413,16 @@ pub enum FromRobot {
         command: Option<u32>,
     },
     /// Wi-Fi signal strength, reported every few seconds while connected.
+    /// Firmware update progress: `state` is `progress`, `done` or `failed` (with `error`).
+    Ota {
+        state: String,
+        #[serde(default)]
+        done: u32,
+        #[serde(default)]
+        total: u32,
+        #[serde(default)]
+        error: Option<String>,
+    },
     Wifi {
         rssi: i32,
         /// Free internal RAM in bytes, and the largest free block.

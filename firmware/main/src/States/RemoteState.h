@@ -17,7 +17,8 @@
  * AI mode: the laptop control plane drives the robot over the link. Autonomy is off.
  * Every drive command carries a duration and the motors stop on their own when it runs out,
  * when the link drops, or when a safety check trips (obstacle ahead, lifted, charging).
- * Leaves on exit_remote, link loss, or a short press of the power button.
+ * Leaves on exit_remote, link loss, or a short press of the power button. Also installs new
+ * firmware from the plane (see Ota) and restarts into it.
  */
 class RemoteState : public State {
 public:
@@ -56,6 +57,7 @@ private:
 	static constexpr uint64_t LinkLossGraceMs = 15000;
 
 	bool abortRequested = false; // transitions cannot be requested from the constructor
+	bool quiet = false;          // idle's own retry: no "A I mode on", no complaint on failure
 	bool connectedOnce = false;  // the plane connected at least once in this session
 	float savedGain = 1.0f;
 

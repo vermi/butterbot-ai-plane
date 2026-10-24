@@ -21,6 +21,7 @@ pub mod memory;
 pub mod models;
 pub mod mood;
 pub mod objects;
+pub mod ota;
 pub mod peek;
 pub mod provision;
 pub mod reminders;

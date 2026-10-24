@@ -22,7 +22,7 @@ inline constexpr uint32_t Version = 2;
 // Largest frame payload in one datagram (stock feed uses <= 1440-byte datagrams).
 inline constexpr size_t MaxDatagramPayload = 1400;
 inline constexpr size_t MicSamplesPerDatagram = 512; // 32 ms
-inline constexpr const char* FirmwareName = "butterbot-ai 0.1";
+inline constexpr const char* FirmwareName = "butterbot-ai 0.4";
 
 enum class FrameType : uint8_t {
 	Ctrl = 1,   // JSON, both directions

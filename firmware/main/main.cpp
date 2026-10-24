@@ -66,6 +66,7 @@
 #include "Util/ServiceLocator.h"
 #include "Link/LinkService.h"
 #include "Util/AiRestart.h"
+#include "Link/Ota.h"
 
 DEFINE_LOG(Butterbot)
 
@@ -104,6 +105,10 @@ protected:
 			ret = nvs_flash_init();
 		}
 		ESP_ERROR_CHECK(ret);
+
+		// A firmware update from the plane: update mode only (Wi-Fi and the download), then a
+		// restart into AI mode. Nothing else starts; this does not return then.
+		Ota::runPending();
 
 		if(!SPIFFS::init()){
 			CMF_LOG(Butterbot, LogLevel::Error, "SPIFFS init failed, aborting startup");
@@ -314,8 +319,11 @@ protected:
 
 		// AI control plane link: needs Battery, BaseBoard, MotionService and ISRButtonInput registered first.
 		LinkService* link = registerService<LinkService>();
-		if(restartIntoAi){
+		// AI-only firmware: AI mode is where the robot lives. Straight into it at boot, and back into
+		// it whenever it ends without being switched off.
+		if(restartIntoAi || link->hasCredentials()){
 			link->setAiOnIdle(true);
+			link->setAiAuto(true);
 		}
 
 		ServiceLocator::ScenarioRoutineServiceInstance = std::make_unique<ScenarioRoutineService>();

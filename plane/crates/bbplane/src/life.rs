@@ -43,7 +43,8 @@ const MUSE: &str = "think out loud to yourself for a moment: a passing thought, 
 wondered about or noticed, as if nobody is listening";
 const REST_IN_VIEW: &str = "stay quiet for now";
 const REST: &str = "stay quiet and rest";
-const PLAN: &str = "think of something you would like to do or find out later, and keep it as a plan (intend)";
+const PLAN: &str =
+    "think of something you would like to do or find out later, and keep it as a plan (intend)";
 
 /// How much the robot does of its own accord. Set by voice (`set_activity`) or the live view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, serde::Deserialize)]
@@ -576,7 +577,11 @@ mod tests {
             }
         }
         assert_eq!(ideas.len(), 40);
-        assert!(ideas.iter().all(|i| !i.contains("quantum computing") && !i.contains("web_search")));
+        assert!(
+            ideas
+                .iter()
+                .all(|i| !i.contains("quantum computing") && !i.contains("web_search"))
+        );
         assert!(ideas.iter().all(|i| !i.contains("joke")));
     }
 

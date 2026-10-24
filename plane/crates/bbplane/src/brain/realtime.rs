@@ -128,11 +128,20 @@ pub async fn session(robot: &Robot, state: &AgentState) -> Result<String> {
             };
             send(&mut sink, create).await?;
             let silent = std::mem::take(&mut decide_silently);
-            let (calls, held, used) = respond(&mut events, robot, state, robot_voice, silent).await?;
+            let (calls, held, used) =
+                respond(&mut events, robot, state, robot_voice, silent).await?;
             context = context.max(used);
             if calls.is_empty() {
                 if silent && !held.trim().is_empty() {
-                    say_decided(&mut sink, &mut events, robot, state, robot_voice, held.trim()).await?;
+                    say_decided(
+                        &mut sink,
+                        &mut events,
+                        robot,
+                        state,
+                        robot_voice,
+                        held.trim(),
+                    )
+                    .await?;
                 }
                 break;
             }

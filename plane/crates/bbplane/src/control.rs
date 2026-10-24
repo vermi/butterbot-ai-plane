@@ -39,6 +39,9 @@ const SPK_CHUNK: usize = 512;
 /// How far ahead of real time speaker audio is sent.
 const SPK_LEAD: Duration = Duration::from_millis(200);
 
+/// Camera resolution, frame rate, JPEG quality and capture options.
+type CameraSettings = (Res, u8, u8, bbproto::ctrl::CamOpts);
+
 #[derive(Clone)]
 pub struct Robot {
     pub hub: Arc<Hub>,
@@ -56,7 +59,7 @@ pub struct Robot {
     /// What it is up to right now and until when, for the controller's screen (see `doing`).
     doing: Arc<std::sync::Mutex<Option<(String, std::time::Instant)>>>,
     /// The camera settings to go back to after the controller's camera view (see `camera_fast`).
-    camera_before_view: Arc<Mutex<Option<(Res, u8, u8, bbproto::ctrl::CamOpts)>>>,
+    camera_before_view: Arc<Mutex<Option<CameraSettings>>>,
     /// How it feels (see `crate::mood`).
     pub mood: Arc<crate::mood::Mood>,
     /// Its own plans (see `crate::intentions`).
@@ -286,7 +289,10 @@ impl Robot {
 
     /// Drive with raw motor speeds for `ms`, refreshing the robot-side watchdog.
     /// Returns early if the robot reports that it stopped on its own (obstacle, lifted, ...).
-    /// Plugged in, and not allowed to drive on a cable (`[safety] drive_when_plugged`).
+    /// Plugged in, and not allowed to drive on a cable (`[safety] drive_when_plugged`). Not knowing
+    /// counts as plugged in: the robot reports its battery when it connects and when it changes, so
+    /// after a plane restart it can be unknown for a long time, and driving over the cable is worse
+    /// than not driving.
     pub async fn tethered(&self) -> bool {
         !self.hub.config.safety.drive_when_plugged
             && self
@@ -297,7 +303,7 @@ impl Robot {
                 .battery
                 .as_ref()
                 .and_then(|b| b["charging"].as_str().map(|c| c != "unplugged"))
-                .unwrap_or(false)
+                .unwrap_or(true)
     }
 
     pub async fn drive_for(&self, l: i8, r: i8, ms: u64) -> Result<DriveOutcome> {
@@ -310,6 +316,12 @@ impl Robot {
         }
         {
             if self.tethered().await {
+                if self.hub.status.lock().await.battery.is_none() {
+                    bail!(
+                        "not sure whether the robot is plugged in yet (no battery report since the \
+plane started); it does not drive until it knows it is off the cable"
+                    );
+                }
                 bail!(
                     "the robot is plugged in (USB or charger); it does not drive on a cable. \
 Ask to be unplugged first."
@@ -976,7 +988,7 @@ impl Robot {
             Nudge::Handled { how } => match how.as_str() {
                 "pickup" => (Surprised, 0.5, "picked up".into()),
                 "shake" => (Grumpy, 0.55, "got shaken".into()),
-                "fall" | "upside_down" => (Worried, 0.6, format!("{}", how.replace('_', " "))),
+                "fall" | "upside_down" => (Worried, 0.6, how.replace('_', " ")),
                 _ => return,
             },
             Nudge::Battery {

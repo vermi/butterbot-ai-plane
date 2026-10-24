@@ -67,6 +67,13 @@ pub fn router(robot: Robot) -> Router {
         .route("/api/voices/train/stop", post(stop_voice_training))
         .route("/api/tell", post(tell))
         .route("/api/diary/{day}", get(diary_day))
+        .route("/api/restart", post(restart))
+        .route(
+            "/api/ota",
+            get(ota_status)
+                .post(ota_start)
+                .layer(axum::extract::DefaultBodyLimit::max(16 << 20)),
+        )
         .nest_service("/mcp", mcp)
         .layer(middleware::from_fn(move |req, next| {
             guard(allowed.clone(), req, next)
@@ -449,8 +456,15 @@ async fn tell(State(r): State<Robot>, Json(b): Json<TellBody>) -> Response {
     if text.is_empty() {
         return err(anyhow::anyhow!("say something"));
     }
-    if r.mode().await.as_deref() != Some("remote") || !r.life.agent_running.load(std::sync::atomic::Ordering::Relaxed) {
-        return err(anyhow::anyhow!("he is not listening (not in AI mode, or no agent running)"));
+    if r.mode().await.as_deref() != Some("remote")
+        || !r
+            .life
+            .agent_running
+            .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        return err(anyhow::anyhow!(
+            "he is not listening (not in AI mode, or no agent running)"
+        ));
     }
     r.hub
         .push_event("heard", json!({ "text": text, "typed": true }))
@@ -460,10 +474,38 @@ async fn tell(State(r): State<Robot>, Json(b): Json<TellBody>) -> Response {
     Json(json!({ "ok": true })).into_response()
 }
 
+/// New robot firmware (the app image, as built), installed over Wi-Fi: see `crate::ota`.
+async fn ota_start(State(r): State<Robot>, body: Bytes) -> Response {
+    let image = match crate::ota::Image::parse(body) {
+        Ok(i) => i,
+        Err(e) => return err(e),
+    };
+    let (build, version) = (image.build.clone(), image.version.clone());
+    match crate::ota::start(&r, image) {
+        Ok(()) => Json(json!({ "ok": true, "build": build, "version": version })).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+/// Restart the robot (into AI mode), e.g. when it seems stuck.
+async fn restart(State(r): State<Robot>) -> Response {
+    let id = r.hub.next_id();
+    match r.hub.request(ToRobot::Restart { id }).await {
+        Ok(_) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+async fn ota_status() -> Json<Value> {
+    Json(crate::ota::status())
+}
+
 async fn voice_training(State(r): State<Robot>) -> Json<Value> {
     let mut v = r.voices.training_json();
     v["listening"] = (r.mode().await.as_deref() == Some("remote")
-        && r.life.agent_running.load(std::sync::atomic::Ordering::Relaxed))
+        && r.life
+            .agent_running
+            .load(std::sync::atomic::Ordering::Relaxed))
     .into();
     Json(v)
 }

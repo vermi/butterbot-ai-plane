@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bbplane::{config::Config, mcp::BotServer, provision};
 use clap::{Parser, Subcommand};
 use rmcp::ServiceExt;
@@ -42,6 +42,14 @@ enum Cmd {
         #[arg(long)]
         robot: Option<String>,
     },
+    /// Install new robot firmware over Wi-Fi (the robot must be in AI mode, with a plane running).
+    /// It restarts into it, and keeps it once it has reached the plane again.
+    Ota {
+        /// The app image, e.g. firmware/build/ButterBot-Firmware.bin.
+        image: PathBuf,
+    },
+    /// Restart the robot (it comes back in AI mode), e.g. when it seems stuck.
+    Restart,
     /// Set the free internal RAM (bytes) the robot requires before starting Wi-Fi.
     /// The robot logs the actual numbers on its serial console.
     Tune {
@@ -158,6 +166,26 @@ async fn main() -> Result<()> {
             provision::tune(min_free, min_block, robot.as_deref()).await?;
             eprintln!("thresholds stored on the robot");
         }
+        Cmd::Restart => {
+            let config = Config::load(cli.config.as_ref())?;
+            let r = reqwest::Client::new()
+                .post(format!("{}/api/restart", web_base(&config)))
+                .send()
+                .await
+                .context("is the plane running? (bbplane service status)")?;
+            if !r.status().is_success() {
+                let v: serde_json::Value = r.json().await.unwrap_or_default();
+                anyhow::bail!(
+                    "{}",
+                    v["error"].as_str().unwrap_or("the robot did not restart")
+                );
+            }
+            eprintln!("restarting; the robot is back in AI mode in a few seconds");
+        }
+        Cmd::Ota { image } => {
+            let config = Config::load(cli.config.as_ref())?;
+            ota_cli(&config, &image).await?;
+        }
         Cmd::Sim { plane } => loop {
             match bbplane::sim::run(&plane).await {
                 Ok(()) => eprintln!("plane closed the connection; reconnecting"),
@@ -189,6 +217,74 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The running plane's live view and API, as reached from this machine.
+fn web_base(config: &Config) -> String {
+    let host = match config.web_bind.as_str() {
+        "0.0.0.0" | "::" | "[::]" => "127.0.0.1",
+        h => h,
+    };
+    format!("http://{host}:{}", config.web_port)
+}
+
+/// Hand the image to the running plane and follow the update.
+async fn ota_cli(config: &Config, image: &std::path::Path) -> Result<()> {
+    let bytes = std::fs::read(image).with_context(|| format!("reading {}", image.display()))?;
+    // Checked here too, so a wrong file is reported before anything is sent.
+    let img = bbplane::ota::Image::parse(bytes.clone().into())?;
+    eprintln!(
+        "{} ({} KB, build {})",
+        img.version,
+        bytes.len() / 1024,
+        img.build
+    );
+    let base = format!("{}/api/ota", web_base(config));
+    let http = reqwest::Client::new();
+    let r = http
+        .post(&base)
+        .header("content-type", "application/octet-stream")
+        .body(bytes)
+        .send()
+        .await
+        .context("is the plane running? (bbplane service status)")?;
+    if !r.status().is_success() {
+        let v: serde_json::Value = r.json().await.unwrap_or_default();
+        anyhow::bail!(
+            "{}",
+            v["error"]
+                .as_str()
+                .unwrap_or("the plane refused the update")
+        );
+    }
+    let mut shown = String::new();
+    loop {
+        tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+        let v: serde_json::Value = http.get(&base).send().await?.json().await?;
+        let state = v["state"].as_str().unwrap_or_default();
+        let line = match state {
+            "downloading" => {
+                let (done, total) = (
+                    v["done"].as_u64().unwrap_or(0),
+                    v["total"].as_u64().unwrap_or(1).max(1),
+                );
+                format!("downloading {}%", done * 100 / total)
+            }
+            "done" => {
+                eprintln!(
+                    "done: the robot runs build {}",
+                    v["build"].as_str().unwrap_or_default()
+                );
+                return Ok(());
+            }
+            "failed" => anyhow::bail!("{}", v["error"].as_str().unwrap_or("failed")),
+            s => s.to_string(),
+        };
+        if line != shown {
+            eprintln!("{line}");
+            shown = line;
+        }
+    }
 }
 
 /// Ctrl-C, or SIGTERM (`kill`, launchd): either way shut down cleanly, so the agent stops too.

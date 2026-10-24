@@ -496,6 +496,22 @@ impl Config {
     }
 }
 
+/// Write `bytes` to `path` readable by this user only (atomically, through a temporary file).
+pub fn write_private(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("tmp");
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    let mut f = opts.open(&tmp)?;
+    std::io::Write::write_all(&mut f, bytes)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,20 +531,4 @@ mod tests {
         assert_eq!(c.link_port, 7531);
         assert!(c.mic.gate);
     }
-}
-
-/// Write `bytes` to `path` readable by this user only (atomically, through a temporary file).
-pub fn write_private(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let tmp = path.with_extension("tmp");
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
-    let mut f = opts.open(&tmp)?;
-    std::io::Write::write_all(&mut f, bytes)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
 }

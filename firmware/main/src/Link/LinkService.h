@@ -31,7 +31,8 @@
 struct LinkRequest {
 	enum class Type : uint8_t {
 		EnterRemote, ExitRemote, Drive, Stop, Say, SpkBegin, SpkEnd, SpkAbort, Volume,
-		Camera, Snapshot, Mic, Led, StatusLight, Phone, AiStatus, HomeInfo, PeekCaption, Scenario, IrList, IrSend, Modules, Safety
+		Camera, Snapshot, Mic, Led, StatusLight, Phone, AiStatus, HomeInfo, PeekCaption, Scenario, IrList, IrSend, Modules, Safety,
+		Ota, Restart
 	} type = Type::Stop;
 
 	uint32_t id = 0;
@@ -61,7 +62,9 @@ struct LinkRequest {
 	uint32_t scenario = 0;
 	uint8_t arg = 0;
 	uint8_t index = 0;
-	std::string text;      // Say: what to say; Phone: the action; PeekCaption: what is in view
+	std::string text;      // Say: what to say; Phone: the action; PeekCaption: what is in view; Ota: the image's URL
+	uint32_t size = 0;     // Ota: image size in bytes
+	std::string sha256;    // Ota: the image's SHA-256, hex
 };
 
 /**
@@ -141,9 +144,21 @@ public:
 	/** Manual Override left AI mode for stock RC mode: go back to AI mode when RC mode ends. */
 	void setResumeAfterRC(bool on){ resumeAfterRC = on; }
 	bool takeResumeAfterRC(){ return resumeAfterRC.exchange(false); }
-	/** Enter AI mode as soon as the robot is idle (after a restart into AI mode). */
+	/** Enter AI mode as soon as the robot is idle (at boot, and after a restart into AI mode). */
 	void setAiOnIdle(bool on){ aiOnIdle = on; }
 	bool takeAiOnIdle(){ return aiOnIdle.exchange(false); }
+	/**
+	 * AI mode is the robot's normal state: while this is on, idle goes back to it on its own (after
+	 * the plane was out of reach, say). Off when AI mode is switched off on purpose (a short press,
+	 * or the plane's exit_remote); a short press or a wake turns it on again.
+	 */
+	void setAiAuto(bool on){ aiAuto = on; }
+	bool isAiAuto() const { return aiAuto; }
+	/** The next AI mode start is such a retry: no announcement, and no complaint if it fails. */
+	void setQuietStart(bool on){ quietStart = on; }
+	bool takeQuietStart(){ return quietStart.exchange(false); }
+	/** Wi-Fi and plane settings are stored. */
+	bool hasCredentials();
 	/** Why startRadio() last failed, for the robot to say: "settings", "memory" or "wifi". */
 	const char* startFailure() const { return lastStartFailure; }
 	/** Shut up stopped the robot mid-sentence (noted on the app thread, used on the state machine's). */
@@ -207,6 +222,7 @@ private:
 	// UDP socket shared with the TX thread; sockMutex guards use against close.
 	int sock = -1;
 	sockaddr_in target{};
+	uint32_t reportsSinceBattery = 0;
 	std::mutex sockMutex;
 	std::atomic_bool sockBroken = false;
 	std::atomic_bool heardFromPlane = false;
@@ -216,6 +232,8 @@ private:
 	std::atomic_bool remote = false;
 	std::atomic_bool resumeAfterRC = false;
 	std::atomic_bool aiOnIdle = false;
+	std::atomic_bool aiAuto = false;
+	std::atomic_bool quietStart = false;
 	const char* lastStartFailure = "";
 	std::atomic<uint64_t> hushedAt = 0;
 	uint64_t lastRx = 0;

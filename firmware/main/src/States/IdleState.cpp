@@ -1,4 +1,5 @@
 #include "IdleState.h"
+#include <algorithm>
 #include "RemoteState.h"
 #include "Link/LinkService.h"
 #include "Util/AiRestart.h"
@@ -14,9 +15,6 @@
 #include "ScenarioRoutineMappings.h"
 #include "Services/Com.h"
 #include "RCState.h"
-#include "Routines/RambleRoutine.h"
-#include "Routines/ObserveRoutine.h"
-#include "Routines/PersonRoutine.h"
 #include "Routines/EventRoutines/BatteryEventRoutine.h"
 #include "Routines/EventRoutines/GasEventRoutine.h"
 #include "Routines/EventRoutines/IntruderEventRoutine.h"
@@ -25,15 +23,12 @@
 #include "Routines/EventRoutines/PokeEventRoutine.h"
 #include "Routines/EventRoutines/GasConfiguredEventRoutine.h"
 #include "Routines/EventRoutines/SummonEventRoutine.h"
-#include "Routines/WanderRoutine.h"
 
 DEFINE_LOG(IdleState)
 
-const std::vector<IdleState::RandomRoutineDef> IdleState::RandomRoutines = {
-	// AI build: Observe (object detection) and Person (face detection) are not available.
-	{ &makeRoutine<RambleRoutine>, 3 },
-	{ &makeRoutine<WanderRoutine>, 2 },
-};
+// AI-only firmware: idle is just the wait between AI mode sessions, without the stock robot's
+// behaviours of its own (rambling, wandering, poke and motion reactions).
+const std::vector<IdleState::RandomRoutineDef> IdleState::RandomRoutines = {};
 
 const std::array<EventRoutineFactory, static_cast<uint8_t>(EventBag::EventType::COUNT)> IdleState::EventRoutines = {
 	nullptr, // None
@@ -52,6 +47,7 @@ const std::array<EventRoutineFactory, static_cast<uint8_t>(EventBag::EventType::
 
 IdleState::IdleState(BBStateMachine* sm) : State(sm){
 	nextRandomRoutineTime = millis() + MinRandomDelay;
+	aiRetryAt = millis() + AiRetryMs;
 
 	const Application* app = ApplicationStatics::getApplication();
 	eventBag = app->getService<EventBag>();
@@ -135,6 +131,12 @@ void IdleState::tick(float deltaTime){
 				base->stopMotors();
 			}
 			restartIntoAiMode();
+		}
+		// Back to AI mode after it ended without being switched off (the plane was out of reach).
+		if(link->isAiAuto() && millis() >= aiRetryAt && !buttonHeld && sm->getActiveRoutine() == nullptr){
+			link->setQuietStart(true);
+			sm->transitionTo<RemoteState>();
+			return;
 		}
 	}
 
@@ -304,11 +306,15 @@ int64_t IdleState::getDynamicTickInterval() const{
 		}
 	}
 
-	if(millis() >= nextRandomRoutineTime){
+	uint64_t wakeAt = nextRandomRoutineTime;
+	if(const LinkService* link = ApplicationStatics::getApplication()->getService<LinkService>(); link && link->isAiAuto()){
+		wakeAt = std::min(wakeAt, aiRetryAt);
+	}
+	if(millis() >= wakeAt){
 		return 0;
 	}
 
-	return nextRandomRoutineTime - millis();
+	return wakeAt - millis();
 }
 
 void IdleState::onCommand(Ctrl::Command cmd){
@@ -317,15 +323,11 @@ void IdleState::onCommand(Ctrl::Command cmd){
 		return;
 	}
 
-	if(cmd == Ctrl::Command::Poke && millis() >= instantEventCutoff && canStartInstantRoutine()){
-		sm->startRoutine<PokeEventRoutine>();
-	}
+	// AI-only firmware: no stock reaction to a poke.
 }
 
 void IdleState::onMotion(MotionType type){
-	if(millis() >= instantEventCutoff && canStartInstantRoutine()){
-		sm->startRoutine<MotionRoutine>(type);
-	}
+	// AI-only firmware: no stock reaction to being moved (the plane hears of it in AI mode).
 }
 
 bool IdleState::canStartInstantRoutine() const{
@@ -351,7 +353,11 @@ void IdleState::onLinkRequest(LinkRequest req){
 }
 
 void IdleState::onLinkWake(){
-	// BLE wake from the plane: enter AI mode; RemoteState brings up Wi-Fi and dials the plane.
+	// BLE wake from the plane, or a short press: enter AI mode; RemoteState brings up Wi-Fi and
+	// dials the plane. AI mode is wanted again from now on.
+	if(LinkService* link = ApplicationStatics::getApplication()->getService<LinkService>()){
+		link->setAiAuto(true);
+	}
 	if(!sm->isTransitionPending()){
 		sm->transitionTo<RemoteState>();
 	}

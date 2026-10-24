@@ -25,7 +25,10 @@
 #include "Phone/Phone.h"
 #include "BLE/ConMan.h"
 #include "Util/HomeInfo.h"
+#include "Battery/Battery.h"
 #include "Link/LinkCredentials.h"
+#include "Link/Ota.h"
+#include "Util/AiRestart.h"
 #include <Periphery/WiFi.h>
 
 DEFINE_LOG(RemoteState)
@@ -62,6 +65,7 @@ RemoteState::RemoteState(BBStateMachine* sm) : State(sm){
 		ServiceLocator::LEDControlInstance->suspend(true);
 	}
 	enteredAt = millis();
+	quiet = link->takeQuietStart();
 	planeLed = Online;
 	showLed();
 	aiStatus.mode = AIStatusData::Mode::NoBrain; // until the plane says otherwise
@@ -107,7 +111,9 @@ RemoteState::RemoteState(BBStateMachine* sm) : State(sm){
 	// Joining Wi-Fi takes a few seconds; say so right away. Wait for it: speech allocates from
 	// the same internal RAM Wi-Fi start-up needs, and a failed allocation reboots (and so powers
 	// off) the robot.
-	speak("A I mode on.", true);
+	if(!quiet){
+		speak("A I mode on.", true);
+	}
 
 	// Wi-Fi only ever runs in this state (like RC mode): autonomy is off, so its internal RAM fits.
 	// The camera stays as initialised at boot (128x128 RGB565) until the plane asks for a stream;
@@ -213,7 +219,10 @@ void RemoteState::tick(float deltaTime){
 	if(abortRequested || (linkDeadline != 0 && millis() > linkDeadline)){
 		// Without this the robot just went back to idle, and nobody could tell a short press had
 		// done anything at all.
-		if(abortRequested){
+		if(quiet && !connectedOnce){
+			// A retry of its own: idle tries again later, without a word.
+			CMF_LOG(RemoteState, LogLevel::Info, "AI mode retry failed, back to idle");
+		}else if(abortRequested){
 			// Say why: it is the only clue without a serial cable.
 			const std::string why = link ? link->startFailure() : "";
 			speak(why == "memory" ? "A I mode could not start: not enough memory. Turn me off and on again."
@@ -266,6 +275,7 @@ void RemoteState::onRequest(LinkRequest req){
 
 		case T::ExitRemote:
 			link->ack(req.id);
+			link->setAiAuto(false); // switched off on purpose: stay off
 			// Speaking blocks this thread (no watchdog, no obstacle stop): stop moving first.
 			base->stopMotors();
 			driving = false;
@@ -324,6 +334,28 @@ void RemoteState::onRequest(LinkRequest req){
 				audio->setGain(req.gain);
 			}
 			break;
+
+		case T::Ota:
+			if(req.text.empty() || req.size == 0 || req.sha256.size() != 64){
+				link->error(req.id, "ota needs url, size and sha256");
+				break;
+			}
+			// Update mode runs after a restart, with nothing else going (see Ota): stop, say yes,
+			// give the reply a moment to go out, and restart.
+			base->stopMotors();
+			driving = false;
+			session->speakerAbort();
+			link->ack(req.id);
+			vTaskDelay(pdMS_TO_TICKS(300));
+			Ota::restartIntoUpdate(req.text, req.size, req.sha256);
+
+		case T::Restart:
+			// A clean start without anyone at the robot (it comes back in AI mode).
+			base->stopMotors();
+			driving = false;
+			link->ack(req.id);
+			vTaskDelay(pdMS_TO_TICKS(300));
+			restartIntoAiMode();
 
 		case T::Camera:
 			session->setCamera(req.on, req.res, req.fps, req.quality, req.swJpeg, req.xclkMhz, req.psramDma);
@@ -407,6 +439,11 @@ void RemoteState::onRequest(LinkRequest req){
 // movement starts: upright and on the ground, and nothing in front when going forward. Driving
 // while charging is allowed on purpose (the AI build is often tested on USB).
 const char* RemoteState::driveRefusal(bool forward){
+	// Never on a cable (USB or charger): it would roll over it, or pull the robot off a table.
+	if(const Battery* battery = Application::getApp()->getService<Battery>();
+	   battery != nullptr && battery->getChargingState() != ChargingState::Unplugged){
+		return "plugged_in";
+	}
 	// Accelerometer only: the bottom IR sensor misreads around motor activity (and its "lifted"
 	// flag latches), which refused every move after the first one.
 	if(checkTilt && motion && motion->isTipped()){
@@ -480,6 +517,9 @@ void RemoteState::onConnection(bool online){
 	if(online){
 		linkDeadline = 0;
 		link->radioConfirmed();
+		// A new firmware that got this far works: keep it.
+		Ota::confirm();
+		aiModeWorked();
 		connectedOnce = true;
 		// BaseBoard calls are made from this thread only (they abort on I2C errors).
 		base->requestProximityState();
@@ -505,6 +545,7 @@ void RemoteState::onButton(int button, ISRButtonInput::Action action){
 	// Short press hands control back to the robot; long presses are the shutdown gesture.
 	if(buttonPressedAt != 0 && millis() - buttonPressedAt <= ShortPressMs){
 		base->stopMotors();
+		link->setAiAuto(false); // switched off on purpose: stay off until the next short press
 		speak("A I mode off.", true);
 		sm->transitionTo<IdleState>();
 	}

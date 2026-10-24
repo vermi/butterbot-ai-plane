@@ -12,6 +12,7 @@
 #include <Log/Log.h>
 #include <Util/stdafx.h>
 #include "LinkCredentials.h"
+#include "Ota.h"
 
 DEFINE_LOG(LinkService)
 
@@ -87,6 +88,8 @@ namespace {
 		{ "ir_send", LinkRequest::Type::IrSend },
 		{ "modules", LinkRequest::Type::Modules },
 		{ "safety", LinkRequest::Type::Safety },
+		{ "ota", LinkRequest::Type::Ota },
+		{ "restart", LinkRequest::Type::Restart },
 	};
 
 	double num(const cJSON* obj, const char* key, double def){
@@ -200,6 +203,11 @@ void LinkService::configure(const LinkConfigData& cfg){
 		config = cfg;
 	}
 	configChanged = true;
+}
+
+bool LinkService::hasCredentials(){
+	std::lock_guard lock(configMutex);
+	return LinkCredentials::isValid(config);
 }
 
 uint8_t LinkService::requestWake(){
@@ -376,6 +384,12 @@ void LinkService::tick(float deltaTime) noexcept{
 							 (unsigned) heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA),
 							 (unsigned) heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
 					sendJson(json);
+				}
+				// Also the battery, every 30 s or so: it is otherwise only reported on connect and when
+				// it changes, and the plane must know about a cable before it lets the robot drive.
+				if(++reportsSinceBattery >= 10){
+					reportsSinceBattery = 0;
+					sendBattery();
 				}
 			}
 			if(!gotIP || millis() - lastRx > RxTimeoutMs){
@@ -825,7 +839,11 @@ void LinkService::handleCtrl(const char* json, size_t len){
 		req.home.heardLast = flag(root, "heard_last", false);
 		req.home.seenSecs = static_cast<uint16_t>(std::clamp<double>(num(root, "seen_secs", 0), 0, UINT16_MAX));
 	}
-	if(const char* text = str(root, req.type == T::Phone ? "action" : "text")){
+	if(req.type == T::Ota){
+		req.size = (uint32_t) std::max<double>(num(root, "size", 0), 0);
+		if(const char* v = str(root, "sha256")) req.sha256 = v;
+	}
+	if(const char* text = str(root, req.type == T::Phone ? "action" : req.type == T::Ota ? "url" : "text")){
 		req.text = text;
 	}
 	cJSON_Delete(root);
@@ -838,9 +856,9 @@ void LinkService::sendHelloDatagram(){
 	esp_read_mac(mac, ESP_MAC_WIFI_STA);
 	char json[256];
 	const int len = snprintf(json, sizeof(json),
-			 "{\"t\":\"hello\",\"proto\":%lu,\"fw\":\"%s\",\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
-			 "\"caps\":[\"camera\",\"mic\",\"speaker\",\"drive\",\"tts\",\"scenarios\",\"ir\",\"modules\",\"phone\"]}",
-			 LinkProto::Version, LinkProto::FirmwareName, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+			 "{\"t\":\"hello\",\"proto\":%lu,\"fw\":\"%s\",\"build\":\"%s\",\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
+			 "\"caps\":[\"camera\",\"mic\",\"speaker\",\"drive\",\"tts\",\"scenarios\",\"ir\",\"modules\",\"phone\",\"ota\"]}",
+			 LinkProto::Version, LinkProto::FirmwareName, Ota::build(), mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 	uint8_t dgram[LinkProto::HeaderLen + 256];
 	LinkProto::putHeader(dgram, LinkProto::FrameType::Ctrl, 0, len);
 	memcpy(dgram + LinkProto::HeaderLen, json, len);
@@ -852,9 +870,9 @@ void LinkService::sendHello(){
 	esp_read_mac(mac, ESP_MAC_WIFI_STA);
 	char json[256];
 	snprintf(json, sizeof(json),
-			 "{\"t\":\"hello\",\"proto\":%lu,\"fw\":\"%s\",\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
-			 "\"caps\":[\"camera\",\"mic\",\"speaker\",\"drive\",\"tts\",\"scenarios\",\"ir\",\"modules\",\"phone\"]}",
-			 LinkProto::Version, LinkProto::FirmwareName, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+			 "{\"t\":\"hello\",\"proto\":%lu,\"fw\":\"%s\",\"build\":\"%s\",\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
+			 "\"caps\":[\"camera\",\"mic\",\"speaker\",\"drive\",\"tts\",\"scenarios\",\"ir\",\"modules\",\"phone\",\"ota\"]}",
+			 LinkProto::Version, LinkProto::FirmwareName, Ota::build(), mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 	sendJson(json);
 }
 

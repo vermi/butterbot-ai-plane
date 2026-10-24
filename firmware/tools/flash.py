@@ -7,6 +7,10 @@ Run after `idf.py build`, from the firmware directory, with esptool installed
     python tools/flash.py -p /dev/cu.usbserial-XXXX          # app only (after the first time)
     python tools/flash.py -p /dev/cu.usbserial-XXXX --all    # everything, as idf.py flash would
 
+App only writes the first app slot and resets the OTA boot record, so the robot boots what was
+just flashed even after it has updated itself over Wi-Fi into the other slot. A change to the
+partition table or the bootloader needs --all. Over Wi-Fi, without a cable: `bbplane ota`.
+
 Why not plain `idf.py flash`: the robot powers itself off whenever its firmware boots without the
 power button held (the stock hold-to-turn-on check). esptool's reset at the end of a flash also
 leaves the chip in its ROM bootloader, with the light off and the button ignored. This script
@@ -15,6 +19,7 @@ so the firmware boots and switches the robot off cleanly. Then turn it on as usu
 """
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -52,7 +57,10 @@ def main() -> int:
     args = lines[0]  # --flash_mode dio --flash_freq 80m --flash_size 16MB
     images = [(addr, path) for addr, path in lines[1:]]
     if not a.all:
-        images = [(addr, path) for addr, path in images if addr == "0x10000"]
+        with open(os.path.join(build, "flasher_args.json")) as f:
+            parts = json.load(f)
+        keep = {parts["app"]["file"], parts.get("otadata", {}).get("file")}
+        images = [(addr, path) for addr, path in images if path in keep]
     for addr, path in images:
         args += [addr, path]
 

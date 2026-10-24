@@ -9,7 +9,15 @@
  */
 [[noreturn]] void restartIntoAiMode();
 
-/** At boot: whether this start is such a restart (it is then cleared). */
+/**
+ * At boot: whether this start is such a restart (it is then cleared), or a reset after a crash
+ * (panic or watchdog) while the robot was on: it stays on and goes back to AI mode then too. A
+ * crash in a freshly updated firmware is the second boot that makes the bootloader roll back.
+ * Crashing again and again (see aiModeWorked()) ends in the normal power-on check: off.
+ */
 bool takeRestartIntoAiMode();
+
+/** AI mode reached the plane: crashes before this one no longer count as a crash loop. */
+void aiModeWorked();
 
 #endif //BUTTERBOT_FIRMWARE_AIRESTART_H

@@ -43,6 +43,10 @@ private:
 	// Poke/Motion events handled before this time are stale (queued while a routine ran) and are dropped.
 	uint64_t instantEventCutoff = 0;
 
+	// AI mode is the normal state (LinkService::isAiAuto): idle tries it again after this long.
+	static constexpr uint64_t AiRetryMs = 60000;
+	uint64_t aiRetryAt = 0;
+
 	static constexpr uint64_t MaximumBtnHoldForTransition = 500;
 	static constexpr uint64_t StaleEventWindow = 100; // ms
 

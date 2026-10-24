@@ -31,7 +31,9 @@ python tools/flash.py -p /dev/cu.usbserial-XXXX --all   # first time: everything
 python tools/flash.py -p /dev/cu.usbserial-XXXX         # after that: just the app
 ```
 
-The robot switches itself off at the end; turn it on as usual.
+The robot switches itself off at the end; turn it on as usual. After the first flash, update it
+over Wi-Fi while it is in AI mode: `bbplane ota ../firmware/build/ButterBot-Firmware.bin` (see the
+[main README](../README.md#2-flash-the-robot)).
 
 To restore the stock firmware, flash `ButterBot-v1.0.5.bin` from the
 [CircuitMess releases](https://github.com/CircuitMess/ButterBot-Firmware-Public/releases) while

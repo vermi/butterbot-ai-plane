@@ -202,7 +202,9 @@ impl Voices {
     /// Whether utterances go to training now (instead of being commands).
     pub fn training(&self) -> bool {
         let mut t = self.training.lock().unwrap();
-        if t.as_ref().is_some_and(|t| t.started.elapsed() > TRAINING_MAX) {
+        if t.as_ref()
+            .is_some_and(|t| t.started.elapsed() > TRAINING_MAX)
+        {
             *t = None;
         }
         t.is_some()
@@ -220,7 +222,13 @@ impl Voices {
 
     /// One training utterance (`heard`: its transcript, for feedback).
     pub async fn train(&self, pcm: Vec<i16>, heard: &str) {
-        let Some(name) = self.training.lock().unwrap().as_ref().map(|t| t.name.clone()) else {
+        let Some(name) = self
+            .training
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|t| t.name.clone())
+        else {
             return;
         };
         let emb = match self.engine().await {

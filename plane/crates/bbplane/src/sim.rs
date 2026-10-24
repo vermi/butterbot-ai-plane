@@ -308,6 +308,13 @@ async fn handle(s: &mut Sim, f: Frame, tx: &mpsc::Sender<Frame>) -> Result<()> {
             .await?
         }
         ToRobot::Safety { id, .. } => tx.send(ack(id, Value::Null)).await?,
+        ToRobot::Restart { id } => tx.send(ack(id, Value::Null)).await?,
+        ToRobot::Ota { id, .. } => {
+            tx.send(ctrl(
+                json!({"t":"error","id":id,"msg":"the simulator has no firmware to update"}),
+            ))
+            .await?
+        }
         ToRobot::Modules { id } => {
             tx.send(ack(
                 id,
