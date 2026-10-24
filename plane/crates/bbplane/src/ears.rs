@@ -216,6 +216,11 @@ impl Ears {
     }
 
     /// The oldest command still fresh enough to answer, if any.
+    /// Someone said something to the robot that the agent has not taken yet.
+    pub fn command_waiting(&self) -> bool {
+        !self.commands.lock().unwrap().is_empty()
+    }
+
     pub fn take_command(&self) -> Option<Command> {
         let max_age = Duration::from_secs(self.cfg.command_max_age_secs);
         let mut q = self.commands.lock().unwrap();

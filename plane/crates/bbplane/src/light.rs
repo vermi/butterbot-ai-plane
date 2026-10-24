@@ -26,6 +26,8 @@ pub enum State {
     Thinking,
     /// Focus mode: faint glow, a brief tick every 10 s.
     Focus,
+    /// Napping on the charger: dark, a slow faint pulse every 6 s.
+    Napping,
     /// AI mode without an agent (paused, not running): two quick ticks every 4 s.
     NoBrain,
 }
@@ -45,6 +47,7 @@ impl State {
             State::Attentive => r(150, 0, 1, 2000, Rhythm::BRIGHT, Rhythm::OFF),
             State::Thinking => r(100, 0, 1, 200, Rhythm::OFF, Rhythm::BRIGHT),
             State::Focus => r(40, 0, 1, 10000, Rhythm::DIM, Rhythm::BRIGHT),
+            State::Napping => r(600, 0, 1, 6000, Rhythm::OFF, Rhythm::DIM),
             State::NoBrain => r(60, 200, 2, 4000, Rhythm::OFF, Rhythm::BRIGHT),
         }
     }
@@ -115,6 +118,8 @@ pub fn state(robot: &Robot) -> State {
         State::Thinking
     } else if robot.life.focused().is_some() {
         State::Focus
+    } else if robot.life.napping() {
+        State::Napping
     } else if robot.ears.window_open() {
         State::Attentive
     } else {
@@ -128,7 +133,8 @@ fn ai_status(robot: &Robot, s: State) -> ToRobot {
     let mood = robot.mood.now();
     ToRobot::AiStatus {
         mode: match s {
-            State::Listening => 1,
+            // Napping shows on the remote's face (sleepy) and as what it is doing.
+            State::Listening | State::Napping => 1,
             State::Attentive => 2,
             State::Thinking => 3,
             State::Focus => 4,

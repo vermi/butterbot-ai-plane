@@ -43,7 +43,7 @@ pub async fn web_search(cfg: &BrainConfig, query: &str) -> Result<String> {
 }
 
 /// All output text of a Responses API result.
-fn output_text(r: &Value) -> String {
+pub(super) fn output_text(r: &Value) -> String {
     r["output"]
         .as_array()
         .into_iter()

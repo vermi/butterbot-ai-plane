@@ -292,6 +292,9 @@ pub struct LifeConfig {
     /// When the robot writes its diary, local time "HH:MM" (a missed evening is caught up the
     /// next morning). Empty: no diary.
     pub diary_at: String,
+    /// Nap on the charger: once plugged in and nothing is going on, it dozes (only its name, a
+    /// poke or an alarm get through) and dreams now and then, until it is unplugged.
+    pub nap_when_charging: bool,
 }
 
 impl Default for LifeConfig {
@@ -307,6 +310,7 @@ impl Default for LifeConfig {
             default_focus_minutes: 60,
             session_minutes: 30,
             diary_at: "21:30".into(),
+            nap_when_charging: true,
         }
     }
 }

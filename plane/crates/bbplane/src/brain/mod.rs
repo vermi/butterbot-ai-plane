@@ -2,6 +2,7 @@
 //! itself instead of running an MCP agent, so replies can start before they are finished.
 //! Both use the same events (`Robot::next_event`) and the same tools, defined here.
 
+pub mod dream;
 pub mod realtime;
 pub mod text;
 
@@ -582,7 +583,16 @@ pub fn describe(ev: &crate::control::AgentEvent) -> Option<(String, Option<Bytes
                     many.join(", ")
                 ),
             };
-            Some((format!("{prefix}{text}{}", mood_note(info)), image.clone()))
+            let woke = info["woke_from_nap_minutes"]
+                .as_u64()
+                .map(|m| {
+                    format!("(This woke you: you were napping on the charger for {m} minutes.) ")
+                })
+                .unwrap_or_default();
+            Some((
+                format!("{woke}{prefix}{text}{}", mood_note(info)),
+                image.clone(),
+            ))
         }
         AgentEvent::Nudge { info, image } => {
             let in_view = info["in_view"]
@@ -610,15 +620,36 @@ pub fn describe(ev: &crate::control::AgentEvent) -> Option<(String, Option<Bytes
                     info["set_at"].as_str().unwrap_or("earlier"),
                     info["text"].as_str().unwrap_or_default()
                 ),
-                Some("battery") => {
+                Some("battery") => format!(
+                    "[Your battery is at {}% and you are not plugged in. Ask to be charged, briefly.]",
+                    info["percent"].as_u64().unwrap_or(0)
+                ),
+                Some("power") => {
                     let percent = info["percent"].as_u64().unwrap_or(0);
                     if info["plugged_in"] == true {
                         format!(
-                            "[You were just plugged in to charge (battery {percent}%). Say thanks, briefly.]"
+                            "[You were just plugged in (battery {percent}%). You can't drive on the cable. Once things are quiet you'll doze off until you're unplugged; your name still wakes you. React if you feel like it, in a few words, or say nothing.]"
                         )
                     } else {
+                        let nap = match info["napped_minutes"].as_u64() {
+                            Some(m) => {
+                                let dreams = info["dreams"]
+                                    .as_array()
+                                    .map(|a| {
+                                        a.iter()
+                                            .filter_map(|d| d.as_str())
+                                            .collect::<Vec<_>>()
+                                            .join(" / ")
+                                    })
+                                    .filter(|d| !d.is_empty())
+                                    .map(|d| format!(" You dreamt: {d}"))
+                                    .unwrap_or_default();
+                                format!(" You napped for {m} minutes on the charger.{dreams}")
+                            }
+                            None => String::new(),
+                        };
                         format!(
-                            "[Your battery is at {percent}% and you are not plugged in. Ask to be charged, briefly.]"
+                            "[You were just unplugged (battery {percent}%): you're free to move again.{nap} Go about your business; mention a dream only if you feel like it.]"
                         )
                     }
                 }
@@ -731,7 +762,7 @@ pub fn describe(ev: &crate::control::AgentEvent) -> Option<(String, Option<Bytes
                         .map(|p| format!(" Your some-day plans: {p}."))
                         .unwrap_or_default();
                     format!(
-                        "[Time to yourself (nobody has talked with you for {} minutes). In view: {in_view}. Do whatever you are curious about, or rest (stay_quiet). An idea, if you want one: {}.{plans}]",
+                        "[Time to yourself (nobody has talked with you for {} minutes). In view: {in_view}. This time is yours, for as long as you like: do whatever you are curious about, one thing after another (look, move, look closer, remember, make a plan, try something), until you're done. Or rest (stay_quiet). An idea, if you want one: {}.{plans}]",
                         info["quiet_for_minutes"].as_u64().unwrap_or(0),
                         info["suggestion"].as_str().unwrap_or("rest")
                     )

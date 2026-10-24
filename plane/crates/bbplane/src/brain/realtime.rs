@@ -17,6 +17,8 @@ use crate::control::{AgentEvent, Robot};
 
 /// The realtime API speaks 24 kHz PCM.
 const RATE: u32 = 24_000;
+/// Responses in one turn at most (a turn of its own goes on as long as it keeps acting).
+const MAX_STEPS: usize = 24;
 /// Every reply processes the whole conversation, so it slows down as that grows: past this many
 /// tokens a fresh session starts at the next quiet moment (it gets a recap of what was said).
 const CONTEXT_LIMIT: u64 = 20_000;
@@ -115,19 +117,27 @@ pub async fn session(robot: &Robot, state: &AgentState) -> Result<String> {
             pictures.push(add_picture(&mut sink, "(what your camera sees)", jpeg).await?);
         }
         let mut context = 0;
-        // Something of its own (not someone talking to it): it decides in silence first, so an
-        // action is not announced ("I'm going to look around..."). If it only wanted to talk,
-        // what it wrote is then said; after an action it reports in the next response, or not.
-        let mut decide_silently = matches!(ev, AgentEvent::Nudge { .. });
+        // Its own time (not someone talking to it): it works in silence, as many steps as it
+        // likes, so nothing is announced or narrated ("I'm going to look around..."). What it
+        // writes in its last response, when it has nothing more to do, is then said, if anything.
+        let silent = matches!(ev, AgentEvent::Nudge { .. });
         // Answer, running tools, until the model has nothing more to do.
-        loop {
-            let create = if decide_silently {
+        for step in 1.. {
+            if step > MAX_STEPS {
+                state.log(format!("({MAX_STEPS} steps in one turn: that will do)"));
+                break;
+            }
+            // Someone talking to it comes first.
+            if silent && step > 1 && robot.ears.command_waiting() {
+                state.log("(someone is talking: done with my own thing for now)".to_string());
+                break;
+            }
+            let create = if silent {
                 json!({ "type": "response.create", "response": { "output_modalities": ["text"] } })
             } else {
                 json!({ "type": "response.create" })
             };
             send(&mut sink, create).await?;
-            let silent = std::mem::take(&mut decide_silently);
             let (calls, held, used) =
                 respond(&mut events, robot, state, robot_voice, silent).await?;
             context = context.max(used);

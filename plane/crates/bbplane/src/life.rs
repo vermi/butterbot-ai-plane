@@ -5,6 +5,10 @@
 //! chit-chat, or rest). Nudges come every few minutes while someone is in view and rarely when the
 //! room is empty. In focus mode there are none until the robot is called by name or the focus time
 //! runs out.
+//!
+//! On the charger it naps once things are quiet: no nudges, like focus mode, until it is called by
+//! name, poked or unplugged, and now and then a dream (`dream_due`). Plugging it in or unplugging
+//! it is news right away (`Nudge::Power`).
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -27,6 +31,13 @@ const CALL_FRESH: Duration = Duration::from_secs(25);
 const BATTERY_FRESH: Duration = Duration::from_secs(300);
 /// Music nudges at most this often.
 const MUSIC_AGAIN: Duration = Duration::from_secs(600);
+/// A cable change not passed on within this long is old news.
+const POWER_FRESH: Duration = Duration::from_secs(120);
+/// Asleep this long before the first dream, then one every `DREAM_EVERY`, at most `MAX_DREAMS` a
+/// charge.
+const FIRST_DREAM: Duration = Duration::from_secs(20 * 60);
+const DREAM_EVERY: Duration = Duration::from_secs(90 * 60);
+const MAX_DREAMS: usize = 3;
 /// Someone keeps talking: do not end a session in the middle of a conversation.
 const SESSION_END_QUIET: Duration = Duration::from_secs(90);
 
@@ -122,6 +133,30 @@ pub enum Nudge {
         quiet_for_minutes: u64,
         suggestion: String,
     },
+    /// The cable, the moment it changes: plugged in (charging, no driving) or unplugged (free to
+    /// move). Unplugged after napping: how long it slept on this charge, and what it dreamt.
+    Power {
+        plugged_in: bool,
+        percent: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        napped_minutes: Option<u64>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        dreams: Vec<String>,
+    },
+}
+
+/// Plugged in or unplugged, not yet passed on.
+struct PowerNews {
+    plugged_in: bool,
+    percent: u32,
+    slept: Duration,
+    dreams: Vec<String>,
+    at: Instant,
+}
+
+struct Nap {
+    since: Instant,
+    next_dream: Instant,
 }
 
 struct State {
@@ -146,6 +181,13 @@ struct State {
     mood_pace: f64,
     /// Plugged in and not allowed to drive: no ideas that need moving.
     tethered: bool,
+    power: Option<PowerNews>,
+    /// Asleep on the charger (see `Life::nap`).
+    nap: Option<Nap>,
+    /// This charge's naps: time asleep in all, dreams had and dreams started.
+    slept: Duration,
+    dreams: Vec<String>,
+    dreams_started: usize,
     rng: u64,
 }
 
@@ -177,6 +219,11 @@ impl Life {
             activity: cfg.activity,
             mood_pace: 1.0,
             tethered: false,
+            power: None,
+            nap: None,
+            slept: Duration::ZERO,
+            dreams: Vec::new(),
+            dreams_started: 0,
             rng: seed,
         };
         reschedule(&cfg, &mut state);
@@ -254,9 +301,98 @@ impl Life {
         }
     }
 
+    /// In focus mode or asleep: only what someone does to it, or asks for, gets through.
+    fn resting(&self) -> bool {
+        self.focused().is_some() || self.napping()
+    }
+
+    /// The cable changed (see `Nudge::Power`). Unplugged, the nap is over.
+    pub fn power(&self, plugged_in: bool, percent: u32) {
+        if !self.cfg.enabled {
+            return;
+        }
+        let focused = self.focused().is_some();
+        let mut s = self.state.lock().unwrap();
+        wake(&self.cfg, &mut s);
+        let (slept, dreams) = if plugged_in {
+            (Duration::ZERO, Vec::new())
+        } else {
+            (std::mem::take(&mut s.slept), std::mem::take(&mut s.dreams))
+        };
+        s.slept = Duration::ZERO;
+        s.dreams.clear();
+        s.dreams_started = 0;
+        if !focused {
+            s.power = Some(PowerNews {
+                plugged_in,
+                percent,
+                slept,
+                dreams,
+                at: Instant::now(),
+            });
+        }
+    }
+
+    /// Doze off (on the charger, once things are quiet). No nudges while asleep, as in focus
+    /// mode, but pokes and alarms; dreams come by themselves (`dream_due`).
+    pub fn nap(&self) {
+        let mut s = self.state.lock().unwrap();
+        if s.nap.is_some() {
+            return;
+        }
+        let now = Instant::now();
+        s.nap = Some(Nap {
+            since: now,
+            next_dream: now + FIRST_DREAM,
+        });
+        s.arrivals.clear();
+        s.noticed.clear();
+        s.handled = None;
+        s.call = None;
+        s.music = None;
+        s.heard.take_if(|(_, urgent, _)| !*urgent);
+    }
+
+    pub fn napping(&self) -> bool {
+        self.state.lock().unwrap().nap.is_some()
+    }
+
+    /// Woken up on the charger (called by name, poked): how long it slept. It dozes off again
+    /// once things are quiet.
+    pub fn wake(&self) -> Option<Duration> {
+        let mut s = self.state.lock().unwrap();
+        wake(&self.cfg, &mut s)
+    }
+
+    /// Time for a dream: asleep long enough since the last one, and not too many this charge.
+    /// Counts it as started.
+    pub fn dream_due(&self) -> bool {
+        let mut s = self.state.lock().unwrap();
+        let started = s.dreams_started;
+        let Some(nap) = s.nap.as_mut() else {
+            return false;
+        };
+        if Instant::now() < nap.next_dream || started >= MAX_DREAMS {
+            return false;
+        }
+        nap.next_dream = Instant::now() + DREAM_EVERY;
+        s.dreams_started += 1;
+        true
+    }
+
+    /// A dream it had (told when it wakes up unplugged).
+    pub fn dreamt(&self, dream: String) {
+        self.state.lock().unwrap().dreams.push(dream);
+    }
+
+    /// How long nothing has happened (no talk, no nudge).
+    pub fn quiet_for(&self) -> Duration {
+        self.state.lock().unwrap().last_activity.elapsed()
+    }
+
     /// A recognised person came into view.
     pub fn arrived(&self, name: &str) {
-        if !self.cfg.enabled || self.focused().is_some() {
+        if !self.cfg.enabled || self.resting() {
             return;
         }
         let mut s = self.state.lock().unwrap();
@@ -266,7 +402,7 @@ impl Life {
 
     /// The robot was picked up, shaken, dropped or turned over (the latest one counts).
     pub fn handled(&self, how: &str) {
-        if !self.cfg.enabled || self.focused().is_some() {
+        if !self.cfg.enabled || self.resting() {
             return;
         }
         self.state.lock().unwrap().handled = Some((how.to_string(), Instant::now()));
@@ -274,7 +410,7 @@ impl Life {
 
     /// A sound worth noticing was heard. `urgent` ones (alarms) come through focus mode.
     pub fn heard(&self, what: &str, urgent: bool) {
-        if !self.cfg.enabled || (!urgent && self.focused().is_some()) {
+        if !self.cfg.enabled || (!urgent && self.resting()) {
             return;
         }
         self.state.lock().unwrap().heard = Some((what.to_string(), urgent, Instant::now()));
@@ -282,7 +418,7 @@ impl Life {
 
     /// Music started playing (`bpm`: its beat, if one was clear).
     pub fn music(&self, what: &str, bpm: Option<u32>) {
-        if !self.cfg.enabled || self.focused().is_some() {
+        if !self.cfg.enabled || self.resting() {
             return;
         }
         self.state.lock().unwrap().music = Some((what.to_string(), bpm, Instant::now()));
@@ -297,7 +433,7 @@ impl Life {
 
     /// The paired phone is ringing.
     pub fn call(&self, from: &str) {
-        if !self.cfg.enabled || self.focused().is_some() {
+        if !self.cfg.enabled || self.resting() {
             return;
         }
         self.state.lock().unwrap().call = Some((from.to_string(), Instant::now()));
@@ -313,7 +449,7 @@ impl Life {
 
     /// Something worth noticing came into view.
     pub fn noticed(&self, what: &str) {
-        if !self.cfg.enabled || self.focused().is_some() {
+        if !self.cfg.enabled || self.resting() {
             return;
         }
         let mut s = self.state.lock().unwrap();
@@ -328,6 +464,8 @@ impl Life {
         }
         let focused = self.focused().is_some();
         let mut s = self.state.lock().unwrap();
+        // Asleep on the charger counts as focus mode here.
+        let focused = focused || s.nap.is_some();
         s.heard.take_if(|(_, _, at)| at.elapsed() >= HEARD_FRESH);
         // Alarms come through focus mode.
         if let Some((what, _, _)) = s.heard.take_if(|(_, urgent, _)| *urgent || !focused) {
@@ -341,6 +479,20 @@ impl Life {
             s.last_activity = Instant::now();
             reschedule(&self.cfg, &mut s);
             return Some(Nudge::Poked);
+        }
+        // The cable: news right away (stored only outside focus mode, and it ends a nap).
+        if let Some(p) = s.power.take()
+            && p.at.elapsed() < POWER_FRESH
+        {
+            s.last_activity = Instant::now();
+            reschedule(&self.cfg, &mut s);
+            let napped = !p.plugged_in && p.slept >= Duration::from_secs(60);
+            return Some(Nudge::Power {
+                plugged_in: p.plugged_in,
+                percent: p.percent,
+                napped_minutes: napped.then_some(p.slept.as_secs() / 60),
+                dreams: p.dreams,
+            });
         }
         // Quiet: only what someone did to it, or asked for, gets through (above and below).
         if focused {
@@ -524,6 +676,16 @@ fn next_rand(x: &mut u64) -> u64 {
     *x
 }
 
+/// End a nap, if it is napping: how long it slept.
+fn wake(cfg: &LifeConfig, s: &mut State) -> Option<Duration> {
+    let nap = s.nap.take()?;
+    let slept = nap.since.elapsed();
+    s.slept += slept;
+    s.last_activity = Instant::now();
+    reschedule(cfg, s);
+    Some(slept)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -533,6 +695,48 @@ mod tests {
             nudge_in_view_secs: in_view,
             nudge_alone_secs: alone,
             ..Default::default()
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn naps_on_the_charger_and_wakes_when_unplugged() {
+        let life = Life::new(cfg([60, 60], [60, 60]));
+        life.power(true, 80);
+        assert!(matches!(
+            life.poll(false),
+            Some(Nudge::Power {
+                plugged_in: true,
+                ..
+            })
+        ));
+        life.nap();
+        assert!(life.napping());
+        life.arrived("Justin");
+        tokio::time::advance(Duration::from_secs(3600)).await;
+        assert!(life.poll(true).is_none(), "asleep: no nudges");
+        assert!(life.dream_due(), "a dream after a while");
+        assert!(!life.dream_due(), "not two at once");
+        life.dreamt("I was a toaster.".into());
+        life.poked();
+        assert!(
+            matches!(life.poll(false), Some(Nudge::Poked)),
+            "a poke gets through"
+        );
+        assert!(life.wake().is_some());
+        assert!(!life.napping());
+
+        life.nap();
+        tokio::time::advance(Duration::from_secs(600)).await;
+        life.power(false, 95);
+        assert!(!life.napping(), "unplugged: awake");
+        match life.poll(false) {
+            Some(Nudge::Power {
+                plugged_in: false,
+                napped_minutes: Some(70),
+                dreams,
+                ..
+            }) => assert_eq!(dreams, ["I was a toaster."]),
+            other => panic!("{other:?}"),
         }
     }
 

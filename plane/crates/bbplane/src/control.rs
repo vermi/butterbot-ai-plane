@@ -29,6 +29,8 @@ pub const MAX_DRIVE_MS: u64 = 10_000;
 /// it gets a moment to keep what matters (`remember`, `intend`).
 const REFLECT_AFTER_TURNS: u32 = 2;
 const REFLECT_AFTER_QUIET: Duration = Duration::from_secs(90);
+/// On the charger, with nothing going on for this long: it dozes off.
+const NAP_AFTER: Duration = Duration::from_secs(120);
 /// Open-loop calibration: a full-speed spin in place turns about 180 degrees in this time
 /// (stock firmware `WanderRoutine`/`VoiceTurn180Routine`).
 pub const MS_PER_180_AT_FULL: f64 = 4000.0;
@@ -287,8 +289,6 @@ impl Robot {
         self.hub.send(ToRobot::Stop).await
     }
 
-    /// Drive with raw motor speeds for `ms`, refreshing the robot-side watchdog.
-    /// Returns early if the robot reports that it stopped on its own (obstacle, lifted, ...).
     /// Plugged in, and not allowed to drive on a cable (`[safety] drive_when_plugged`). Not knowing
     /// counts as plugged in: the robot reports its battery when it connects and when it changes, so
     /// after a plane restart it can be unknown for a long time, and driving over the cable is worse
@@ -306,6 +306,55 @@ impl Robot {
                 .unwrap_or(true)
     }
 
+    /// On the cable (charging, or charged and still plugged in), if the robot has said.
+    pub async fn plugged_in(&self) -> Option<bool> {
+        self.hub
+            .status
+            .lock()
+            .await
+            .battery
+            .as_ref()
+            .and_then(|b| b["charging"].as_str().map(|c| c != "unplugged"))
+    }
+
+    /// The cable changed: tell the agent right away (`Nudge::Power`); unplugged, it wakes up.
+    pub fn power_changed(&self, plugged_in: bool, percent: u32) {
+        tracing::info!(
+            "{} ({percent}%): telling the agent",
+            if plugged_in {
+                "plugged in"
+            } else {
+                "unplugged"
+            }
+        );
+        let napping = self.life.napping();
+        self.life.power(plugged_in, percent);
+        if napping {
+            self.woke();
+        }
+    }
+
+    /// Doze off on the charger (see `crate::life`): only its name gets through.
+    fn start_nap(&self) {
+        tracing::info!("napping on the charger");
+        self.life.nap();
+        self.ears.set_attentive(false);
+        self.mood
+            .appraise(crate::mood::Emotion::Sleepy, 0.7, "napping on the charger");
+        self.set_doing("napping", Duration::from_secs(24 * 3600));
+    }
+
+    /// The nap is over (`Life::wake` or unplugged).
+    fn woke(&self) {
+        self.ears.set_attentive(self.life.focused().is_none());
+        let mut doing = self.doing.lock().unwrap();
+        if doing.as_ref().is_some_and(|(what, _)| what == "napping") {
+            *doing = None;
+        }
+    }
+
+    /// Drive with raw motor speeds for `ms`, refreshing the robot-side watchdog.
+    /// Returns early if the robot reports that it stopped on its own (obstacle, lifted, ...).
     pub async fn drive_for(&self, l: i8, r: i8, ms: u64) -> Result<DriveOutcome> {
         self.ensure_remote().await?;
         if self
@@ -995,6 +1044,14 @@ impl Robot {
                 plugged_in: false, ..
             } => (Sleepy, 0.5, "battery is low".into()),
             Nudge::Battery { .. } => (Content, 0.5, "charging".into()),
+            Nudge::Power {
+                plugged_in: true, ..
+            } => (Content, 0.4, "on the charger".into()),
+            Nudge::Power {
+                napped_minutes: Some(_),
+                ..
+            } => (Content, 0.5, "had a nap".into()),
+            Nudge::Power { .. } => (Curious, 0.5, "off the cable, free to roam".into()),
             Nudge::Call { from } => (Excited, 0.35, format!("{from} is calling")),
             Nudge::Idle {
                 quiet_for_minutes, ..
@@ -1024,6 +1081,11 @@ impl Robot {
                     let mut t = self.talk.lock().unwrap();
                     *t = (t.0 + 1, Some(std::time::Instant::now()));
                 }
+                // Called by name in its sleep: awake (it dozes off again once things are quiet).
+                let woke = self.life.wake();
+                if woke.is_some() {
+                    self.woke();
+                }
                 if self.life.focused().is_some() {
                     // Called by name: awake again.
                     self.unfocus();
@@ -1047,6 +1109,9 @@ impl Robot {
                     }
                 }
                 info["mood"] = self.mood.for_agent();
+                if let Some(d) = woke {
+                    info["woke_from_nap_minutes"] = (d.as_secs() / 60).into();
+                }
                 let image = if want_image { frame().await } else { None };
                 self.light.thinking();
                 return Ok(AgentEvent::Command { info, image });
@@ -1069,7 +1134,7 @@ impl Robot {
                 });
             }
             // A conversation is over: a quiet moment to keep what matters from it.
-            if self.life.focused().is_none() {
+            if self.life.focused().is_none() && !self.life.napping() {
                 let reflect = {
                     let mut t = self.talk.lock().unwrap();
                     let due = t.0 >= REFLECT_AFTER_TURNS
@@ -1092,6 +1157,7 @@ impl Robot {
             }
             // Each day (or whenever it has none), a moment to make plans of its own.
             if self.life.focused().is_none()
+                && !self.life.napping()
                 && self.life.activity_level() != crate::life::Activity::Quiet
                 && self.planning_due()
             {
@@ -1105,10 +1171,12 @@ impl Robot {
                     image: frame().await,
                 });
             }
-            // Its own plans and diary wait for focus mode to end; plans also wait while quiet.
+            // Its own plans and diary wait for focus mode to end; plans also wait while quiet or
+            // asleep. The diary is written at bedtime, nap or not (silently).
             if self.life.focused().is_none() {
                 let now = chrono::Local::now();
                 if self.life.activity_level() != crate::life::Activity::Quiet
+                    && !self.life.napping()
                     && let Some(p) = self.intentions.take_due(now.timestamp_millis())
                 {
                     tracing::info!("plan due for the agent");
@@ -1153,7 +1221,27 @@ impl Robot {
                 || self.ears.heard_speech_within(COMPANY);
             let tethered = self.tethered().await;
             self.life.set_tethered(tethered);
+            // On the charger, and nothing going on: a nap. Asleep, now and then a dream.
+            if self.hub.config.life.nap_when_charging
+                && !self.life.napping()
+                && self.life.focused().is_none()
+                && self.plugged_in().await == Some(true)
+                && self.life.quiet_for() >= NAP_AFTER
+                && !self.ears.window_open()
+                && !self.ears.heard_speech_within(NAP_AFTER)
+            {
+                self.start_nap();
+            }
+            if self.life.dream_due() {
+                let robot = self.clone();
+                tokio::spawn(async move { crate::brain::dream::dream(&robot).await });
+            }
             if let Some(n) = self.life.poll(company) {
+                // A poke or an alarm in its sleep: awake.
+                let woke = self.life.wake();
+                if woke.is_some() {
+                    self.woke();
+                }
                 tracing::info!(
                     "nudge for the agent: {} (company: {company}, faces in view: {})",
                     serde_json::to_string(&n).unwrap_or_default(),
@@ -1162,6 +1250,9 @@ impl Robot {
                 self.appraise(&n, company);
                 let mut info = serde_json::to_value(&n).unwrap_or_default();
                 info["mood"] = self.mood.for_agent();
+                if let Some(d) = woke {
+                    info["woke_from_nap_minutes"] = (d.as_secs() / 60).into();
+                }
                 if matches!(n, crate::life::Nudge::Idle { .. }) {
                     let plans: Vec<Value> = self
                         .intentions
@@ -1173,7 +1264,8 @@ impl Robot {
                         info["your_plans"] = plans.into();
                     }
                 }
-                if tethered {
+                // (The cable's own news says so itself.)
+                if tethered && !matches!(n, crate::life::Nudge::Power { .. }) {
                     info["plugged_in"] = "you are on a cable and cannot drive".into();
                 }
                 let names: Vec<String> = seen
@@ -1231,6 +1323,7 @@ pub async fn on_body(robot: Robot) {
     };
     // The last reading, if the robot is already connected.
     let mut battery = BatteryWatch::default();
+    let mut plugged = robot.plugged_in().await;
     let mut floor = robot
         .hub
         .status
@@ -1286,11 +1379,14 @@ pub async fn on_body(robot: Robot) {
                         .as_str()
                         .is_some_and(|c| c != "unplugged");
                     if let Some(warn) = battery.update(percent, plugged_in) {
-                        tracing::info!(
-                            "battery {percent}% (plugged in: {plugged_in}): telling the agent"
-                        );
+                        tracing::info!("battery {percent}%: telling the agent");
                         robot.life.battery(warn, plugged_in);
                     }
+                    // The cable: news the moment it changes (not the first report after a start).
+                    if plugged.is_some_and(|was| was != plugged_in) {
+                        robot.power_changed(plugged_in, percent);
+                    }
+                    plugged = Some(plugged_in);
                     None
                 }
                 // A new connection reports the sensors afresh.
@@ -1473,10 +1569,12 @@ struct BatteryWatch {
 impl BatteryWatch {
     const LEVELS: [u32; 2] = [20, 10];
 
-    /// The percentage to report, if the agent should hear about it.
+    /// The percentage to report, if the agent should hear about it (low, and not plugged in;
+    /// being plugged in is `Nudge::Power`).
     fn update(&mut self, percent: u32, plugged_in: bool) -> Option<u32> {
         if plugged_in {
-            return self.warned_at.take().map(|_| percent);
+            self.warned_at = None;
+            return None;
         }
         if percent > Self::LEVELS[0] + 5 {
             self.warned_at = None; // charged up again without us noticing the plug
@@ -1798,14 +1896,18 @@ mod tests {
     }
 
     #[test]
-    fn battery_warns_twice_then_thanks_once() {
+    fn battery_warns_twice_and_starts_over_after_charging() {
         let mut b = BatteryWatch::default();
         assert_eq!(b.update(60, false), None);
         assert_eq!(b.update(20, false), Some(20));
         assert_eq!(b.update(19, false), None, "warned at this level already");
         assert_eq!(b.update(9, false), Some(9));
         assert_eq!(b.update(8, false), None);
-        assert_eq!(b.update(8, true), Some(8), "plugged in after a warning");
+        assert_eq!(
+            b.update(8, true),
+            None,
+            "plugged in: that is Nudge::Power's news"
+        );
         assert_eq!(b.update(30, true), None);
         // Unplugged at a high level: nothing to say. A plug without a warning: nothing either.
         assert_eq!(b.update(90, false), None);
