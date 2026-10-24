@@ -893,10 +893,25 @@ fn mood_note(info: &Value) -> String {
         i if i < 0.35 => "a little ",
         _ => "",
     };
+    // When it began, so an old cause does not read as happening now.
+    let minutes = m["for_minutes"].as_u64().unwrap_or(0);
+    let ago = match minutes {
+        0..=2 => String::new(),
+        3..=59 => format!(" {minutes} minutes ago"),
+        60..=119 => " an hour ago".into(),
+        _ => format!(" {} hours ago", minutes / 60),
+    };
     let why = m["why"]
         .as_str()
+        .map(|w| w.trim().trim_end_matches('.'))
         .filter(|w| !w.is_empty())
-        .map(|w| format!(", because {w}"))
+        .map(|w| {
+            if ago.is_empty() {
+                format!(", because: {w}")
+            } else {
+                format!(", since{ago}: {w}")
+            }
+        })
         .unwrap_or_default();
     format!(" (You feel {strength}{feeling}{why}.)")
 }

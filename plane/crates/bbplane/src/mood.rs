@@ -15,7 +15,7 @@ use chrono::Timelike;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-/// A feeling halves in strength this often.
+/// A feeling halves in strength this often (a surprise much sooner: see `Emotion::half_life`).
 const HALF_LIFE_MINUTES: f64 = 40.0;
 /// Weaker than this, it has faded: content again.
 const FADED: f32 = 0.15;
@@ -80,6 +80,15 @@ impl Emotion {
 
     pub fn wire(self) -> u8 {
         Emotion::ALL.iter().position(|e| *e == self).unwrap_or(0) as u8
+    }
+
+    /// Minutes for it to halve in strength: a startle is over in minutes, a mood lasts.
+    fn half_life(self) -> f64 {
+        match self {
+            Emotion::Surprised => 4.0,
+            Emotion::Excited => 15.0,
+            _ => HALF_LIFE_MINUTES,
+        }
     }
 
     /// Multiplier on the waits between its own ideas, at full strength.
@@ -233,7 +242,7 @@ impl Mood {
 
 fn now_from(felt: &Felt, now_ms: i64, hour: u32) -> Now {
     let minutes = ((now_ms - felt.since_ms).max(0) as f64) / 60_000.0;
-    let intensity = felt.intensity * 0.5f32.powf((minutes / HALF_LIFE_MINUTES) as f32);
+    let intensity = felt.intensity * 0.5f32.powf((minutes / felt.emotion.half_life()) as f32);
     if intensity >= FADED && felt.emotion != Emotion::Content {
         return Now {
             emotion: felt.emotion,
@@ -265,6 +274,26 @@ fn now_from(felt: &Felt, now_ms: i64, hour: u32) -> Now {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_surprise_is_over_in_minutes() {
+        let felt = |emotion| Felt {
+            emotion,
+            intensity: 0.6,
+            why: "picked up".into(),
+            since_ms: 0,
+            by_self: false,
+        };
+        let half_hour = 30 * 60_000;
+        assert_eq!(
+            now_from(&felt(Emotion::Surprised), half_hour, 14).emotion,
+            Emotion::Content
+        );
+        assert_eq!(
+            now_from(&felt(Emotion::Grumpy), half_hour, 14).emotion,
+            Emotion::Grumpy
+        );
+    }
 
     fn felt(emotion: Emotion, intensity: f32, minutes_ago: i64) -> Felt {
         Felt {
