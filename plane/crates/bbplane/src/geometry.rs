@@ -31,6 +31,9 @@ pub struct Optics {
     /// (the tracks run nearly as fast at half power); in between it is interpolated.
     pub cm_per_s_at_half: f64,
     pub cm_per_s_at_full: f64,
+    /// Turns are timed: this scales them to what it has seen them really do (learned while it
+    /// turns toward things, see `Robot::approach`).
+    pub turn_gain: f64,
 }
 
 impl Default for Optics {
@@ -44,6 +47,7 @@ impl Default for Optics {
             yaw_deg: 0.92,
             cm_per_s_at_half: 2.7,
             cm_per_s_at_full: 3.0,
+            turn_gain: 1.0,
         }
     }
 }
@@ -216,6 +220,7 @@ mod tests {
             yaw_deg: 0.0,
             cm_per_s_at_half: 20.0,
             cm_per_s_at_full: 30.0,
+            turn_gain: 1.0,
         }
     }
 

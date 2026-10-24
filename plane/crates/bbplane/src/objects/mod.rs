@@ -120,6 +120,11 @@ impl Objects {
         }
     }
 
+    /// When the detector last finished a frame.
+    pub fn analysed_at(&self) -> Option<Instant> {
+        self.view.lock().unwrap().at
+    }
+
     /// What the detector saw in a frame analysed after `t` (None until there is one).
     pub fn seen_after(&self, t: Instant) -> Option<Vec<Seen>> {
         let v = self.view.lock().unwrap();

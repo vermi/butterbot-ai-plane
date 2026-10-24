@@ -476,8 +476,14 @@ Ask to be unplugged first."
 
     /// Spin in place by roughly `degrees` (positive = clockwise/right). Open loop.
     pub async fn turn(&self, degrees: f64, speed: u8) -> Result<DriveOutcome> {
-        let speed = speed.clamp(30, 100) as f64;
-        let ms = (degrees.abs() / 180.0 * MS_PER_180_AT_FULL * (100.0 / speed)) as u64;
+        let speed = speed.clamp(30, 100);
+        // The tracks run nearly as fast at half power as at full (see `crate::geometry`), and
+        // `turn_gain` is what watching its own turns taught it.
+        let (slower, gain) = {
+            let o = self.optics.lock().unwrap();
+            (o.cm_per_s(100) / o.cm_per_s(speed), o.turn_gain)
+        };
+        let ms = (degrees.abs() / 180.0 * MS_PER_180_AT_FULL * slower * gain) as u64;
         let s = speed as i8;
         let (l, r) = if degrees >= 0.0 { (s, -s) } else { (-s, s) };
         self.drive_for(l, r, ms).await
@@ -761,15 +767,56 @@ Ask to be unplugged first."
             .map(|s| o.place_of_box(s.bbox, s.frame_width.into(), s.frame_height.into(), false))
     }
 
-    /// Wait (a little) for the detectors to look at a frame taken after `t`.
+    /// Wait (a little) for the detectors to look at a frame taken after `t`. The first frame
+    /// they finish after a move was usually taken during it (blurred, in a dim room), so it is
+    /// the second.
     async fn fresh_view(&self, t: std::time::Instant) {
-        let t = tokio::time::Instant::from_std(t);
-        for _ in 0..30 {
-            if self.objects.seen_after(t).is_some() {
-                return;
+        let mut since = tokio::time::Instant::from_std(t);
+        for _ in 0..2 {
+            for _ in 0..30 {
+                if let Some(at) = self.objects.analysed_at().filter(|at| *at > since) {
+                    since = at;
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
         }
+    }
+
+    /// A turn of `wanted` degrees turned it `turned` (as seen by the camera): adjust `turn_gain`
+    /// a little toward what would have been right, and keep it.
+    fn learn_turn(&self, wanted: f64, turned: f64) {
+        if wanted.abs() < 3.0 {
+            return;
+        }
+        let mut o = self.optics.lock().unwrap();
+        // Hardly turned (the start of a move is lost to the motors) or the wrong way: more.
+        let right = if turned * wanted <= 0.0 || turned.abs() < 1.0 {
+            o.turn_gain * 1.5
+        } else {
+            o.turn_gain * wanted / turned
+        };
+        let before = o.turn_gain;
+        o.turn_gain = (0.7 * before + 0.3 * right).clamp(0.3, 4.0);
+        tracing::info!(
+            "turn: wanted {wanted:.0}°, turned {turned:.0}°: gain {before:.2} -> {:.2}",
+            o.turn_gain
+        );
+        if let Err(e) = o.save(&self.hub.config.data_dir()) {
+            tracing::debug!("optics: {e:#}");
+        }
+    }
+
+    /// `find`, giving the detectors a couple more frames if it is not there (a pet walks past,
+    /// a frame is blurred, the detector misses it once).
+    async fn find_again(&self, what: &str) -> Option<crate::geometry::Place> {
+        for _ in 0..3 {
+            if let Some(p) = self.find(what) {
+                return Some(p);
+            }
+            self.fresh_view(std::time::Instant::now()).await;
+        }
+        None
     }
 
     /// Go up to `what` (see `find`), in short legs, facing it again with the camera before each,
@@ -780,28 +827,40 @@ Ask to be unplugged first."
         const SPEED: u8 = 100;
         const MAX_LEG_S: f64 = 5.0;
         const LEGS: usize = 24;
+        const MAX_TURN_STEP: f64 = 25.0;
         const AHEAD_DEG: f64 = 6.0;
         use crate::geometry::Judged;
         self.set_doing(&format!("going to {what}"), Duration::from_secs(30));
         let mut driven = 0.0;
         for leg in 0..LEGS {
-            let Some(mut place) = self.find(what) else {
+            let Some(mut place) = (if leg == 0 {
+                self.find(what)
+            } else {
+                self.find_again(what).await
+            }) else {
                 return Ok(if leg == 0 {
                     format!("You don't see {what} right now (look, or turn, and try again).")
                 } else {
                     format!("Lost sight of {what} after driving about {driven:.0} cm.")
                 });
             };
-            if place.bearing_deg.abs() > AHEAD_DEG {
-                let out = self.turn(place.bearing_deg, 60).await?;
+            // Face it: turns are open loop, so check how far each one went and learn from it.
+            for _ in 0..4 {
+                if place.bearing_deg.abs() <= AHEAD_DEG {
+                    break;
+                }
+                // In steps, so it cannot leave the picture on an overshoot.
+                let wanted = place.bearing_deg.clamp(-MAX_TURN_STEP, MAX_TURN_STEP);
+                let out = self.turn(wanted, 100).await?;
                 if let Some(why) = out.stopped_early {
                     return Ok(format!("Stopped while turning ({why})."));
                 }
                 self.fresh_view(std::time::Instant::now()).await;
-                match self.find(what) {
-                    Some(p) => place = p,
-                    None => return Ok(format!("Turned toward {what}, then lost sight of it.")),
-                }
+                let Some(now) = self.find_again(what).await else {
+                    return Ok(format!("Turned toward {what}, then lost sight of it."));
+                };
+                self.learn_turn(wanted, place.bearing_deg - now.bearing_deg);
+                place = now;
             }
             let left = place.distance_cm.map(|d| d - stop_cm);
             let arrived = match (place.judged_by, left) {
