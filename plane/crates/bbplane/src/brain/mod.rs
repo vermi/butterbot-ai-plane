@@ -266,6 +266,15 @@ pub fn tools() -> Vec<Value> {
             &[],
         ),
         f(
+            "rename_thing",
+            "Teach your object detector what something in this home really is, when it keeps getting it wrong (it calls the fireplace a refrigerator): seen_as is what it says, is what it really is (empty: ignore that kind here). It applies everywhere, so only for kinds that are always wrong here.",
+            json!({
+                "seen_as": { "type": "string", "description": "the detector's name for it" },
+                "is": { "type": "string", "description": "what it really is, or empty" },
+            }),
+            &["seen_as", "is"],
+        ),
+        f(
             "recall",
             "Search everything you know by meaning: your memories (old ones too), your diary, and past days (who came by, what was said, your dreams). Use it when something might have come up before.",
             json!({ "query": { "type": "string", "description": "what to recall, in a few words" } }),
@@ -510,6 +519,17 @@ pub async fn run_tool(robot: &Robot, cfg: &BrainConfig, name: &str, args: &Value
                     .diary
                     .write(day, args["text"].as_str().unwrap_or_default())?;
                 Outcome::Text(format!("Written for {day}."))
+            }
+            "rename_thing" => {
+                let seen_as = args["seen_as"].as_str().unwrap_or_default();
+                let is = args["is"].as_str().unwrap_or_default();
+                match robot.objects.rename(seen_as, is) {
+                    Ok(()) if is.trim().is_empty() => {
+                        Outcome::Text(format!("Ignoring {seen_as} from now on."))
+                    }
+                    Ok(()) => Outcome::Text(format!("From now on, a {seen_as} is a {is}.")),
+                    Err(e) => Outcome::Text(format!("{e:#}")),
+                }
             }
             "locate" => {
                 let v = match (args["x"].as_f64(), args["y"].as_f64()) {

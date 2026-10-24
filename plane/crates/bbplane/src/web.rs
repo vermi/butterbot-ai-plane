@@ -69,6 +69,7 @@ pub fn router(robot: Robot) -> Router {
         .route("/api/diary/{day}", get(diary_day))
         .route("/api/restart", post(restart))
         .route("/api/recall", get(recall))
+        .route("/api/objects/names", get(object_names).post(rename_object))
         .route("/api/optics", get(optics).post(set_optics))
         .route("/api/optics/calibrate", post(calibrate_optics))
         .route("/api/optics/speed", post(measure_speed))
@@ -500,6 +501,24 @@ struct RecallQuery {
 async fn recall(State(r): State<Robot>, Query(q): Query<RecallQuery>) -> Response {
     match r.recall.search(&r, &q.q, 8, 0.0, &[]).await {
         Ok(hits) => Json(json!({ "pieces": r.recall.len(), "hits": hits })).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+/// What the object detector's names are corrected to in this home.
+async fn object_names(State(r): State<Robot>) -> Json<Value> {
+    Json(json!({ "names": r.objects.names() }))
+}
+
+#[derive(Deserialize)]
+struct RenameBody {
+    seen_as: String,
+    is: String,
+}
+
+async fn rename_object(State(r): State<Robot>, Json(b): Json<RenameBody>) -> Response {
+    match r.objects.rename(&b.seen_as, &b.is) {
+        Ok(()) => Json(json!({ "names": r.objects.names() })).into_response(),
         Err(e) => err(e),
     }
 }

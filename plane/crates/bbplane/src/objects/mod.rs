@@ -89,6 +89,23 @@ pub struct Objects {
     /// When and why loading the model last failed.
     load_failure: Mutex<Option<(Instant, String)>>,
     view: Mutex<View>,
+    /// What this home's things really are, where the detector keeps getting one wrong (the
+    /// fireplace is no refrigerator): detector class -> name, empty to ignore it. Kept in
+    /// `object_names.json`.
+    names: Mutex<HashMap<String, String>>,
+    names_path: PathBuf,
+}
+
+/// A name for good: the names are few, and set rarely.
+fn intern(name: &str) -> &'static str {
+    static NAMES: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+    let mut names = NAMES.lock().unwrap();
+    if let Some(n) = names.iter().find(|n| **n == name) {
+        return n;
+    }
+    let n: &'static str = Box::leak(name.to_string().into_boxed_str());
+    names.push(n);
+    n
 }
 
 impl Objects {
@@ -101,6 +118,11 @@ impl Objects {
                 );
             }
         }
+        let names_path = hub.config.data_dir().join("object_names.json");
+        let names = std::fs::read(&names_path)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
         Objects {
             cfg,
             pets: !hub.config.life.pets.is_empty(),
@@ -108,7 +130,33 @@ impl Objects {
             engine: OnceCell::new(),
             load_failure: Mutex::new(None),
             view: Mutex::new(View::default()),
+            names: Mutex::new(names),
+            names_path,
         }
+    }
+
+    /// From now on, call what the detector sees as `seen_as` `is` instead (empty: ignore it).
+    pub fn rename(&self, seen_as: &str, is: &str) -> Result<()> {
+        let seen_as = seen_as.trim().to_lowercase();
+        if !engine::CLASSES.contains(&seen_as.as_str()) {
+            bail!(
+                "the detector has no \"{seen_as}\"; it knows: {}",
+                engine::CLASSES.join(", ")
+            );
+        }
+        let is = is.trim().to_lowercase();
+        let mut names = self.names.lock().unwrap();
+        if is == seen_as {
+            names.remove(&seen_as);
+        } else {
+            names.insert(seen_as, is);
+        }
+        std::fs::write(&self.names_path, serde_json::to_vec_pretty(&*names)?)?;
+        Ok(())
+    }
+
+    pub fn names(&self) -> HashMap<String, String> {
+        self.names.lock().unwrap().clone()
     }
 
     /// Objects in the latest analysed frame (empty if that is stale).
@@ -199,14 +247,22 @@ impl Objects {
         })
         .await
         .map_err(|e| anyhow!("object detection panicked: {e}"))??;
+        let names = self.names();
         let seen: Vec<Seen> = dets
             .into_iter()
-            .map(|d| Seen {
-                class: d.class,
-                score: d.score,
-                bbox: d.bbox,
-                frame_width: frame.width,
-                frame_height: frame.height,
+            .filter_map(|d| {
+                let class = match names.get(d.class) {
+                    Some(n) if n.is_empty() => return None,
+                    Some(n) => intern(n),
+                    None => d.class,
+                };
+                Some(Seen {
+                    class,
+                    score: d.score,
+                    bbox: d.bbox,
+                    frame_width: frame.width,
+                    frame_height: frame.height,
+                })
             })
             .collect();
         let mut v = self.view.lock().unwrap();
