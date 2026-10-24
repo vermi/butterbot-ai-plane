@@ -75,6 +75,11 @@ pub async fn serve(hub: Arc<Hub>, sock: UdpSocket) -> Result<()> {
                     }
                     let id = hub.next_id();
                     hub.send(ToRobot::Ping { id, ts: now_ms() }).await.ok();
+                    // Until it has said who it is: the first request may have been lost, and
+                    // without its mode the agent never starts.
+                    if hub.status.lock().await.fw.is_none() {
+                        hub.send(ToRobot::Hello).await.ok();
+                    }
                 }
             }
         }
