@@ -695,6 +695,7 @@ void LinkService::handleCtrl(const char* json, size_t len){
 		// The plane (re)started while we were connected: introduce ourselves again.
 		sendHello();
 		sendStatusSnapshot();
+		proximityWanted = true;
 		cJSON_Delete(root);
 		return;
 	}

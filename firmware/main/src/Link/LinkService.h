@@ -154,6 +154,8 @@ public:
 	 */
 	void setAiAuto(bool on){ aiAuto = on; }
 	bool isAiAuto() const { return aiAuto; }
+	/** The plane (re)started and wants the sensors afresh; RemoteState asks the base board. */
+	bool takeProximityWanted(){ return proximityWanted.exchange(false); }
 	/** The next AI mode start is such a retry: no announcement, and no complaint if it fails. */
 	void setQuietStart(bool on){ quietStart = on; }
 	bool takeQuietStart(){ return quietStart.exchange(false); }
@@ -234,6 +236,7 @@ private:
 	std::atomic_bool aiOnIdle = false;
 	std::atomic_bool aiAuto = false;
 	std::atomic_bool quietStart = false;
+	std::atomic_bool proximityWanted = false;
 	const char* lastStartFailure = "";
 	std::atomic<uint64_t> hushedAt = 0;
 	uint64_t lastRx = 0;

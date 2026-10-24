@@ -551,11 +551,7 @@ pub async fn run_tool(robot: &Robot, cfg: &BrainConfig, name: &str, args: &Value
                         "battery_percent": battery["pct"],
                         "plugged_in": battery["charging"].as_str().map(|c| c != "unplugged"),
                         "charging": battery["charging"],
-                        "on_the_floor": s
-                            .proximity
-                            .as_ref()
-                            .and_then(|p| p["bottom"].as_str())
-                            .map(|b| b == "covered"),
+                        "on_the_floor": robot.on_the_floor(),
                         "add_on_cards": cards,
                         "local_time": chrono::Local::now().format("%A %H:%M").to_string(),
                     })

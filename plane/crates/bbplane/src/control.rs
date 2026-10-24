@@ -88,6 +88,8 @@ pub struct Robot {
     /// The robot is driving (or just stopped) until then: the jolts are its own, not someone
     /// handling it.
     moving_until: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
+    /// Picked up (a confirmed lift, see `FloorWatch`) and not put down since.
+    lifted: Arc<std::sync::atomic::AtomicBool>,
     /// Camera and mic state last asked for, restored when the link comes back.
     streams: Arc<Mutex<Streams>>,
     /// Set while the plane itself is waking the robot: the caller is about to use it, so
@@ -151,6 +153,7 @@ impl Robot {
             speaker: Default::default(),
             drive: Default::default(),
             moving_until: Default::default(),
+            lifted: Default::default(),
             hushes: Default::default(),
             manual_override: Default::default(),
             summon: Default::default(),
@@ -436,6 +439,26 @@ Ask to be unplugged first."
         if m.is_none_or(|t| t < until) {
             *m = Some(until);
         }
+    }
+
+    /// On the floor, as far as it can tell: no lift felt since it was last put down (the bottom
+    /// sensor alone flickers, and has no reading at all after a plane restart).
+    pub fn on_the_floor(&self) -> bool {
+        !self.lifted.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn handled(&self, how: &str) {
+        tracing::info!("handled: {how}");
+        match how {
+            "pickup" => self
+                .lifted
+                .store(true, std::sync::atomic::Ordering::Relaxed),
+            "putdown" => self
+                .lifted
+                .store(false, std::sync::atomic::Ordering::Relaxed),
+            _ => {}
+        }
+        self.life.handled(how);
     }
 
     pub fn is_moving(&self) -> bool {
@@ -990,6 +1013,8 @@ goodbye). Say bye and keep listening."
                 .then(|| format!("{:?}", crate::light::state(self)).to_lowercase()),
             "mood": self.mood.for_agent(),
             "doing": self.doing(),
+            "on_the_floor": self.on_the_floor(),
+            "napping": self.life.napping(),
         })
     }
 }
@@ -1353,8 +1378,7 @@ pub async fn on_body(robot: Robot) {
         };
         let events = robot.hub.events_since(cursor, wait).await;
         if let Some(how) = floor.tick(std::time::Instant::now(), robot.is_moving()) {
-            tracing::info!("handled: {how}");
-            robot.life.handled(how);
+            robot.handled(how);
         }
         for e in events {
             cursor = e.seq;
@@ -1407,6 +1431,9 @@ pub async fn on_body(robot: Robot) {
                 // A new connection reports the sensors afresh.
                 "link" => {
                     floor = FloorWatch::default();
+                    robot
+                        .lifted
+                        .store(false, std::sync::atomic::Ordering::Relaxed);
                     None
                 }
                 _ => None,
@@ -1416,8 +1443,7 @@ pub async fn on_body(robot: Robot) {
             if robot.is_moving() {
                 continue;
             }
-            tracing::info!("handled: {how}");
-            robot.life.handled(&how);
+            robot.handled(&how);
         }
     }
 }

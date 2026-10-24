@@ -210,6 +210,11 @@ void RemoteState::tick(float deltaTime){
 	}
 	showLed();
 
+	// A restarted plane has no sensor readings yet (BaseBoard is only called from this thread).
+	if(link->takeProximityWanted()){
+		base->requestProximityState();
+	}
+
 	// The battery moves on between the plane's updates.
 	if(millis() - homeSentAt >= HomeRefreshMs){
 		HomeInfo::send();
