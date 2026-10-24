@@ -25,19 +25,25 @@ pub struct Optics {
     pub height_cm: f64,
     /// How far the camera looks down from level, degrees (negative: up).
     pub tilt_down_deg: f64,
-    /// Forward speed at full motor speed, centimetres a second (assumed to scale with speed).
+    /// How far right of straight ahead the camera points, degrees (negative: left).
+    pub yaw_deg: f64,
+    /// Forward speed at motor speed 50 and 100, centimetres a second. It is far from proportional
+    /// (the tracks run nearly as fast at half power); in between it is interpolated.
+    pub cm_per_s_at_half: f64,
     pub cm_per_s_at_full: f64,
 }
 
 impl Default for Optics {
     fn default() -> Self {
-        // Measured on a ButterBot (lens centre 9 cm up; a thing 1 m ahead and 3.8 cm left); a guess
-        // at the speed, until measured.
+        // Measured on a ButterBot (OV3660): lens centre 9 cm up; two things 1 m ahead, 3.8 cm left
+        // and 20.3 cm right; 4 cm in 1.5 s at half power, 4.5 cm at full.
         Optics {
-            hfov_deg: 57.0,
+            hfov_deg: 72.8,
             height_cm: 9.0,
-            tilt_down_deg: 0.5,
-            cm_per_s_at_full: 25.0,
+            tilt_down_deg: -1.07,
+            yaw_deg: 0.92,
+            cm_per_s_at_half: 2.7,
+            cm_per_s_at_full: 3.0,
         }
     }
 }
@@ -66,6 +72,11 @@ impl Optics {
 
     /// Degrees to turn to face column `x` (positive: right).
     pub fn bearing(&self, x: f64, width: f64) -> f64 {
+        self.off_axis(x, width) + self.yaw_deg
+    }
+
+    /// How far from the camera's own axis column `x` looks, degrees.
+    fn off_axis(&self, x: f64, width: f64) -> f64 {
         ((x - width / 2.0) / self.focal(width)).atan().to_degrees()
     }
 
@@ -74,7 +85,7 @@ impl Optics {
         self.tilt_down_deg + ((y - height / 2.0) / self.focal(width)).atan().to_degrees()
     }
 
-    /// Distance along the floor to where row `y` meets it, if it is not too far.
+    /// How far ahead (along the camera's axis) row `y` meets the floor, if it is not too far.
     pub fn floor_distance(&self, y: f64, width: f64, height: f64) -> Option<f64> {
         let dip = self.dip(y, width, height);
         (dip >= MIN_DIP_DEG)
@@ -104,7 +115,11 @@ impl Optics {
                 judged_by: Some(Judged::CloserThan),
             };
         }
-        let distance_cm = self.floor_distance(bottom, width, height);
+        // Off to the side, it is further than it is ahead.
+        let aside = self.off_axis(x + w / 2.0, width).to_radians().cos();
+        let distance_cm = self
+            .floor_distance(bottom, width, height)
+            .map(|d| d / aside);
         Place {
             bearing_deg,
             distance_cm,
@@ -116,7 +131,10 @@ impl Optics {
     pub fn place_of_point(&self, fx: f64, fy: f64) -> Place {
         // Any frame size will do: only the ratio matters.
         let (width, height) = (640.0, 480.0);
-        let distance_cm = self.floor_distance(fy * height, width, height);
+        let aside = self.off_axis(fx * width, width).to_radians().cos();
+        let distance_cm = self
+            .floor_distance(fy * height, width, height)
+            .map(|d| d / aside);
         Place {
             bearing_deg: self.bearing(fx * width, width),
             distance_cm,
@@ -124,9 +142,21 @@ impl Optics {
         }
     }
 
+    /// Forward speed at motor speed `speed` (1..100), centimetres a second. Below 20 the tracks
+    /// hardly move.
+    pub fn cm_per_s(&self, speed: u8) -> f64 {
+        let s = f64::from(speed.clamp(1, 100));
+        if s >= 50.0 {
+            self.cm_per_s_at_half
+                + (self.cm_per_s_at_full - self.cm_per_s_at_half) * (s - 50.0) / 50.0
+        } else {
+            (self.cm_per_s_at_half * (s - 20.0) / 30.0).max(0.1)
+        }
+    }
+
     /// Seconds of driving at `speed` (1..100) to cover `cm`.
     pub fn drive_secs(&self, cm: f64, speed: u8) -> f64 {
-        cm.max(0.0) / (self.cm_per_s_at_full * f64::from(speed.clamp(1, 100)) / 100.0)
+        cm.max(0.0) / self.cm_per_s(speed)
     }
 
     /// The tilt that puts the bottom of a box at row `y` at `distance_cm` along the floor.
@@ -136,13 +166,19 @@ impl Optics {
         self.tilt_down_deg = true_dip - in_frame;
     }
 
-    /// The speed that took it from `before_cm` to `after_cm` in `secs` at `speed`.
+    /// The speed that took it from `before_cm` to `after_cm` in `secs` at `speed` (kept as the
+    /// half or the full speed, whichever is nearer).
     pub fn speed_from(&mut self, before_cm: f64, after_cm: f64, secs: f64, speed: u8) -> bool {
         let covered = before_cm - after_cm;
         if covered <= 1.0 || secs <= 0.0 {
             return false;
         }
-        self.cm_per_s_at_full = covered / secs * 100.0 / f64::from(speed.clamp(1, 100));
+        let v = covered / secs;
+        if speed >= 75 {
+            self.cm_per_s_at_full = v;
+        } else {
+            self.cm_per_s_at_half = v;
+        }
         true
     }
 }
@@ -177,8 +213,25 @@ mod tests {
             hfov_deg: 60.0,
             height_cm: 10.0,
             tilt_down_deg: 0.0,
-            cm_per_s_at_full: 20.0,
+            yaw_deg: 0.0,
+            cm_per_s_at_half: 20.0,
+            cm_per_s_at_full: 30.0,
         }
+    }
+
+    #[test]
+    fn the_measured_optics_put_both_things_where_they_were() {
+        // The calibration shots: 640x480, bottoms at row 287, 1 m ahead.
+        let o = Optics::default();
+        let left = o.place_of_box([290.0, 260.0, 13.0, 27.25], 640.0, 480.0, false);
+        let right = o.place_of_box([395.0, 240.0, 12.0, 47.25], 640.0, 480.0, false);
+        assert!((left.bearing_deg - (-2.18)).abs() < 0.3, "{left:?}");
+        assert!((right.bearing_deg - 11.49).abs() < 0.3, "{right:?}");
+        assert!((left.distance_cm.unwrap() - 100.0).abs() < 5.0, "{left:?}");
+        assert!(
+            (right.distance_cm.unwrap() - 102.0).abs() < 5.0,
+            "{right:?}"
+        );
     }
 
     #[test]
@@ -211,8 +264,13 @@ mod tests {
         o.calibrate_tilt(400.0, 640.0, 480.0, 50.0);
         assert!((o.floor_distance(400.0, 640.0, 480.0).unwrap() - 50.0).abs() < 1e-6);
         assert!(o.speed_from(80.0, 50.0, 1.5, 50));
-        assert!((o.cm_per_s_at_full - 40.0).abs() < 1e-9);
+        assert!((o.cm_per_s_at_half - 20.0).abs() < 1e-9);
         assert!((o.drive_secs(40.0, 50) - 2.0).abs() < 1e-9);
+        assert!(
+            (o.cm_per_s(75) - 25.0).abs() < 1e-9,
+            "between half and full"
+        );
+        assert!((o.cm_per_s(35) - 10.0).abs() < 1e-9, "slower below half");
         assert!(!o.speed_from(50.0, 52.0, 1.0, 50), "it did not get closer");
     }
 

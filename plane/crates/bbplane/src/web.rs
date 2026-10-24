@@ -515,6 +515,8 @@ struct OpticsBody {
     hfov_deg: Option<f64>,
     height_cm: Option<f64>,
     tilt_down_deg: Option<f64>,
+    yaw_deg: Option<f64>,
+    cm_per_s_at_half: Option<f64>,
     cm_per_s_at_full: Option<f64>,
 }
 
@@ -530,7 +532,13 @@ async fn set_optics(State(r): State<Robot>, Json(b): Json<OpticsBody>) -> Respon
         if let Some(v) = b.tilt_down_deg.filter(|v| (-45.0..=60.0).contains(v)) {
             o.tilt_down_deg = v;
         }
-        if let Some(v) = b.cm_per_s_at_full.filter(|v| (1.0..=200.0).contains(v)) {
+        if let Some(v) = b.yaw_deg.filter(|v| (-20.0..=20.0).contains(v)) {
+            o.yaw_deg = v;
+        }
+        if let Some(v) = b.cm_per_s_at_half.filter(|v| (0.5..=200.0).contains(v)) {
+            o.cm_per_s_at_half = v;
+        }
+        if let Some(v) = b.cm_per_s_at_full.filter(|v| (0.5..=200.0).contains(v)) {
             o.cm_per_s_at_full = v;
         }
         *o

@@ -775,9 +775,11 @@ Ask to be unplugged first."
     /// Go up to `what` (see `find`), in short legs, facing it again with the camera before each,
     /// and stop about `stop_cm` short. Returns what happened.
     pub async fn approach(&self, what: &str, stop_cm: f64) -> Result<String> {
-        const SPEED: u8 = 50;
-        const MAX_LEG_CM: f64 = 60.0;
-        const LEGS: usize = 8;
+        // It is slow (a few cm a second): full power, legs of at most `MAX_LEG_S`, facing the
+        // target again between them.
+        const SPEED: u8 = 100;
+        const MAX_LEG_S: f64 = 5.0;
+        const LEGS: usize = 24;
         const AHEAD_DEG: f64 = 6.0;
         use crate::geometry::Judged;
         self.set_doing(&format!("going to {what}"), Duration::from_secs(30));
@@ -813,7 +815,8 @@ Ask to be unplugged first."
                     place.distance_cm.unwrap_or(stop_cm)
                 ));
             }
-            let leg_cm = left.unwrap_or(MAX_LEG_CM).clamp(5.0, MAX_LEG_CM);
+            let max_leg_cm = MAX_LEG_S * self.optics.lock().unwrap().cm_per_s(SPEED);
+            let leg_cm = left.unwrap_or(max_leg_cm).clamp(1.0, max_leg_cm);
             let secs = self.optics.lock().unwrap().drive_secs(leg_cm, SPEED);
             let out = self
                 .drive_for(SPEED as i8, SPEED as i8, (secs * 1000.0) as u64)
@@ -847,7 +850,7 @@ Ask to be unplugged first."
         };
         let cm = (d - stop_cm).max(0.0);
         let out = self
-            .drive_for(50, 50, (o.drive_secs(cm, 50) * 1000.0) as u64)
+            .drive_for(100, 100, (o.drive_secs(cm, 100) * 1000.0) as u64)
             .await?;
         Ok(match out.stopped_early {
             Some(why) => format!("Turned {:.0} degrees, then stopped ({why}).", p.bearing_deg),
@@ -1619,9 +1622,9 @@ fn place_json(o: &crate::geometry::Optics, what: &str, p: &crate::geometry::Plac
     if let Some(d) = p.distance_cm
         && p.judged_by != Some(Judged::CloserThan)
     {
-        // To stop about 30 cm short at `move` speed 50.
-        v["drive_seconds_at_speed_50"] =
-            ((o.drive_secs(d - 30.0, 50) * 10.0).round() / 10.0).into();
+        // To stop about 30 cm short with `move` at full speed.
+        v["drive_seconds_at_full_speed"] =
+            ((o.drive_secs(d - 30.0, 100) * 10.0).round() / 10.0).into();
     }
     v
 }

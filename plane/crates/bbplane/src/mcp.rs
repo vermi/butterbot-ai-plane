@@ -858,7 +858,7 @@ at \"HH:MM\") or some day (neither). Timed plans come back from `hear` as a `pla
 
     #[tool(
         description = "Where things are: for everything the detectors see now (faces, pets, objects), its direction \
-(degrees to turn, positive right), distance along the floor, and seconds of move at speed 50 to get there. \
+(degrees to turn, positive right), distance along the floor, and seconds of move at full speed to get there (about 3 cm a second). \
 Instant. With x and y (percent of the last picture), where that spot on the floor is."
     )]
     async fn locate(

@@ -247,7 +247,7 @@ pub fn tools() -> Vec<Value> {
         ),
         f(
             "locate",
-            "Where things are: for everything your camera's detectors see right now (faces, pets, objects), which way it is (degrees to turn, positive right), how far along the floor, and how many seconds of move (speed 50) get you there. Instant: no new picture. With x and y (percent across and down your last picture), where that spot on the floor is.",
+            "Where things are: for everything your camera's detectors see right now (faces, pets, objects), which way it is (degrees to turn, positive right), how far along the floor, and how many seconds of move at full speed get you there (you are slow: about 3 cm a second). Instant: no new picture. With x and y (percent across and down your last picture), where that spot on the floor is.",
             json!({
                 "x": { "type": "number", "description": "percent across the picture, 0 left to 100 right" },
                 "y": { "type": "number", "description": "percent down the picture, 0 top to 100 bottom" },
