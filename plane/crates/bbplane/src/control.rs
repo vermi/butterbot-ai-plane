@@ -1552,14 +1552,22 @@ impl Robot {
                 || self.ears.heard_speech_within(COMPANY);
             let tethered = self.tethered().await;
             self.life.set_tethered(tethered);
-            // On the charger, and nothing going on: a nap. Asleep, now and then a dream.
+            // On the charger: a nap, a little while after it was plugged in or last talked to
+            // (people talking nearby, a bark or an idle thought do not keep it up). Already on the
+            // charger when the plane started: straight back to sleep. Asleep, now and then a dream.
+            let talked_lately = self
+                .talk
+                .lock()
+                .unwrap()
+                .1
+                .is_some_and(|t| t.elapsed() < NAP_AFTER);
             if self.hub.config.life.nap_when_charging
                 && !self.life.napping()
                 && self.life.focused().is_none()
                 && self.plugged_in().await == Some(true)
-                && self.life.quiet_for() >= NAP_AFTER
+                && self.life.plugged_for().is_none_or(|d| d >= NAP_AFTER)
+                && !talked_lately
                 && !self.ears.window_open()
-                && !self.ears.heard_speech_within(NAP_AFTER)
             {
                 self.start_nap();
             }
@@ -1576,7 +1584,14 @@ impl Robot {
             }
             if let Some(n) = self.life.poll(company) {
                 // A poke or an alarm in its sleep: awake.
-                let woke = self.life.wake();
+                let woke = if matches!(
+                    n,
+                    crate::life::Nudge::Poked | crate::life::Nudge::Heard { .. }
+                ) {
+                    self.life.wake()
+                } else {
+                    None
+                };
                 if woke.is_some() {
                     self.woke();
                 }

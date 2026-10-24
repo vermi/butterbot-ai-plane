@@ -188,6 +188,8 @@ struct State {
     /// Plugged in and not allowed to drive: no ideas that need moving.
     tethered: bool,
     power: Option<PowerNews>,
+    /// When it was last plugged in (None: not since the plane started).
+    plugged_at: Option<Instant>,
     /// Asleep on the charger (see `Life::nap`).
     nap: Option<Nap>,
     /// This charge's naps: time asleep in all, dreams had and dreams started.
@@ -229,6 +231,7 @@ impl Life {
             mood_pace: 1.0,
             tethered: false,
             power: None,
+            plugged_at: None,
             nap: None,
             slept: Duration::ZERO,
             dreams: Vec::new(),
@@ -325,6 +328,7 @@ impl Life {
         let focused = self.focused().is_some();
         let mut s = self.state.lock().unwrap();
         wake(&self.cfg, &mut s);
+        s.plugged_at = plugged_in.then(Instant::now);
         let (slept, dreams, remembered) = if plugged_in {
             (Duration::ZERO, Vec::new(), Vec::new())
         } else {
@@ -419,6 +423,11 @@ impl Life {
     /// A dream it had (told when it wakes up unplugged).
     pub fn dreamt(&self, dream: String) {
         self.state.lock().unwrap().dreams.push(dream);
+    }
+
+    /// How long since it was plugged in, if that happened since the plane started.
+    pub fn plugged_for(&self) -> Option<Duration> {
+        self.state.lock().unwrap().plugged_at.map(|t| t.elapsed())
     }
 
     /// How long nothing has happened (no talk, no nudge).
