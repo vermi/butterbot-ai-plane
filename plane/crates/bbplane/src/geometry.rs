@@ -31,12 +31,12 @@ pub struct Optics {
 
 impl Default for Optics {
     fn default() -> Self {
-        // OV2640 with the usual lens; the lens centre measured on the robot; a guess at the speed,
-        // until measured.
+        // Measured on a ButterBot (lens centre 9 cm up; a thing 1 m ahead and 3.8 cm left); a guess
+        // at the speed, until measured.
         Optics {
-            hfov_deg: 54.0,
+            hfov_deg: 57.0,
             height_cm: 9.0,
-            tilt_down_deg: 0.0,
+            tilt_down_deg: 0.5,
             cm_per_s_at_full: 25.0,
         }
     }
