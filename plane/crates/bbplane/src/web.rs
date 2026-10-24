@@ -68,6 +68,7 @@ pub fn router(robot: Robot) -> Router {
         .route("/api/tell", post(tell))
         .route("/api/diary/{day}", get(diary_day))
         .route("/api/restart", post(restart))
+        .route("/api/recall", get(recall))
         .route(
             "/api/ota",
             get(ota_status)
@@ -483,6 +484,19 @@ async fn ota_start(State(r): State<Robot>, body: Bytes) -> Response {
     let (build, version) = (image.build.clone(), image.version.clone());
     match crate::ota::start(&r, image) {
         Ok(()) => Json(json!({ "ok": true, "build": build, "version": version })).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct RecallQuery {
+    q: String,
+}
+
+/// What a phrase brings to his mind (`crate::recall`), with how close each piece is.
+async fn recall(State(r): State<Robot>, Query(q): Query<RecallQuery>) -> Response {
+    match r.recall.search(&r, &q.q, 8, 0.0, &[]).await {
+        Ok(hits) => Json(json!({ "pieces": r.recall.len(), "hits": hits })).into_response(),
         Err(e) => err(e),
     }
 }

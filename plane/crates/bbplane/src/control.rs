@@ -68,6 +68,8 @@ pub struct Robot {
     pub intentions: Arc<crate::intentions::Intentions>,
     /// Its diary (see `crate::diary`).
     pub diary: Arc<crate::diary::Diary>,
+    /// Everything it knows, searchable by meaning (see `crate::recall`).
+    pub recall: Arc<crate::recall::Recall>,
     /// The Apple TV (see `crate::appletv`).
     pub appletv: Arc<crate::appletv::AppleTv>,
     /// Who is talking, by voice (see `crate::voices`).
@@ -133,6 +135,7 @@ impl Robot {
             mood: Arc::new(crate::mood::Mood::load(&hub.config.data_dir())),
             intentions: Arc::new(crate::intentions::Intentions::load(&hub.config.data_dir())),
             diary: Arc::new(crate::diary::Diary::load(&hub.config.data_dir())),
+            recall: Arc::new(crate::recall::Recall::load(&hub.config.data_dir())),
             appletv: Arc::new(crate::appletv::AppleTv::new(&hub.config.data_dir())),
             voices: Arc::new(crate::voices::Voices::load(&hub.config.data_dir())),
             ears: Arc::new(crate::ears::Ears::new(hub.clone())),
@@ -1112,6 +1115,9 @@ impl Robot {
                 if let Some(d) = woke {
                     info["woke_from_nap_minutes"] = (d.as_secs() / 60).into();
                 }
+                if let Some(m) = self.recall.brings_to_mind(self, &c.text).await {
+                    info["brings_to_mind"] = m;
+                }
                 let image = if want_image { frame().await } else { None };
                 self.light.thinking();
                 return Ok(AgentEvent::Command { info, image });
@@ -1236,6 +1242,13 @@ impl Robot {
                 let robot = self.clone();
                 tokio::spawn(async move { crate::brain::dream::dream(&robot).await });
             }
+            if self.life.upkeep_due() {
+                let robot = self.clone();
+                tokio::spawn(async move {
+                    let kept = crate::brain::sleep::upkeep(&robot).await;
+                    robot.life.kept_in_sleep(kept);
+                });
+            }
             if let Some(n) = self.life.poll(company) {
                 // A poke or an alarm in its sleep: awake.
                 let woke = self.life.wake();
@@ -1283,6 +1296,12 @@ impl Robot {
                     info["owner_in_view"] =
                         names.iter().any(|n| n.eq_ignore_ascii_case(&owner)).into();
                 }
+                // Someone it knows: what it remembers of them.
+                if let crate::life::Nudge::Arrived { name } = &n
+                    && let Some(m) = self.recall.brings_to_mind(self, name).await
+                {
+                    info["brings_to_mind"] = m;
+                }
                 // Nudges are about the surroundings: show them. Being handled is not, and a
                 // picture slows the reaction down by seconds.
                 let image = if matches!(
@@ -1324,34 +1343,30 @@ pub async fn on_body(robot: Robot) {
     // The last reading, if the robot is already connected.
     let mut battery = BatteryWatch::default();
     let mut plugged = robot.plugged_in().await;
-    let mut floor = robot
-        .hub
-        .status
-        .lock()
-        .await
-        .proximity
-        .as_ref()
-        .and_then(bottom);
+    let mut floor = FloorWatch::default();
     loop {
-        for e in robot
-            .hub
-            .events_since(cursor, Duration::from_secs(60))
-            .await
-        {
+        // A lift waiting to be confirmed: look again soon.
+        let wait = if floor.waiting() {
+            Duration::from_millis(250)
+        } else {
+            Duration::from_secs(60)
+        };
+        let events = robot.hub.events_since(cursor, wait).await;
+        if let Some(how) = floor.tick(std::time::Instant::now(), robot.is_moving()) {
+            tracing::info!("handled: {how}");
+            robot.life.handled(how);
+        }
+        for e in events {
             cursor = e.seq;
             let how = match e.kind.as_str() {
+                // The accelerometer's pick-up fires on footsteps too: only with the floor gone.
+                "motion" if e.data["kind"] == "pickup" => floor.lift_felt().map(String::from),
                 "motion" => e.data["kind"].as_str().map(String::from),
-                "proximity" => {
-                    let now = bottom(&e.data);
-                    let was = floor;
-                    floor = now.or(floor);
-                    match (was, now) {
-                        // Unknown before (the plane just started): it normally sits on the floor.
-                        (Some(true) | None, Some(false)) => Some("pickup".into()),
-                        (Some(false), Some(true)) => Some("putdown".into()),
-                        _ => None,
-                    }
-                }
+                "proximity" => bottom(&e.data).and_then(|on_floor| {
+                    floor
+                        .reading(on_floor, std::time::Instant::now(), robot.is_moving())
+                        .map(String::from)
+                }),
                 "remote" => {
                     remote_button(&robot, &e.data).await;
                     None
@@ -1391,7 +1406,7 @@ pub async fn on_body(robot: Robot) {
                 }
                 // A new connection reports the sensors afresh.
                 "link" => {
-                    floor = None;
+                    floor = FloorWatch::default();
                     None
                 }
                 _ => None,
@@ -1404,6 +1419,81 @@ pub async fn on_body(robot: Robot) {
             tracing::info!("handled: {how}");
             robot.life.handled(&how);
         }
+    }
+}
+
+/// The bottom sensor sees the floor go away when the robot is lifted, but it also flickers
+/// (someone walking past, a shiny floor) and misreads around the motors. So a lift counts once the
+/// floor has stayed away for `LIFT_CONFIRM`, only after the floor was seen since the robot last
+/// drove, and a put-down only after a lift.
+#[derive(Default)]
+struct FloorWatch {
+    /// The floor was seen since the last drive (or connection).
+    seen_floor: bool,
+    /// Gone since then, not confirmed yet.
+    gone_since: Option<std::time::Instant>,
+    lifted: bool,
+}
+
+const LIFT_CONFIRM: Duration = Duration::from_millis(700);
+
+impl FloorWatch {
+    /// A bottom sensor reading; a put-down, if it was lifted.
+    fn reading(
+        &mut self,
+        on_floor: bool,
+        now: std::time::Instant,
+        moving: bool,
+    ) -> Option<&'static str> {
+        if moving {
+            self.seen_floor = false;
+            self.gone_since = None;
+            return None;
+        }
+        if on_floor {
+            self.seen_floor = true;
+            // Logged, to tune `LIFT_CONFIRM` by.
+            if let Some(since) = self.gone_since.take() {
+                tracing::info!(
+                    "floor away for {} ms: not a lift",
+                    now.duration_since(since).as_millis()
+                );
+            }
+            return std::mem::take(&mut self.lifted).then_some("putdown");
+        }
+        if self.seen_floor && !self.lifted && self.gone_since.is_none() {
+            self.gone_since = Some(now);
+        }
+        None
+    }
+
+    /// A lift, once the floor has stayed away long enough.
+    fn tick(&mut self, now: std::time::Instant, moving: bool) -> Option<&'static str> {
+        let since = self.gone_since?;
+        if moving {
+            self.gone_since = None;
+            self.seen_floor = false;
+            return None;
+        }
+        if now.duration_since(since) < LIFT_CONFIRM {
+            return None;
+        }
+        self.gone_since = None;
+        self.lifted = true;
+        Some("pickup")
+    }
+
+    /// The accelerometer felt a lift: it counts at once if the floor is gone too.
+    fn lift_felt(&mut self) -> Option<&'static str> {
+        if self.gone_since.take().is_some() {
+            self.lifted = true;
+            return Some("pickup");
+        }
+        None
+    }
+
+    fn waiting(&self) -> bool {
+        self.gone_since.is_some()
     }
 }
 
@@ -1876,7 +1966,8 @@ mod resampler_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{BatteryWatch, menu_request};
+    use super::{BatteryWatch, FloorWatch, menu_request};
+    use std::time::Duration;
 
     #[test]
     fn menu_entries_the_robot_cannot_run_become_requests() {
@@ -1893,6 +1984,34 @@ mod tests {
             menu_request("joke", 0).is_none(),
             "the robot tells jokes itself"
         );
+    }
+
+    #[test]
+    fn a_lift_needs_the_floor_gone_a_while() {
+        let t0 = std::time::Instant::now();
+        let at = |ms| t0 + Duration::from_millis(ms);
+        let mut f = FloorWatch::default();
+        assert_eq!(f.reading(false, at(0), false), None, "no floor seen yet");
+        assert_eq!(f.tick(at(2000), false), None);
+        assert_eq!(f.reading(true, at(2000), false), None);
+        // Someone walks past: the floor flickers away and back.
+        assert_eq!(f.reading(false, at(3000), false), None);
+        assert_eq!(f.reading(true, at(3500), false), None);
+        assert_eq!(f.tick(at(5000), false), None);
+        // Lifted for real.
+        assert_eq!(f.reading(false, at(6000), false), None);
+        assert_eq!(f.tick(at(6500), false), None);
+        assert_eq!(f.tick(at(6750), false), Some("pickup"));
+        assert_eq!(f.reading(true, at(9000), false), Some("putdown"));
+        // Its own driving: misreads don't count until it sees the floor again.
+        assert_eq!(f.reading(false, at(10000), true), None);
+        assert_eq!(f.reading(false, at(11000), false), None);
+        assert_eq!(f.tick(at(13000), false), None);
+        // The accelerometer agrees with the floor: at once. Alone: nothing.
+        assert_eq!(f.reading(true, at(14000), false), None);
+        assert_eq!(f.lift_felt(), None);
+        assert_eq!(f.reading(false, at(15000), false), None);
+        assert_eq!(f.lift_felt(), Some("pickup"));
     }
 
     #[test]

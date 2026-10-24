@@ -384,6 +384,8 @@ pub struct BrainConfig {
     pub tts_model: String,
     /// Model used for the web_search tool.
     pub search_model: String,
+    /// Embedding model for recall (see `crate::recall`).
+    pub embedding_model: String,
 }
 
 impl Default for BrainConfig {
@@ -396,6 +398,7 @@ impl Default for BrainConfig {
             text_reasoning: "none".into(),
             tts_model: "gpt-4o-mini-tts".into(),
             search_model: "gpt-5.6-terra".into(),
+            embedding_model: "text-embedding-3-small".into(),
         }
     }
 }

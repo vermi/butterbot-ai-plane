@@ -22,6 +22,12 @@ pub struct Memory {
     facts: Mutex<Vec<Fact>>,
 }
 
+/// Facts that no longer fit (the oldest, past `MAX_FACTS`): out of the instructions, but kept,
+/// one JSON line each, for `crate::recall`.
+fn archive_path(path: &Path) -> PathBuf {
+    path.with_file_name("memory_archive.jsonl")
+}
+
 /// Longest fact kept.
 const MAX_TEXT: usize = 300;
 /// Most facts kept; the oldest go first.
@@ -56,9 +62,59 @@ impl Memory {
         };
         facts.push(fact.clone());
         let excess = facts.len().saturating_sub(MAX_FACTS);
-        facts.drain(..excess);
+        let old: Vec<Fact> = facts.drain(..excess).collect();
         self.save(&facts)?;
+        self.archive(&old);
         Ok(fact)
+    }
+
+    /// Replace the facts `ids` (two or more, all still there) with one, `text`: the same thing said
+    /// several ways, or an older fact a newer one updates. Returns the new fact.
+    pub fn merge(&self, ids: &[u32], text: &str) -> Result<Option<Fact>> {
+        let text: String = text.trim().chars().take(MAX_TEXT).collect();
+        let mut facts = self.facts.lock().unwrap();
+        let merged: Vec<&Fact> = facts.iter().filter(|f| ids.contains(&f.id)).collect();
+        if text.is_empty() || ids.len() < 2 || merged.len() != ids.len() {
+            return Ok(None);
+        }
+        let fact = Fact {
+            id: facts.iter().map(|f| f.id).max().unwrap_or(0) + 1,
+            text,
+            date: merged
+                .iter()
+                .map(|f| f.date.clone())
+                .max()
+                .unwrap_or_default(),
+        };
+        facts.retain(|f| !ids.contains(&f.id));
+        facts.push(fact.clone());
+        self.save(&facts)?;
+        Ok(Some(fact))
+    }
+
+    /// Facts that no longer fit in the instructions (see `remember`), oldest first.
+    pub fn archived(&self) -> Vec<Fact> {
+        std::fs::read_to_string(archive_path(&self.path))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect()
+    }
+
+    fn archive(&self, old: &[Fact]) {
+        if old.is_empty() {
+            return;
+        }
+        let mut all = self.archived();
+        all.extend_from_slice(old);
+        let lines: String = all
+            .iter()
+            .filter_map(|f| serde_json::to_string(f).ok())
+            .map(|l| l + "\n")
+            .collect();
+        if let Err(e) = crate::config::write_private(&archive_path(&self.path), lines.as_bytes()) {
+            tracing::warn!("memory archive: {e:#}");
+        }
     }
 
     /// Forget fact `id`; returns whether there was one.
@@ -152,6 +208,38 @@ mod tests {
         let facts = m.facts();
         assert_eq!(facts.len(), MAX_FACTS);
         assert_eq!(facts[0].text, "fact 5");
+        let old: Vec<String> = m.archived().into_iter().map(|f| f.text).collect();
+        assert_eq!(
+            old,
+            ["fact 0", "fact 1", "fact 2", "fact 3", "fact 4"],
+            "kept for recall"
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn merges_only_whole_groups() {
+        let dir = std::env::temp_dir().join(format!(
+            "bbplane-memory-merge-{}-{}",
+            std::process::id(),
+            crate::hub::now_ms()
+        ));
+        let m = Memory::load(&dir);
+        let a = m.remember("Kiwi likes the sunny spot").unwrap();
+        let b = m.remember("Kiwi naps in the sun by the window").unwrap();
+        let c = m.remember("Justin likes jazz").unwrap();
+        assert!(m.merge(&[a.id], "one is not a group").unwrap().is_none());
+        assert!(m.merge(&[a.id, 99], "a missing one").unwrap().is_none());
+        let k = m
+            .merge(&[a.id, b.id], "Kiwi naps in the sunny spot by the window")
+            .unwrap()
+            .unwrap();
+        let texts: Vec<String> = Memory::load(&dir)
+            .facts()
+            .into_iter()
+            .map(|f| f.text)
+            .collect();
+        assert_eq!(texts, [c.text, k.text]);
         std::fs::remove_dir_all(dir).ok();
     }
 }

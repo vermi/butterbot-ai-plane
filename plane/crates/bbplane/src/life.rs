@@ -38,6 +38,8 @@ const POWER_FRESH: Duration = Duration::from_secs(120);
 const FIRST_DREAM: Duration = Duration::from_secs(20 * 60);
 const DREAM_EVERY: Duration = Duration::from_secs(90 * 60);
 const MAX_DREAMS: usize = 3;
+/// Asleep this long, its nap's work begins (once a charge; see `crate::brain::sleep`).
+const UPKEEP_AFTER: Duration = Duration::from_secs(5 * 60);
 /// Someone keeps talking: do not end a session in the middle of a conversation.
 const SESSION_END_QUIET: Duration = Duration::from_secs(90);
 
@@ -142,6 +144,9 @@ pub enum Nudge {
         napped_minutes: Option<u64>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         dreams: Vec<String>,
+        /// What it kept from the day while it slept.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        remembered: Vec<String>,
     },
 }
 
@@ -151,6 +156,7 @@ struct PowerNews {
     percent: u32,
     slept: Duration,
     dreams: Vec<String>,
+    remembered: Vec<String>,
     at: Instant,
 }
 
@@ -188,6 +194,9 @@ struct State {
     slept: Duration,
     dreams: Vec<String>,
     dreams_started: usize,
+    /// The nap's work this charge: started, and what it kept.
+    upkept: bool,
+    remembered: Vec<String>,
     rng: u64,
 }
 
@@ -224,6 +233,8 @@ impl Life {
             slept: Duration::ZERO,
             dreams: Vec::new(),
             dreams_started: 0,
+            upkept: false,
+            remembered: Vec::new(),
             rng: seed,
         };
         reschedule(&cfg, &mut state);
@@ -314,20 +325,27 @@ impl Life {
         let focused = self.focused().is_some();
         let mut s = self.state.lock().unwrap();
         wake(&self.cfg, &mut s);
-        let (slept, dreams) = if plugged_in {
-            (Duration::ZERO, Vec::new())
+        let (slept, dreams, remembered) = if plugged_in {
+            (Duration::ZERO, Vec::new(), Vec::new())
         } else {
-            (std::mem::take(&mut s.slept), std::mem::take(&mut s.dreams))
+            (
+                std::mem::take(&mut s.slept),
+                std::mem::take(&mut s.dreams),
+                std::mem::take(&mut s.remembered),
+            )
         };
         s.slept = Duration::ZERO;
         s.dreams.clear();
         s.dreams_started = 0;
+        s.upkept = false;
+        s.remembered.clear();
         if !focused {
             s.power = Some(PowerNews {
                 plugged_in,
                 percent,
                 slept,
                 dreams,
+                remembered,
                 at: Instant::now(),
             });
         }
@@ -378,6 +396,24 @@ impl Life {
         nap.next_dream = Instant::now() + DREAM_EVERY;
         s.dreams_started += 1;
         true
+    }
+
+    /// Time for the nap's work: asleep a while, and not done yet this charge. Counts it as done.
+    pub fn upkeep_due(&self) -> bool {
+        let mut s = self.state.lock().unwrap();
+        let due = !s.upkept
+            && s.nap
+                .as_ref()
+                .is_some_and(|n| n.since.elapsed() >= UPKEEP_AFTER);
+        if due {
+            s.upkept = true;
+        }
+        due
+    }
+
+    /// What the nap's work kept from the day (told when it wakes up unplugged).
+    pub fn kept_in_sleep(&self, kept: Vec<String>) {
+        self.state.lock().unwrap().remembered.extend(kept);
     }
 
     /// A dream it had (told when it wakes up unplugged).
@@ -492,6 +528,7 @@ impl Life {
                 percent: p.percent,
                 napped_minutes: napped.then_some(p.slept.as_secs() / 60),
                 dreams: p.dreams,
+                remembered: p.remembered,
             });
         }
         // Quiet: only what someone did to it, or asked for, gets through (above and below).

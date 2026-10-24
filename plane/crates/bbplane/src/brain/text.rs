@@ -12,8 +12,8 @@ use crate::agent::AgentState;
 use crate::config::BrainConfig;
 use crate::control::{AgentEvent, Robot};
 
-pub(super) const API: &str = "https://api.openai.com/v1";
-pub(super) fn client() -> reqwest::Client {
+pub(crate) const API: &str = "https://api.openai.com/v1";
+pub(crate) fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(120))
@@ -43,7 +43,7 @@ pub async fn web_search(cfg: &BrainConfig, query: &str) -> Result<String> {
 }
 
 /// All output text of a Responses API result.
-pub(super) fn output_text(r: &Value) -> String {
+pub(crate) fn output_text(r: &Value) -> String {
     r["output"]
         .as_array()
         .into_iter()

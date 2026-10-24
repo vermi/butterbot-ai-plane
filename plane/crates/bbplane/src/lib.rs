@@ -24,6 +24,7 @@ pub mod objects;
 pub mod ota;
 pub mod peek;
 pub mod provision;
+pub mod recall;
 pub mod reminders;
 pub mod service;
 pub mod sim;
@@ -86,6 +87,7 @@ pub async fn start(config: config::Config) -> Result<Plane> {
     tokio::spawn(home::run(robot.clone()));
     tokio::spawn(peek::run(robot.clone()));
     tokio::spawn(diary::run(robot.clone()));
+    tokio::spawn(recall::run(robot.clone()));
     tokio::spawn(appletv::run(robot.clone()));
     tokio::spawn({
         let robot = robot.clone();

@@ -267,6 +267,12 @@ pub struct WriteDiaryArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RecallArgs {
+    /// What to recall, in a few words.
+    pub query: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ReadDiaryArgs {
     /// YYYY-MM-DD (default the latest entry).
     pub day: Option<String>,
@@ -829,6 +835,23 @@ at \"HH:MM\") or some day (neither). Timed plans come back from `hear` as a `pla
         };
         tryt!(self.robot.diary.write(day, &a.text));
         ok_json(serde_json::json!({ "written": day.to_string() }))
+    }
+
+    #[tool(
+        description = "Search everything the robot knows by meaning: its memories (old ones too), its diary, and \
+past days (who came by, what was said, its dreams)."
+    )]
+    async fn recall(
+        &self,
+        Parameters(a): Parameters<RecallArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let hits = tryt!(
+            self.robot
+                .recall
+                .search(&self.robot, &a.query, 6, 0.2, &[])
+                .await
+        );
+        ok_json(crate::recall::hits_json(&hits))
     }
 
     #[tool(

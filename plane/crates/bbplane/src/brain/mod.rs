@@ -4,6 +4,7 @@
 
 pub mod dream;
 pub mod realtime;
+pub mod sleep;
 pub mod text;
 
 use std::time::Duration;
@@ -245,6 +246,12 @@ pub fn tools() -> Vec<Value> {
             &[],
         ),
         f(
+            "recall",
+            "Search everything you know by meaning: your memories (old ones too), your diary, and past days (who came by, what was said, your dreams). Use it when something might have come up before.",
+            json!({ "query": { "type": "string", "description": "what to recall, in a few words" } }),
+            &["query"],
+        ),
+        f(
             "reminders",
             "List the reminders that are set, or cancel one by id.",
             json!({ "cancel": { "type": "integer", "description": "id of a reminder to cancel" } }),
@@ -484,6 +491,16 @@ pub async fn run_tool(robot: &Robot, cfg: &BrainConfig, name: &str, args: &Value
                     .write(day, args["text"].as_str().unwrap_or_default())?;
                 Outcome::Text(format!("Written for {day}."))
             }
+            "recall" => {
+                let query = args["query"].as_str().unwrap_or_default();
+                match robot.recall.search(robot, query, 6, 0.2, &[]).await {
+                    Ok(hits) if hits.is_empty() => {
+                        Outcome::Text("Nothing comes to mind.".into())
+                    }
+                    Ok(hits) => Outcome::Text(crate::recall::hits_json(&hits).to_string()),
+                    Err(e) => Outcome::Text(format!("could not recall: {e:#}")),
+                }
+            }
             "read_diary" => {
                 let days = robot.diary.days();
                 let day = match args["day"].as_str() {
@@ -590,7 +607,11 @@ pub fn describe(ev: &crate::control::AgentEvent) -> Option<(String, Option<Bytes
                 })
                 .unwrap_or_default();
             Some((
-                format!("{woke}{prefix}{text}{}", mood_note(info)),
+                format!(
+                    "{woke}{prefix}{text}{}{}",
+                    recall_note(info),
+                    mood_note(info)
+                ),
                 image.clone(),
             ))
         }
@@ -644,7 +665,20 @@ pub fn describe(ev: &crate::control::AgentEvent) -> Option<(String, Option<Bytes
                                     .filter(|d| !d.is_empty())
                                     .map(|d| format!(" You dreamt: {d}"))
                                     .unwrap_or_default();
-                                format!(" You napped for {m} minutes on the charger.{dreams}")
+                                let kept = info["remembered"]
+                                    .as_array()
+                                    .map(|a| {
+                                        a.iter()
+                                            .filter_map(|d| d.as_str())
+                                            .collect::<Vec<_>>()
+                                            .join("; ")
+                                    })
+                                    .filter(|d| !d.is_empty())
+                                    .map(|d| format!(" Sleeping on the day, you kept in mind: {d}."))
+                                    .unwrap_or_default();
+                                format!(
+                                    " You napped for {m} minutes on the charger.{dreams}{kept}"
+                                )
                             }
                             None => String::new(),
                         };
@@ -773,10 +807,38 @@ pub fn describe(ev: &crate::control::AgentEvent) -> Option<(String, Option<Bytes
             } else {
                 ""
             };
-            Some((format!("{text}{cable}{}", mood_note(info)), image.clone()))
+            Some((
+                format!("{text}{cable}{}{}", recall_note(info), mood_note(info)),
+                image.clone(),
+            ))
         }
         _ => None,
     }
+}
+
+/// What it brings to mind (`crate::recall`), as a short note after the message.
+fn recall_note(info: &Value) -> String {
+    let Some(hits) = info["brings_to_mind"].as_array().filter(|h| !h.is_empty()) else {
+        return String::new();
+    };
+    let items: Vec<String> = hits
+        .iter()
+        .map(|h| {
+            let text: String = h["text"]
+                .as_str()
+                .unwrap_or_default()
+                .chars()
+                .take(240)
+                .collect();
+            format!(
+                "[{}, {}] {}",
+                h["when"].as_str().unwrap_or("?"),
+                h["from"].as_str().unwrap_or("?"),
+                text.replace('\n', " / ")
+            )
+        })
+        .collect();
+    format!(" (This brings to mind: {}.)", items.join("; "))
 }
 
 /// How it feels, from an event's `mood`, as a short note after the message.

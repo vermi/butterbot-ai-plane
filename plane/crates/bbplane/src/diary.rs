@@ -159,6 +159,53 @@ impl Diary {
         out
     }
 
+    /// What `day` held, in pieces for `crate::recall`: the day in brief (who came by, what it
+    /// noticed and did), its conversations a few lines at a time, and its dreams.
+    pub fn recall_pieces(&self, day: NaiveDate) -> Vec<(&'static str, String)> {
+        let moments = self.moments(day);
+        let mut pieces = Vec::new();
+        let digest = self.digest(day);
+        let brief = digest
+            .split("Conversation (")
+            .next()
+            .unwrap_or_default()
+            .trim();
+        if !moments.is_empty() && !brief.is_empty() {
+            pieces.push(("day", brief.to_string()));
+        }
+        let time = |ts: i64| crate::reminders::local(ts).format("%H:%M").to_string();
+        let talk: Vec<String> = moments
+            .iter()
+            .filter_map(|m| match m.kind.as_str() {
+                "said" => Some(format!("{} you: {}", time(m.ts), m.text)),
+                "told" => Some(format!("{} to you: {}", time(m.ts), m.text)),
+                _ => None,
+            })
+            .collect();
+        for lines in talk.chunks(8) {
+            pieces.push(("talk", lines.join("\n")));
+        }
+        for m in moments.iter().filter(|m| m.kind == "dream") {
+            pieces.push(("dream", m.text.clone()));
+        }
+        pieces
+    }
+
+    /// Days with a log of moments, newest first.
+    pub fn logged_days(&self) -> Vec<NaiveDate> {
+        let mut days: Vec<NaiveDate> = std::fs::read_dir(&self.dir)
+            .into_iter()
+            .flatten()
+            .filter_map(|e| {
+                let name = e.ok()?.file_name().into_string().ok()?;
+                let day = name.strip_suffix(".log.jsonl")?;
+                NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()
+            })
+            .collect();
+        days.sort_unstable_by(|a, b| b.cmp(a));
+        days
+    }
+
     pub fn write(&self, day: NaiveDate, text: &str) -> Result<()> {
         let text = text.trim();
         if text.is_empty() {

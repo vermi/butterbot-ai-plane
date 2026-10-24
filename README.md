@@ -293,6 +293,20 @@ Focus mode still wins: no ideas of his own, whatever he feels.
 - **Diary:** the day's moments are logged as they happen; in the evening (`[life] diary_at`,
   21:30) he gets a digest and writes the day up himself (`write_diary`), or the next morning if
   he was off. Entries are in `diary/` in the data folder and in the live view.
+- **Recall:** his memories (including old ones that no longer fit in his instructions), diary
+  entries and each day's log (who came by, what was said, his dreams) are embedded with OpenAI's
+  `text-embedding-3-small` and kept in `recall.json` (owner-only). What someone says brings related
+  things to mind, which come with the message; `recall` searches on request, and
+  `GET /api/recall?q=...` shows what a phrase brings up.
+- **The cable and naps:** plugging him in or unplugging him is a `power` nudge the moment it
+  happens. On the charger, after two quiet minutes, he naps: only his name, a poke or an alarm get
+  through (as in focus mode), the remote shows him sleepy, and the plane writes him the odd dream.
+  Once a charge, his nap does upkeep: it merges memories that say the same thing, keeps what is
+  worth knowing from the day, and updates the recall index. Unplugged, he hears how long he slept,
+  his dreams and what he kept. `[life] nap_when_charging = false` turns naps off.
+- **Being picked up:** the bottom sensor flickers (someone walking past, a shiny floor), so a lift
+  counts once the floor has been away for 0.7 s, and an accelerometer pick-up only with the floor
+  gone. The plane logs each flicker it ignored.
 - **Voices:** WeSpeaker's ResNet34 (via sherpa-onnx's ONNX export, checked by hash) turns speech
   addressed to him into a voiceprint, so commands carry `speaker` even off camera. Voiceprints are
   kept for people who ask (`remember_voice`) and grow by themselves from commands spoken while
@@ -322,6 +336,7 @@ It is only visible in a dim room, so it is used as a background hint, never on i
 | Quick flicker | Heard you, thinking |
 | Steady bright | Talking |
 | Faint glow, a brief tick every 10 s | Focus mode |
+| Dark, a slow faint pulse every 6 s | Napping on the charger |
 | Two quick ticks every 4 s | No agent running (paused, or not set up) |
 | Three quick blinks, pause | Cannot reach the computer |
 
