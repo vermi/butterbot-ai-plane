@@ -9,8 +9,9 @@ use serde_json::{Value, json};
 use super::text::{API, client, output_text};
 use crate::control::Robot;
 
-/// Most merges, and most new memories, in one nap.
+/// Most merges, retirements and new memories in one nap.
 const MAX_MERGES: usize = 10;
+const MAX_RETIRED: usize = 5;
 const MAX_KEPT: usize = 3;
 
 /// The nap's work; returns what it kept from the day.
@@ -54,9 +55,10 @@ fn memories(robot: &Robot) -> String {
         .join("\n")
 }
 
-/// Merge memories that say the same thing; returns how many merges.
+/// Merge memories that say the same thing, and retire passing ones to the archive; returns how
+/// many changes.
 async fn consolidate(robot: &Robot) -> Result<usize> {
-    if robot.memory.facts().len() < 6 {
+    if robot.memory.facts().len() < 4 {
         return Ok(0);
     }
     let answer = ask_json(
@@ -66,9 +68,14 @@ async fn consolidate(robot: &Robot) -> Result<usize> {
              Find groups of memories that say the same thing, or where a newer one updates or \
              corrects an older one. Merge each group into one short memory that keeps every name, \
              date and detail that still holds (where they disagree, the newer one wins). Leave all \
-             other memories alone; when unsure, leave them. Answer in JSON: \
-             {{\"merges\": [{{\"ids\": [1, 2], \"text\": \"...\"}}]}}, an empty list if nothing \
-             needs merging.",
+             other memories alone; when unsure, leave them.\n\n\
+             Also list the memories not worth knowing every day: a passing moment, something it \
+             did once, how things were for a minute (its connection, being handled, where it \
+             stopped), or advice to itself it would follow anyway. They go to its archive, where \
+             it can still look them up. Keep anything about the people, the pets, the home, \
+             preferences, plans and things it learned. Answer in JSON: \
+             {{\"merges\": [{{\"ids\": [1, 2], \"text\": \"...\"}}], \"retire\": [3]}}, with \
+             empty lists if there is nothing to do.",
             memories(robot)
         ),
     )
@@ -91,6 +98,19 @@ async fn consolidate(robot: &Robot) -> Result<usize> {
             tracing::info!("sleep: merged {ids:?} into \"{}\"", f.text);
             n += 1;
         }
+    }
+    // (Ids of merged memories are gone by now, so a merged one cannot be retired too.)
+    let retire: Vec<u32> = answer["retire"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|i| i.as_u64().map(|i| i as u32))
+        .take(MAX_RETIRED)
+        .collect();
+    if !retire.is_empty() {
+        let k = robot.memory.retire(&retire)?;
+        tracing::info!("sleep: retired {k} passing memories {retire:?} to the archive");
+        n += k;
     }
     Ok(n)
 }

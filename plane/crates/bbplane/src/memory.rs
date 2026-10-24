@@ -92,6 +92,20 @@ impl Memory {
         Ok(Some(fact))
     }
 
+    /// Move the facts `ids` out of the instructions into the archive (still found by recall):
+    /// passing things that are not worth knowing every day. Returns how many.
+    pub fn retire(&self, ids: &[u32]) -> Result<usize> {
+        let mut facts = self.facts.lock().unwrap();
+        let (old, keep): (Vec<Fact>, Vec<Fact>) =
+            facts.drain(..).partition(|f| ids.contains(&f.id));
+        *facts = keep;
+        if !old.is_empty() {
+            self.save(&facts)?;
+            self.archive(&old);
+        }
+        Ok(old.len())
+    }
+
     /// Facts that no longer fit in the instructions (see `remember`), oldest first.
     pub fn archived(&self) -> Vec<Fact> {
         std::fs::read_to_string(archive_path(&self.path))
@@ -239,7 +253,12 @@ mod tests {
             .into_iter()
             .map(|f| f.text)
             .collect();
-        assert_eq!(texts, [c.text, k.text]);
+        assert_eq!(texts, [c.text.clone(), k.text]);
+        // Retired: out of the instructions, still in the archive.
+        assert_eq!(m.retire(&[c.id, 999]).unwrap(), 1);
+        let m = Memory::load(&dir);
+        assert_eq!(m.facts().len(), 1);
+        assert!(m.archived().iter().any(|f| f.text == c.text));
         std::fs::remove_dir_all(dir).ok();
     }
 }
