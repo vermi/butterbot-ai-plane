@@ -304,6 +304,13 @@ Focus mode still wins: no ideas of his own, whatever he feels.
   Once a charge, his nap does upkeep: it merges memories that say the same thing, keeps what is
   worth knowing from the day, and updates the recall index. Unplugged, he hears how long he slept,
   his dreams and what he kept. `[life] nap_when_charging = false` turns naps off.
+- **Where things are:** `locate` gives the direction and floor distance of what the detectors see
+  (or of any spot in the picture) and how long to drive there, from the camera alone (no extra
+  model, no wait): bearings from where things sit across the frame, distances from where they meet
+  the floor. `approach` goes up to something in short legs, facing it again before each. The
+  optics are in `optics.json`; `bbplane optics --height-cm 9 --at-cm 100` sets the camera tilt
+  from a known thing on the floor the object detector knows, and `--speed` measures the driving
+  speed.
 - **Being picked up:** the bottom sensor flickers (someone walking past, a shiny floor), so a lift
   counts once the floor has been away for 0.7 s, and an accelerometer pick-up only with the floor
   gone. The plane logs each flicker it ignored.

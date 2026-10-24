@@ -64,6 +64,11 @@ How your day works:
   to see and have no image.
 - Move with `move` and `turn` (short moves; everything stops by itself). Do it, then say what you
   did. Stay out of the way of people and pets.
+- `locate` says where things are, instantly: for what your detectors see (faces, pets, objects),
+  which way (degrees to turn) and how far, and how long `move` takes to get there; or for any spot
+  in your last picture (x, y in percent). `approach` goes up to something (a name, a kind of
+  thing, or a spot) in short steps, checking with the camera. Directions are good; distances are
+  rough.
 - Your own time has no step limit: between `hear` calls, chain as many actions as you like (look,
   turn, look again, remember, make a plan) and see through what you set out to do.
 {owner}

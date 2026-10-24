@@ -90,6 +90,8 @@ pub struct Robot {
     moving_until: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
     /// Picked up (a confirmed lift, see `FloorWatch`) and not put down since.
     lifted: Arc<std::sync::atomic::AtomicBool>,
+    /// The camera's geometry and the driving speed (see `crate::geometry`).
+    pub optics: Arc<std::sync::Mutex<crate::geometry::Optics>>,
     /// Camera and mic state last asked for, restored when the link comes back.
     streams: Arc<Mutex<Streams>>,
     /// Set while the plane itself is waking the robot: the caller is about to use it, so
@@ -148,12 +150,16 @@ impl Robot {
             doing: Default::default(),
             talk: Default::default(),
             streams: Arc::new(Mutex::new(Streams::defaults(&hub.config))),
+            optics: Arc::new(std::sync::Mutex::new(crate::geometry::Optics::load(
+                &hub.config.data_dir(),
+            ))),
             hub,
             wake_lock: Default::default(),
             speaker: Default::default(),
             drive: Default::default(),
             moving_until: Default::default(),
             lifted: Default::default(),
+
             hushes: Default::default(),
             manual_override: Default::default(),
             summon: Default::default(),
@@ -691,6 +697,238 @@ Ask to be unplugged first."
     }
 
     /// Wander a little of its own accord: turn somewhere at random and drive a short hop.
+    /// Everything the detectors see now, with where it is and how to get there (see
+    /// `crate::geometry`): no new picture, so no wait.
+    pub fn locate_all(&self) -> Vec<Value> {
+        let o = *self.optics.lock().unwrap();
+        let mut out = Vec::new();
+        for f in self.faces.in_view() {
+            let p = o.place_of_box(f.bbox, f.frame_width.into(), f.frame_height.into(), true);
+            let what = match &f.name {
+                Some(n) => format!("{n}'s face"),
+                None => "someone's face".into(),
+            };
+            out.push(place_json(&o, &what, &p));
+        }
+        for s in self.objects.in_view() {
+            let p = o.place_of_box(s.bbox, s.frame_width.into(), s.frame_height.into(), false);
+            out.push(place_json(&o, s.class, &p));
+        }
+        out
+    }
+
+    /// Where a spot in the picture (fractions across and down) is, if it is on the floor.
+    pub fn locate_point(&self, x: f64, y: f64) -> Value {
+        let o = *self.optics.lock().unwrap();
+        place_json(&o, "that spot", &o.place_of_point(x, y))
+    }
+
+    /// The best match for `what` in view now: a name (a person, a pet), "someone", or a kind of
+    /// thing the object detector knows.
+    fn find(&self, what: &str) -> Option<crate::geometry::Place> {
+        let o = *self.optics.lock().unwrap();
+        let what = what.trim().to_lowercase();
+        let faces = self.faces.in_view();
+        if let Some(f) = faces.iter().find(|f| {
+            f.name
+                .as_deref()
+                .is_some_and(|n| n.eq_ignore_ascii_case(&what))
+        }) {
+            return Some(o.place_of_box(f.bbox, f.frame_width.into(), f.frame_height.into(), true));
+        }
+        let objects = self.objects.in_view();
+        let anyone =
+            ["someone", "somebody", "person", "people", "a person"].contains(&what.as_str());
+        if anyone && let Some(f) = faces.first() {
+            return Some(o.place_of_box(f.bbox, f.frame_width.into(), f.frame_height.into(), true));
+        }
+        let pet = self.hub.config.life.pets.iter().any(|p| {
+            p.split(',')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .eq_ignore_ascii_case(&what)
+        });
+        let wanted = |class: &str| {
+            class.eq_ignore_ascii_case(&what)
+                || (anyone && class == "person")
+                || (pet && crate::objects::is_animal(class))
+        };
+        objects
+            .iter()
+            .filter(|s| wanted(s.class))
+            .max_by(|a, b| a.score.total_cmp(&b.score))
+            .map(|s| o.place_of_box(s.bbox, s.frame_width.into(), s.frame_height.into(), false))
+    }
+
+    /// Wait (a little) for the detectors to look at a frame taken after `t`.
+    async fn fresh_view(&self, t: std::time::Instant) {
+        let t = tokio::time::Instant::from_std(t);
+        for _ in 0..30 {
+            if self.objects.seen_after(t).is_some() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// Go up to `what` (see `find`), in short legs, facing it again with the camera before each,
+    /// and stop about `stop_cm` short. Returns what happened.
+    pub async fn approach(&self, what: &str, stop_cm: f64) -> Result<String> {
+        const SPEED: u8 = 50;
+        const MAX_LEG_CM: f64 = 60.0;
+        const LEGS: usize = 8;
+        const AHEAD_DEG: f64 = 6.0;
+        use crate::geometry::Judged;
+        self.set_doing(&format!("going to {what}"), Duration::from_secs(30));
+        let mut driven = 0.0;
+        for leg in 0..LEGS {
+            let Some(mut place) = self.find(what) else {
+                return Ok(if leg == 0 {
+                    format!("You don't see {what} right now (look, or turn, and try again).")
+                } else {
+                    format!("Lost sight of {what} after driving about {driven:.0} cm.")
+                });
+            };
+            if place.bearing_deg.abs() > AHEAD_DEG {
+                let out = self.turn(place.bearing_deg, 60).await?;
+                if let Some(why) = out.stopped_early {
+                    return Ok(format!("Stopped while turning ({why})."));
+                }
+                self.fresh_view(std::time::Instant::now()).await;
+                match self.find(what) {
+                    Some(p) => place = p,
+                    None => return Ok(format!("Turned toward {what}, then lost sight of it.")),
+                }
+            }
+            let left = place.distance_cm.map(|d| d - stop_cm);
+            let arrived = match (place.judged_by, left) {
+                (Some(Judged::CloserThan), Some(l)) => l <= 15.0,
+                (_, Some(l)) => l <= 5.0,
+                _ => false,
+            };
+            if arrived {
+                return Ok(format!(
+                    "You're at {what}: about {:.0} cm away, straight ahead.",
+                    place.distance_cm.unwrap_or(stop_cm)
+                ));
+            }
+            let leg_cm = left.unwrap_or(MAX_LEG_CM).clamp(5.0, MAX_LEG_CM);
+            let secs = self.optics.lock().unwrap().drive_secs(leg_cm, SPEED);
+            let out = self
+                .drive_for(SPEED as i8, SPEED as i8, (secs * 1000.0) as u64)
+                .await?;
+            driven += leg_cm * out.completed_ms as f64 / (secs * 1000.0).max(1.0);
+            if let Some(why) = out.stopped_early {
+                return Ok(format!(
+                    "Stopped about {driven:.0} cm along the way to {what} ({why})."
+                ));
+            }
+            self.fresh_view(std::time::Instant::now()).await;
+        }
+        Ok(format!(
+            "Drove about {driven:.0} cm toward {what}; it is still a way off."
+        ))
+    }
+
+    /// Turn to a spot in the picture (fractions across and down) and drive to it, stopping
+    /// `stop_cm` short, in one go: a spot cannot be found again in later pictures.
+    pub async fn approach_point(&self, x: f64, y: f64, stop_cm: f64) -> Result<String> {
+        let o = *self.optics.lock().unwrap();
+        let p = o.place_of_point(x, y);
+        if p.bearing_deg.abs() > 3.0 {
+            self.turn(p.bearing_deg, 60).await?;
+        }
+        let Some(d) = p.distance_cm else {
+            return Ok(format!(
+                "Turned {:.0} degrees toward it; it is too far off to tell how far.",
+                p.bearing_deg
+            ));
+        };
+        let cm = (d - stop_cm).max(0.0);
+        let out = self
+            .drive_for(50, 50, (o.drive_secs(cm, 50) * 1000.0) as u64)
+            .await?;
+        Ok(match out.stopped_early {
+            Some(why) => format!("Turned {:.0} degrees, then stopped ({why}).", p.bearing_deg),
+            None => format!(
+                "Turned {:.0} degrees and drove about {cm:.0} cm.",
+                p.bearing_deg
+            ),
+        })
+    }
+
+    /// What to calibrate with: the most confident thing in view (not a person) whose bottom is
+    /// in the frame.
+    fn floor_object(&self) -> Option<crate::objects::Seen> {
+        self.objects
+            .in_view()
+            .into_iter()
+            .filter(|s| {
+                s.class != "person" && s.bbox[1] + s.bbox[3] < f32::from(s.frame_height) - 2.0
+            })
+            .max_by(|a, b| a.score.total_cmp(&b.score))
+    }
+
+    /// Set the camera's tilt from something on the floor `distance_cm` straight ahead.
+    pub fn calibrate_tilt(&self, distance_cm: f64) -> Result<Value> {
+        let Some(s) = self.floor_object() else {
+            bail!(
+                "nothing on the floor in view that the detector knows (a bottle, a cup, a shoe, a ball...)"
+            );
+        };
+        let mut o = self.optics.lock().unwrap();
+        o.calibrate_tilt(
+            f64::from(s.bbox[1] + s.bbox[3]),
+            s.frame_width.into(),
+            s.frame_height.into(),
+            distance_cm,
+        );
+        o.save(&self.hub.config.data_dir())?;
+        Ok(json!({ "used": s.class, "optics": *o }))
+    }
+
+    /// Measure the driving speed: drive toward something on the floor ahead and see how much
+    /// closer it got.
+    pub async fn measure_speed(&self) -> Result<Value> {
+        const SPEED: u8 = 50;
+        let Some(s) = self.floor_object() else {
+            bail!("nothing on the floor in view that the detector knows, to measure against");
+        };
+        let place = |s: &crate::objects::Seen| {
+            self.optics.lock().unwrap().place_of_box(
+                s.bbox,
+                s.frame_width.into(),
+                s.frame_height.into(),
+                false,
+            )
+        };
+        let Some(before) = place(&s).distance_cm.filter(|d| *d > 60.0) else {
+            bail!("put it at least 60 cm away, so there is room to drive");
+        };
+        let out = self.drive_for(SPEED as i8, SPEED as i8, 1500).await?;
+        if let Some(why) = out.stopped_early {
+            bail!("stopped while driving ({why})");
+        }
+        self.fresh_view(std::time::Instant::now()).await;
+        let Some(after) = self
+            .objects
+            .in_view()
+            .into_iter()
+            .filter(|n| n.class == s.class)
+            .max_by(|a, b| a.score.total_cmp(&b.score))
+            .and_then(|n| place(&n).distance_cm)
+        else {
+            bail!("lost sight of it");
+        };
+        let mut o = self.optics.lock().unwrap();
+        if !o.speed_from(before, after, out.completed_ms as f64 / 1000.0, SPEED) {
+            bail!("it did not seem to get closer ({before:.0} cm, then {after:.0} cm)");
+        }
+        o.save(&self.hub.config.data_dir())?;
+        Ok(json!({ "used": s.class, "before_cm": before, "after_cm": after, "optics": *o }))
+    }
+
     pub async fn wander(&self) -> Result<String> {
         let mut rng = crate::hub::now_ms() | 1;
         let mut next = || {
@@ -1350,6 +1588,42 @@ impl Robot {
                 .await;
         }
     }
+}
+
+/// A located thing, as the agent sees it.
+fn place_json(o: &crate::geometry::Optics, what: &str, p: &crate::geometry::Place) -> Value {
+    use crate::geometry::Judged;
+    let side = |deg: f64| {
+        if deg.abs() < 3.0 {
+            "straight ahead".to_string()
+        } else {
+            format!(
+                "{:.0}° {}",
+                deg.abs(),
+                if deg > 0.0 { "right" } else { "left" }
+            )
+        }
+    };
+    let distance = match (p.judged_by, p.distance_cm) {
+        (Some(Judged::CloserThan), Some(d)) => format!("closer than {d:.0} cm"),
+        (_, Some(d)) if d >= 100.0 => format!("about {:.1} m", d / 100.0),
+        (_, Some(d)) => format!("about {d:.0} cm"),
+        _ => "too far to tell".into(),
+    };
+    let mut v = json!({
+        "what": what,
+        "direction": side(p.bearing_deg),
+        "turn_degrees": (p.bearing_deg * 10.0).round() / 10.0,
+        "distance": distance,
+    });
+    if let Some(d) = p.distance_cm
+        && p.judged_by != Some(Judged::CloserThan)
+    {
+        // To stop about 30 cm short at `move` speed 50.
+        v["drive_seconds_at_speed_50"] =
+            ((o.drive_secs(d - 30.0, 50) * 10.0).round() / 10.0).into();
+    }
+    v
 }
 
 /// Being picked up, put down, shaken or dropped, and a low battery, become nudges for the agent.

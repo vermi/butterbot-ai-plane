@@ -50,6 +50,23 @@ enum Cmd {
     },
     /// Restart the robot (it comes back in AI mode), e.g. when it seems stuck.
     Restart,
+    /// The camera's geometry and driving speed, for distances and bearings: show them, set them,
+    /// or measure them with something the object detector knows (a bottle, a cup) on the floor
+    /// straight ahead.
+    Optics {
+        /// Height of the camera above the floor, cm.
+        #[arg(long)]
+        height_cm: Option<f64>,
+        /// Horizontal field of view, degrees.
+        #[arg(long)]
+        hfov_deg: Option<f64>,
+        /// The thing on the floor is this far from the camera, cm: sets the camera's tilt.
+        #[arg(long)]
+        at_cm: Option<f64>,
+        /// Drive 1.5 s toward the thing on the floor to measure the speed (unplugged, room ahead).
+        #[arg(long)]
+        speed: bool,
+    },
     /// Set the free internal RAM (bytes) the robot requires before starting Wi-Fi.
     /// The robot logs the actual numbers on its serial console.
     Tune {
@@ -181,6 +198,57 @@ async fn main() -> Result<()> {
                 );
             }
             eprintln!("restarting; the robot is back in AI mode in a few seconds");
+        }
+        Cmd::Optics {
+            height_cm,
+            hfov_deg,
+            at_cm,
+            speed,
+        } => {
+            let config = Config::load(cli.config.as_ref())?;
+            let base = web_base(&config);
+            let http = reqwest::Client::new();
+            let call = async |r: reqwest::RequestBuilder| -> Result<serde_json::Value> {
+                let r = r
+                    .send()
+                    .await
+                    .context("is the plane running? (bbplane service status)")?;
+                let ok = r.status().is_success();
+                let v: serde_json::Value = r.json().await.unwrap_or_default();
+                if !ok {
+                    anyhow::bail!("{}", v["error"].as_str().unwrap_or("refused"));
+                }
+                Ok(v)
+            };
+            if height_cm.is_some() || hfov_deg.is_some() {
+                call(
+                    http.post(format!("{base}/api/optics"))
+                        .json(&serde_json::json!({ "height_cm": height_cm, "hfov_deg": hfov_deg })),
+                )
+                .await?;
+            }
+            if let Some(d) = at_cm {
+                let v = call(
+                    http.post(format!("{base}/api/optics/calibrate"))
+                        .json(&serde_json::json!({ "distance_cm": d })),
+                )
+                .await?;
+                eprintln!(
+                    "tilt set from the {}",
+                    v["used"].as_str().unwrap_or("thing")
+                );
+            }
+            if speed {
+                let v = call(http.post(format!("{base}/api/optics/speed"))).await?;
+                eprintln!(
+                    "speed from the {}: {:.0} cm, then {:.0} cm",
+                    v["used"].as_str().unwrap_or("thing"),
+                    v["before_cm"].as_f64().unwrap_or(0.0),
+                    v["after_cm"].as_f64().unwrap_or(0.0)
+                );
+            }
+            let v = call(http.get(format!("{base}/api/optics"))).await?;
+            println!("{}", serde_json::to_string_pretty(&v)?);
         }
         Cmd::Ota { image } => {
             let config = Config::load(cli.config.as_ref())?;

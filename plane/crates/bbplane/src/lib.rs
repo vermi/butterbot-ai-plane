@@ -9,6 +9,7 @@ pub mod control;
 pub mod diary;
 pub mod ears;
 pub mod face;
+pub mod geometry;
 pub mod gestures;
 pub mod home;
 pub mod hub;

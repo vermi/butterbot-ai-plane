@@ -69,6 +69,9 @@ pub fn router(robot: Robot) -> Router {
         .route("/api/diary/{day}", get(diary_day))
         .route("/api/restart", post(restart))
         .route("/api/recall", get(recall))
+        .route("/api/optics", get(optics).post(set_optics))
+        .route("/api/optics/calibrate", post(calibrate_optics))
+        .route("/api/optics/speed", post(measure_speed))
         .route(
             "/api/ota",
             get(ota_status)
@@ -497,6 +500,62 @@ struct RecallQuery {
 async fn recall(State(r): State<Robot>, Query(q): Query<RecallQuery>) -> Response {
     match r.recall.search(&r, &q.q, 8, 0.0, &[]).await {
         Ok(hits) => Json(json!({ "pieces": r.recall.len(), "hits": hits })).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+/// The camera's geometry (see `crate::geometry`), and where the things in view are with it.
+async fn optics(State(r): State<Robot>) -> Json<Value> {
+    let o = *r.optics.lock().unwrap();
+    Json(json!({ "optics": o, "in_view": r.locate_all() }))
+}
+
+#[derive(Deserialize)]
+struct OpticsBody {
+    hfov_deg: Option<f64>,
+    height_cm: Option<f64>,
+    tilt_down_deg: Option<f64>,
+    cm_per_s_at_full: Option<f64>,
+}
+
+async fn set_optics(State(r): State<Robot>, Json(b): Json<OpticsBody>) -> Response {
+    let o = {
+        let mut o = r.optics.lock().unwrap();
+        if let Some(v) = b.hfov_deg.filter(|v| (20.0..=170.0).contains(v)) {
+            o.hfov_deg = v;
+        }
+        if let Some(v) = b.height_cm.filter(|v| (2.0..=100.0).contains(v)) {
+            o.height_cm = v;
+        }
+        if let Some(v) = b.tilt_down_deg.filter(|v| (-45.0..=60.0).contains(v)) {
+            o.tilt_down_deg = v;
+        }
+        if let Some(v) = b.cm_per_s_at_full.filter(|v| (1.0..=200.0).contains(v)) {
+            o.cm_per_s_at_full = v;
+        }
+        *o
+    };
+    match o.save(&r.hub.config.data_dir()) {
+        Ok(()) => Json(json!({ "optics": o })).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct CalibrateBody {
+    distance_cm: f64,
+}
+
+async fn calibrate_optics(State(r): State<Robot>, Json(b): Json<CalibrateBody>) -> Response {
+    match r.calibrate_tilt(b.distance_cm.clamp(10.0, 500.0)) {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+async fn measure_speed(State(r): State<Robot>) -> Response {
+    match r.measure_speed().await {
+        Ok(v) => Json(v).into_response(),
         Err(e) => err(e),
     }
 }

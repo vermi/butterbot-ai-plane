@@ -246,6 +246,26 @@ pub fn tools() -> Vec<Value> {
             &[],
         ),
         f(
+            "locate",
+            "Where things are: for everything your camera's detectors see right now (faces, pets, objects), which way it is (degrees to turn, positive right), how far along the floor, and how many seconds of move (speed 50) get you there. Instant: no new picture. With x and y (percent across and down your last picture), where that spot on the floor is.",
+            json!({
+                "x": { "type": "number", "description": "percent across the picture, 0 left to 100 right" },
+                "y": { "type": "number", "description": "percent down the picture, 0 top to 100 bottom" },
+            }),
+            &[],
+        ),
+        f(
+            "approach",
+            "Go up to something you see: a name (a person, a pet) or a kind of thing (dog, chair, bottle, person), or a spot (x, y: percent of your last picture). Turns to face it and drives up in short steps, checking with the camera, and stops about stop_cm short (default 30). Then you see what is there.",
+            json!({
+                "what": { "type": "string" },
+                "x": { "type": "number" },
+                "y": { "type": "number" },
+                "stop_cm": { "type": "number" },
+            }),
+            &[],
+        ),
+        f(
             "recall",
             "Search everything you know by meaning: your memories (old ones too), your diary, and past days (who came by, what was said, your dreams). Use it when something might have come up before.",
             json!({ "query": { "type": "string", "description": "what to recall, in a few words" } }),
@@ -490,6 +510,31 @@ pub async fn run_tool(robot: &Robot, cfg: &BrainConfig, name: &str, args: &Value
                     .diary
                     .write(day, args["text"].as_str().unwrap_or_default())?;
                 Outcome::Text(format!("Written for {day}."))
+            }
+            "locate" => {
+                let v = match (args["x"].as_f64(), args["y"].as_f64()) {
+                    (Some(x), Some(y)) => robot.locate_point(x / 100.0, y / 100.0),
+                    _ => json!({ "in_view": robot.locate_all() }),
+                };
+                if v["in_view"].as_array().is_some_and(|a| a.is_empty()) {
+                    Outcome::Text("Your detectors don't see anything right now. Look first, or locate a spot with x and y.".into())
+                } else {
+                    Outcome::Text(v.to_string())
+                }
+            }
+            "approach" => {
+                let stop = args["stop_cm"].as_f64().unwrap_or(30.0).clamp(10.0, 200.0);
+                let what = match (args["what"].as_str(), args["x"].as_f64(), args["y"].as_f64()) {
+                    (Some(w), ..) if !w.trim().is_empty() => robot.approach(w, stop).await?,
+                    (_, Some(x), Some(y)) => {
+                        robot.approach_point(x / 100.0, y / 100.0, stop).await?
+                    }
+                    _ => return Ok(Outcome::Text("approach needs what, or x and y".into())),
+                };
+                match robot.snapshot(None, 12).await {
+                    Ok(f) => Outcome::Image(what, f.jpeg),
+                    Err(_) => Outcome::Text(what),
+                }
             }
             "recall" => {
                 let query = args["query"].as_str().unwrap_or_default();

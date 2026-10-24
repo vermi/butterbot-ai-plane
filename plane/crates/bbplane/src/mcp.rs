@@ -267,6 +267,25 @@ pub struct WriteDiaryArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct LocateArgs {
+    /// A spot in the last picture: percent across (0 left, 100 right)...
+    pub x: Option<f64>,
+    /// ...and down (0 top, 100 bottom).
+    pub y: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ApproachArgs {
+    /// A name (a person, a pet) or a kind of thing (dog, chair, person).
+    pub what: Option<String>,
+    /// Or a spot in the last picture, percent across and down.
+    pub x: Option<f64>,
+    pub y: Option<f64>,
+    /// How far short to stop (default 30).
+    pub stop_cm: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RecallArgs {
     /// What to recall, in a few words.
     pub query: String,
@@ -835,6 +854,41 @@ at \"HH:MM\") or some day (neither). Timed plans come back from `hear` as a `pla
         };
         tryt!(self.robot.diary.write(day, &a.text));
         ok_json(serde_json::json!({ "written": day.to_string() }))
+    }
+
+    #[tool(
+        description = "Where things are: for everything the detectors see now (faces, pets, objects), its direction \
+(degrees to turn, positive right), distance along the floor, and seconds of move at speed 50 to get there. \
+Instant. With x and y (percent of the last picture), where that spot on the floor is."
+    )]
+    async fn locate(
+        &self,
+        Parameters(a): Parameters<LocateArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        ok_json(match (a.x, a.y) {
+            (Some(x), Some(y)) => self.robot.locate_point(x / 100.0, y / 100.0),
+            _ => serde_json::json!({ "in_view": self.robot.locate_all() }),
+        })
+    }
+
+    #[tool(
+        description = "Go up to something the robot sees (a name, or a kind of thing), or a spot (x, y percent of \
+the last picture): turns to face it, drives up in short steps checking with the camera, stops about stop_cm \
+short (default 30)."
+    )]
+    async fn approach(
+        &self,
+        Parameters(a): Parameters<ApproachArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let stop = a.stop_cm.unwrap_or(30.0).clamp(10.0, 200.0);
+        let what = match (a.what.as_deref(), a.x, a.y) {
+            (Some(w), ..) if !w.trim().is_empty() => tryt!(self.robot.approach(w, stop).await),
+            (_, Some(x), Some(y)) => {
+                tryt!(self.robot.approach_point(x / 100.0, y / 100.0, stop).await)
+            }
+            _ => return fail("approach needs what, or x and y"),
+        };
+        ok_json(serde_json::json!({ "result": what }))
     }
 
     #[tool(
