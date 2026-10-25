@@ -384,11 +384,7 @@ impl Robot {
         self.ears.set_attentive(self.life.focused().is_none());
         // Drowsy for a few minutes, not the hour a feeling usually lasts.
         let minutes = 5.0 + (uuid::Uuid::new_v4().as_u128() % 301) as f64 / 60.0;
-        self.mood.wear_off(
-            crate::mood::Emotion::Sleepy,
-            minutes,
-            "just woke up from a nap",
-        );
+        self.mood.woke(minutes);
         {
             let mut doing = self.doing.lock().unwrap();
             if doing.as_ref().is_some_and(|(what, _)| what == "napping") {

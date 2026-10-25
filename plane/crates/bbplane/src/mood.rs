@@ -148,6 +148,8 @@ pub struct Now {
 pub struct Mood {
     path: PathBuf,
     felt: Mutex<Felt>,
+    /// Just woke from a nap: sleepiness, whoever feels it, is gone by then (Unix ms).
+    drowsy_until: Mutex<Option<i64>>,
 }
 
 impl Mood {
@@ -160,6 +162,7 @@ impl Mood {
         Mood {
             path,
             felt: Mutex::new(felt),
+            drowsy_until: Mutex::new(None),
         }
     }
 
@@ -190,13 +193,14 @@ impl Mood {
     }
 
     fn set(&self, emotion: Emotion, intensity: f32, why: &str, by_self: bool) {
+        let now_ms = crate::hub::now_ms() as i64;
         let felt = Felt {
             emotion,
             intensity: intensity.clamp(0.0, 1.0),
             why: why.chars().take(120).collect(),
-            since_ms: crate::hub::now_ms() as i64,
+            since_ms: now_ms,
             by_self,
-            fades_in_minutes: None,
+            fades_in_minutes: self.drowsy_minutes_left(emotion, now_ms),
         };
         tracing::info!(
             "mood: {} {:.1} ({}){}",
@@ -213,9 +217,24 @@ impl Mood {
         *self.felt.lock().unwrap() = felt;
     }
 
+    /// Sleepiness felt before the drowsy spell after a nap is over goes when the spell does.
+    fn drowsy_minutes_left(&self, emotion: Emotion, now_ms: i64) -> Option<f64> {
+        let until = (*self.drowsy_until.lock().unwrap())?;
+        (emotion == Emotion::Sleepy && until > now_ms)
+            .then(|| ((until - now_ms) as f64 / 60_000.0).max(1.0))
+    }
+
+    /// Just woke from a nap: sleepiness, whoever feels it (the agent too), is gone within
+    /// `minutes`.
+    pub fn woke(&self, minutes: f64) {
+        *self.drowsy_until.lock().unwrap() =
+            Some(crate::hub::now_ms() as i64 + (minutes * 60_000.0) as i64);
+        self.wear_off(Emotion::Sleepy, minutes, "just woke up from a nap");
+    }
+
     /// Let `emotion`, if it is what it feels, wear off within `minutes` from now, whatever its
     /// usual pace.
-    pub fn wear_off(&self, emotion: Emotion, minutes: f64, why: &str) {
+    fn wear_off(&self, emotion: Emotion, minutes: f64, why: &str) {
         let now = self.now();
         if now.emotion != emotion || now.intensity <= FADED {
             return;
@@ -395,6 +414,23 @@ mod tests {
         assert_eq!(m.now().emotion, Emotion::Grumpy);
         // It is kept across restarts.
         assert_eq!(Mood::load(&dir).now().emotion, Emotion::Grumpy);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_agent_cannot_stay_sleepy_after_a_nap() {
+        let dir = std::env::temp_dir().join(format!("bbmood-nap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let m = Mood::load(&dir);
+        m.appraise(Emotion::Sleepy, 0.7, "napping on the charger");
+        m.woke(6.0);
+        // The agent feels sleepy right after waking: it goes when the spell does.
+        m.feel(Emotion::Sleepy, 0.8, "just unplugged after a nap");
+        let f = m.felt.lock().unwrap().clone();
+        assert!(f.fades_in_minutes.is_some_and(|x| x > 5.0 && x <= 6.0));
+        // Other feelings keep their own pace.
+        m.feel(Emotion::Curious, 0.6, "something new");
+        assert_eq!(m.felt.lock().unwrap().fades_in_minutes, None);
         std::fs::remove_dir_all(&dir).ok();
     }
 
