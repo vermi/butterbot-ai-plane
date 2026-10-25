@@ -61,6 +61,8 @@ jobs:
           key: firmware-rs-${{ runner.os }}-${{ hashFiles('firmware-rs/Cargo.lock', 'firmware-rs/sdkconfig.defaults', 'firmware-rs/rust-toolchain.toml') }}
           restore-keys: firmware-rs-${{ runner.os }}-
       - name: Esp Rust toolchain
+        # From the repository root: firmware-rs/rust-toolchain.toml names the toolchain this installs.
+        working-directory: ${{ github.workspace }}
         run: |
           command -v espup || cargo install espup --locked
           command -v ldproxy || cargo install ldproxy --locked
