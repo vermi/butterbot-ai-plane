@@ -25,6 +25,9 @@ const DRIVE_REFRESH: Duration = Duration::from_millis(250);
 const COMPANY: Duration = Duration::from_secs(180);
 /// Hard cap for one drive/turn tool call.
 pub const MAX_DRIVE_MS: u64 = 10_000;
+/// Camera rate while nobody watches the live view: plenty for the detectors (a few frames a
+/// second at most), a third of the Wi-Fi time (and battery) of 24 fps.
+const UNWATCHED_FPS: u8 = 8;
 /// After a conversation of at least this many things said to it, and this long without another,
 /// it gets a moment to keep what matters (`remember`, `intend`).
 const REFLECT_AFTER_TURNS: u32 = 2;
@@ -62,6 +65,8 @@ pub struct Robot {
     doing: Arc<std::sync::Mutex<Option<(String, std::time::Instant)>>>,
     /// The camera settings to go back to after the controller's camera view (see `camera_fast`).
     camera_before_view: Arc<Mutex<Option<CameraSettings>>>,
+    /// Someone watching the live view (see `Watchers`).
+    pub watchers: Arc<Watchers>,
     /// How it feels (see `crate::mood`).
     pub mood: Arc<crate::mood::Mood>,
     /// Its own plans (see `crate::intentions`).
@@ -149,6 +154,7 @@ impl Robot {
             agent: Default::default(),
             light: Default::default(),
             camera_before_view: Default::default(),
+            watchers: Default::default(),
             doing: Default::default(),
             talk: Default::default(),
             streams: Arc::new(Mutex::new(Streams::defaults(&hub.config))),
@@ -243,7 +249,13 @@ impl Robot {
                 .await?;
             self.send_mic(false).await?;
         } else {
-            self.set_camera(s.camera_on, s.res, s.fps, s.quality, s.opts)
+            // Full rate only while someone watches; the wanted rate is kept.
+            let fps = if self.watchers.watching() {
+                s.fps
+            } else {
+                s.fps.min(UNWATCHED_FPS)
+            };
+            self.send_camera(s.camera_on, s.res, fps, s.quality, s.opts)
                 .await?;
             self.set_mic(s.mic_on).await?;
         }
@@ -391,6 +403,11 @@ impl Robot {
                 *doing = None;
             }
         }
+        self.respread_streams();
+    }
+
+    /// `respread_streams` for other modules.
+    pub fn refresh_streams(&self) {
         self.respread_streams();
     }
 
@@ -2544,5 +2561,62 @@ mod tests {
         // Jumping straight to 10% gives one warning, not two.
         assert_eq!(b.update(9, false), Some(9));
         assert_eq!(b.update(9, false), None);
+    }
+}
+
+/// Someone watching the live view: it polls `/frame.jpg` every 100 ms while its tab is visible
+/// (every 500 ms hidden). The camera runs at its full rate only then.
+#[derive(Default)]
+pub struct Watchers {
+    polls: std::sync::Mutex<std::collections::VecDeque<std::time::Instant>>,
+    watching: std::sync::atomic::AtomicBool,
+}
+
+/// Polls in the last second that make a watcher, and how long without them before it has gone.
+const WATCH_POLLS: usize = 3;
+const WATCH_GONE: Duration = Duration::from_secs(5);
+
+impl Watchers {
+    pub fn watching(&self) -> bool {
+        self.watching.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// A frame was fetched; returns true when that makes someone watching.
+    pub fn polled(&self) -> bool {
+        let now = std::time::Instant::now();
+        let mut p = self.polls.lock().unwrap();
+        p.push_back(now);
+        while p
+            .front()
+            .is_some_and(|t| now.duration_since(*t) > Duration::from_secs(1))
+        {
+            p.pop_front();
+        }
+        p.len() >= WATCH_POLLS
+            && !self
+                .watching
+                .swap(true, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Returns true when the watcher has gone.
+    fn check_gone(&self) -> bool {
+        let last = self.polls.lock().unwrap().back().copied();
+        self.watching()
+            && last.is_none_or(|t| t.elapsed() >= WATCH_GONE)
+            && self
+                .watching
+                .swap(false, std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// Drop the camera to its unwatched rate once the live view has gone. Spawned once by
+/// `crate::start`.
+pub async fn watch_watchers(robot: Robot) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        if robot.watchers.check_gone() {
+            tracing::info!("live view closed: camera at {UNWATCHED_FPS} fps");
+            robot.respread_streams();
+        }
     }
 }

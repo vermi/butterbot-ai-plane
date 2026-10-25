@@ -85,6 +85,7 @@ pub async fn start(config: config::Config) -> Result<Plane> {
     tokio::spawn(control::on_link_up(robot.clone()));
     tokio::spawn(control::on_body(robot.clone()));
     tokio::spawn(imu::run(robot.clone()));
+    tokio::spawn(control::watch_watchers(robot.clone()));
     tokio::spawn(control::overdue_reminders(robot.clone()));
     tokio::spawn(light::run(robot.clone()));
     tokio::spawn(home::run(robot.clone()));

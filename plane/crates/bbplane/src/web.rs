@@ -674,6 +674,10 @@ async fn diary_day(
 }
 
 async fn frame(State(r): State<Robot>) -> Response {
+    if r.watchers.polled() {
+        tracing::info!("live view open: camera at full rate");
+        r.refresh_streams();
+    }
     match r.hub.latest_frame().await {
         Some(f) => (
             [
