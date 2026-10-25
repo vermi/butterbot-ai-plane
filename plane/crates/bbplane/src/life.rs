@@ -112,7 +112,7 @@ pub enum Nudge {
     Call { from: String },
     /// Someone pressed Poke on the controller.
     Poked,
-    /// Someone handled the robot: `pickup`, `putdown`, `shake`, `fall` or `upside_down`.
+    /// Someone handled the robot: `pickup`, `putdown`, `shake`, `fall`, `upside_down` or `bump`.
     Handled { how: String },
     /// The battery is low (`plugged_in` false: ask to be charged), or the robot was just plugged
     /// in after such a warning.

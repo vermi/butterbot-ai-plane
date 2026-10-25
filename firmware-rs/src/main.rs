@@ -36,7 +36,7 @@ use crate::power::Boot;
 esp_idf_svc::sys::esp_app_desc! {}
 
 pub const FIRMWARE: &str = "butterbot-ai 0.6";
-const CAPS: &[&str] = &["camera", "mic", "speaker", "drive", "phone", "ota"];
+const CAPS: &[&str] = &["camera", "mic", "speaker", "drive", "phone", "imu", "ota"];
 
 fn main() {
     esp_idf_svc::sys::link_patches();
@@ -126,7 +126,7 @@ fn main() {
     base.start(tx.clone());
     battery.start(tx.clone());
     if let Some(m) = &motion {
-        m.start(tx.clone());
+        m.start(tx.clone(), link.clone());
     }
     power::watch_button(tx.clone());
     link.start(net.clone(), tx.clone());

@@ -25,6 +25,8 @@ pub enum FrameType {
     MicPcm = 3,
     /// Plane -> robot: PCM s16le 16 kHz mono, no header.
     SpkPcm = 4,
+    /// Robot -> plane: `MediaHeader` + `rate_hz u16` + accelerometer samples (`ImuChunk`).
+    Imu = 5,
 }
 
 impl TryFrom<u8> for FrameType {
@@ -35,6 +37,7 @@ impl TryFrom<u8> for FrameType {
             2 => Self::Video,
             3 => Self::MicPcm,
             4 => Self::SpkPcm,
+            5 => Self::Imu,
             _ => return Err(FrameError::UnknownType(v)),
         })
     }
@@ -305,6 +308,56 @@ impl MicChunk {
     }
 }
 
+/// Accelerometer samples, oldest first: x, y, z in milli-g, in the sensor's axes (x points up
+/// when the robot stands on its tracks; see `firmware-rs/src/motion.rs`). `header.ts_ms` is
+/// when the last sample was taken.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImuChunk {
+    pub header: MediaHeader,
+    pub rate_hz: u16,
+    pub samples: Vec<[i16; 3]>,
+}
+
+impl ImuChunk {
+    pub fn parse(frame: &Frame) -> Result<ImuChunk, FrameError> {
+        let (header, rest) =
+            MediaHeader::parse(&frame.payload).ok_or(FrameError::Short(FrameType::Imu))?;
+        if rest.len() < 2 {
+            return Err(FrameError::Short(FrameType::Imu));
+        }
+        let rate_hz = u16::from_le_bytes([rest[0], rest[1]]);
+        let samples = rest[2..]
+            .as_chunks::<6>()
+            .0
+            .iter()
+            .map(|c| {
+                [
+                    i16::from_le_bytes([c[0], c[1]]),
+                    i16::from_le_bytes([c[2], c[3]]),
+                    i16::from_le_bytes([c[4], c[5]]),
+                ]
+            })
+            .collect();
+        Ok(ImuChunk {
+            header,
+            rate_hz,
+            samples,
+        })
+    }
+
+    pub fn to_frame(&self) -> Frame {
+        let mut b = BytesMut::with_capacity(MediaHeader::LEN + 2 + self.samples.len() * 6);
+        self.header.put(&mut b);
+        b.put_u16_le(self.rate_hz);
+        for s in &self.samples {
+            for v in s {
+                b.put_i16_le(*v);
+            }
+        }
+        Frame::new(FrameType::Imu, b.freeze())
+    }
+}
+
 pub fn pcm_from_le(bytes: &[u8]) -> Vec<i16> {
     bytes
         .as_chunks::<2>()
@@ -416,6 +469,19 @@ mod tests {
             Frame::decode(&mut buf),
             Err(FrameError::TooLarge(_))
         ));
+    }
+
+    #[test]
+    fn imu_chunk_roundtrip() {
+        let c = ImuChunk {
+            header: MediaHeader { seq: 3, ts_ms: 4 },
+            rate_hz: 50,
+            samples: vec![[1000, -2, 3], [i16::MIN, 0, i16::MAX]],
+        };
+        let f = c.to_frame();
+        assert_eq!(f.ty, FrameType::Imu);
+        assert_eq!(f.payload.len(), 8 + 2 + 12);
+        assert_eq!(ImuChunk::parse(&f).unwrap(), c);
     }
 
     #[test]

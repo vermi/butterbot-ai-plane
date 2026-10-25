@@ -9,6 +9,7 @@ use std::sync::Arc;
 use esp_idf_svc::sys::EspError;
 
 use crate::i2c::{Bus, Dev};
+use crate::link::Link;
 use crate::pins;
 use crate::util::{self, millis, sleep_ms, Stack};
 
@@ -276,12 +277,17 @@ impl Motion {
         p != Pose::Straight as u8 && p != Pose::Moving as u8
     }
 
-    pub fn start<E: From<MotionEvent> + Send + 'static>(self: &Arc<Self>, tx: Sender<E>) {
+    /// Watch the sensor, and stream it to the plane at 50 Hz.
+    pub fn start<E: From<MotionEvent> + Send + 'static>(
+        self: &Arc<Self>,
+        tx: Sender<E>,
+        link: Arc<Link>,
+    ) {
         let m = self.clone();
-        util::spawn(c"motion", 4096, 5, Stack::Psram, move || m.run(&tx));
+        util::spawn(c"motion", 4096, 5, Stack::Psram, move || m.run(&tx, &link));
     }
 
-    fn run<E: From<MotionEvent>>(&self, tx: &Sender<E>) {
+    fn run<E: From<MotionEvent>>(&self, tx: &Sender<E>, link: &Link) {
         let mut batch = Vec::with_capacity(32);
         let mut shake = Shake::new();
         let mut was_lifted = false;
@@ -300,6 +306,19 @@ impl Motion {
             if batch.is_empty() {
                 continue;
             }
+            // 100 Hz in pairs: 50 Hz to the plane.
+            let stream: Vec<[i16; 3]> = batch
+                .chunks(2)
+                .map(|p| {
+                    let a = mean(p);
+                    [
+                        (a.x * 1000.0) as i16,
+                        (a.y * 1000.0) as i16,
+                        (a.z * 1000.0) as i16,
+                    ]
+                })
+                .collect();
+            link.send_imu(&stream, 50);
             let m = mean(&batch);
             let current = pose(m);
             self.pose.store(current as u8, Ordering::Relaxed);

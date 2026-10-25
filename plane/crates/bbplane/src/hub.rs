@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, anyhow, bail};
-use bbproto::frame::{MicChunk, VideoFrame};
+use bbproto::frame::{ImuChunk, MicChunk, VideoFrame};
 use bbproto::{Frame, FrameType, FromRobot, ToRobot};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -54,11 +54,17 @@ pub struct RobotStatus {
     /// Video frames lost in transit (some datagrams never arrived).
     pub video_dropped: u64,
     pub mic_chunks: u64,
+    /// Accelerometer chunks received (firmware 0.6 streams it).
+    pub imu_chunks: u64,
     /// Robot's Wi-Fi signal strength in dBm.
     pub wifi_rssi: Option<i32>,
     /// Robot's free internal RAM and its largest free block, in bytes.
     pub ram_free: Option<u32>,
     pub ram_block: Option<u32>,
+    /// The prototyping card's time-of-flight sensor: millimetres to the nearest thing.
+    pub range_mm: Option<u16>,
+    /// The add-on card in the slot, if any.
+    pub card: Option<String>,
     /// The robot's last firmware update report (`state`, `done`, `total`, `error`).
     pub ota: Option<Value>,
 }
@@ -85,6 +91,8 @@ pub struct Hub {
     pub video: broadcast::Sender<Arc<VideoFrame>>,
     latest_frame: Mutex<Option<Arc<VideoFrame>>>,
     pub mic: broadcast::Sender<Arc<Vec<i16>>>,
+    /// The accelerometer stream (see `crate::imu`).
+    pub imu: broadcast::Sender<Arc<ImuChunk>>,
     mic_history: Mutex<VecDeque<i16>>,
     /// When a robot in remote mode last dropped off; it keeps retrying on its own for a while.
     pub remote_lost_at: Mutex<Option<tokio::time::Instant>>,
@@ -116,6 +124,7 @@ impl Hub {
             video: broadcast::channel(8).0,
             latest_frame: Mutex::new(None),
             mic: broadcast::channel(64).0,
+            imu: broadcast::channel(32).0,
             mic_history: Mutex::new(VecDeque::new()),
             remote_lost_at: Mutex::new(None),
             video_assembler: Mutex::new(bbproto::VideoAssembler::default()),
@@ -304,6 +313,13 @@ impl Hub {
                 Ok(c) => self.handle_mic(c).await,
                 Err(e) => tracing::warn!("bad mic frame: {e}"),
             },
+            FrameType::Imu => match ImuChunk::parse(&frame) {
+                Ok(c) => {
+                    self.status.lock().await.imu_chunks += 1;
+                    let _ = self.imu.send(Arc::new(c));
+                }
+                Err(e) => tracing::debug!("bad imu frame: {e}"),
+            },
             FrameType::SpkPcm => tracing::warn!("robot sent a speaker frame, ignoring"),
         }
     }
@@ -455,6 +471,16 @@ impl Hub {
                 s.ram_free = ram_free.or(s.ram_free);
                 s.ram_block = ram_block.or(s.ram_block);
             }
+            FromRobot::Card { kind, inserted } => {
+                self.status.lock().await.card = inserted.then(|| kind.clone());
+                self.push_event("card", json!({ "kind": kind, "inserted": inserted }))
+                    .await
+            }
+            FromRobot::CardMotion { detected } => {
+                self.push_event("card_motion", json!({ "detected": detected }))
+                    .await
+            }
+            FromRobot::Range { mm } => self.status.lock().await.range_mm = mm,
             FromRobot::Button { action } => {
                 self.push_event("button", json!({ "action": action })).await
             }

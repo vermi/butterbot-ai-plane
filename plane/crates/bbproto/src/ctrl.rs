@@ -443,6 +443,22 @@ pub enum FromRobot {
         #[serde(default)]
         ram_block: Option<u32>,
     },
+    /// An add-on card went in or out: `temp_hum`, `co2`, `gas`, `motion`, `led`, `ir`,
+    /// `perfboard` (the prototyping card) or `unknown`.
+    Card {
+        kind: String,
+        inserted: bool,
+    },
+    /// The motion (PIR) card saw something start or stop moving.
+    CardMotion {
+        detected: bool,
+    },
+    /// The time-of-flight sensor on the prototyping card: millimetres to the nearest thing, None
+    /// with nothing in range. Sent when it changes.
+    Range {
+        #[serde(default)]
+        mm: Option<u16>,
+    },
     /// Power button press while in remote mode, etc.
     Button {
         action: String,

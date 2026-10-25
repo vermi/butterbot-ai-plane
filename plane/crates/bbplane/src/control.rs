@@ -228,7 +228,17 @@ impl Robot {
         let _one = self.settings.lock().await;
         let cfg = &self.hub.config;
         let s = *self.streams.lock().await;
-        if self.life.napping() {
+        let viewing = self.camera_before_view.lock().await.is_some();
+        if viewing {
+            // The controller's camera view keeps the camera on (see `camera_fast`).
+            self.send_camera(true, Res::Qvga, s.fps.max(15), s.quality, s.opts)
+                .await?;
+            if self.life.napping() {
+                self.send_mic(false).await?;
+            } else {
+                self.set_mic(s.mic_on).await?;
+            }
+        } else if self.life.napping() {
             self.send_camera(false, s.res, s.fps, s.quality, s.opts)
                 .await?;
             self.send_mic(false).await?;
@@ -595,24 +605,31 @@ Ask to be unplugged first."
         }
     }
 
-    /// The controller's camera view wants frames more than detail: QVGA runs at about three
-    /// times VGA's rate. `false` goes back to what was set before.
-    pub async fn camera_fast(&self, fast: bool) {
-        let mut before = self.camera_before_view.lock().await;
-        let r = if fast {
-            let s = self.streams.lock().await;
-            if !s.camera_on || s.res == Res::Qvga || before.is_some() {
+    /// The controller's camera view opened (`viewing`) or closed. While it is open the robot's
+    /// camera runs at QVGA (more frames a second than the remote shows anyway), even in a nap
+    /// (someone asked to see), and what was asked for stays as it was; once it closes the streams
+    /// go back to that (off in a nap).
+    pub async fn camera_fast(&self, viewing: bool) {
+        let r = {
+            let mut before = self.camera_before_view.lock().await;
+            if viewing {
+                if before.is_some() {
+                    return;
+                }
+                let s = *self.streams.lock().await;
+                *before = Some((s.res, s.fps, s.quality, s.opts));
+                self.send_camera(true, Res::Qvga, s.fps.max(15), s.quality, s.opts)
+                    .await
+            } else if before.take().is_none() {
                 return;
+            } else {
+                Ok(())
             }
-            let (res, fps, quality, opts) = (s.res, s.fps, s.quality, s.opts);
-            drop(s);
-            *before = Some((res, fps, quality, opts));
-            self.set_camera(true, Res::Qvga, fps, quality, opts).await
+        };
+        let r = if viewing {
+            r
         } else {
-            let Some((res, fps, quality, opts)) = before.take() else {
-                return;
-            };
-            self.set_camera(true, res, fps, quality, opts).await
+            self.apply_session_settings().await
         };
         if let Err(e) = r {
             tracing::debug!("camera for the controller's view: {e:#}");
@@ -1416,6 +1433,7 @@ impl Robot {
             Nudge::Handled { how } => match how.as_str() {
                 "pickup" => (Surprised, 0.5, "picked up".into()),
                 "shake" => (Grumpy, 0.55, "got shaken".into()),
+                "bump" => (Surprised, 0.45, "got bumped".into()),
                 "fall" | "upside_down" => (Worried, 0.6, how.replace('_', " ")),
                 _ => return,
             },

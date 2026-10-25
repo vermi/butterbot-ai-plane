@@ -13,6 +13,7 @@ pub mod geometry;
 pub mod gestures;
 pub mod home;
 pub mod hub;
+pub mod imu;
 pub mod intentions;
 pub mod life;
 pub mod light;
@@ -83,6 +84,7 @@ pub async fn start(config: config::Config) -> Result<Plane> {
     tokio::spawn(agent::run(robot.clone()));
     tokio::spawn(control::on_link_up(robot.clone()));
     tokio::spawn(control::on_body(robot.clone()));
+    tokio::spawn(imu::run(robot.clone()));
     tokio::spawn(control::overdue_reminders(robot.clone()));
     tokio::spawn(light::run(robot.clone()));
     tokio::spawn(home::run(robot.clone()));

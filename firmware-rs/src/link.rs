@@ -77,6 +77,7 @@ pub struct Link {
     replies: Mutex<(Vec<Reply>, usize)>,
     hello: Vec<u8>,
     mic_seq: AtomicU32,
+    imu_seq: AtomicU32,
     speaker: Mutex<Option<SpeakerSink>>,
 }
 
@@ -115,6 +116,7 @@ impl Link {
             replies: Mutex::new((vec![Reply { id: 0, json: None }; REPLIES], 0)),
             hello,
             mic_seq: AtomicU32::new(0),
+            imu_seq: AtomicU32::new(0),
             speaker: Mutex::new(None),
         })
     }
@@ -446,6 +448,32 @@ impl Link {
             }
             q.mic.push_back(d);
         }
+        self.wake.notify_one();
+    }
+
+    /// Accelerometer samples (milli-g, x y z) for the plane's bump and lift detection.
+    pub fn send_imu(&self, samples: &[[i16; 3]], rate_hz: u16) {
+        if !self.is_online() || samples.is_empty() {
+            return;
+        }
+        let payload = 8 + 2 + samples.len() * 6;
+        let mut d = Vec::with_capacity(HEADER_LEN + payload);
+        header(&mut d, FrameType::Imu, 0, payload);
+        let seq = self.imu_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        d.extend_from_slice(&seq.to_le_bytes());
+        d.extend_from_slice(&(millis() as u32).to_le_bytes());
+        d.extend_from_slice(&rate_hz.to_le_bytes());
+        for s in samples {
+            for v in s {
+                d.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        // With the microphone's audio: small, steady, and fine to lose now and then.
+        let mut q = self.queues.lock().unwrap();
+        if q.mic.len() >= MIC_QUEUE {
+            q.mic.pop_front();
+        }
+        q.mic.push_back(d);
         self.wake.notify_one();
     }
 
