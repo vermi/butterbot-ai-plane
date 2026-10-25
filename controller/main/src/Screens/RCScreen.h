@@ -12,7 +12,12 @@
 
 class RCScreen : public LVScreen{
 public:
-	RCScreen();
+	/**
+	 * Manual Override. Stock: the robot joins this controller's access point and sends its camera
+	 * there. viaPlane (AI mode, firmware 0.6): the stick goes over Bluetooth, and the camera comes
+	 * from the plane over the home Wi-Fi, as in the camera view (PeekView).
+	 */
+	explicit RCScreen(bool viaPlane = false);
 	virtual ~RCScreen() override;
 
 private:
@@ -23,6 +28,9 @@ private:
 	StrongObjectPtr<class Feed> feed;
 
 	TopBar* topBar;
+
+	const bool viaPlane;
+	class PeekView* peek = nullptr;
 
 	DriveData lastData = {};
 	uint64_t lastDataSend = 0;

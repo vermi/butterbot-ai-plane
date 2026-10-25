@@ -7,15 +7,18 @@
 #include <LV_Interface/LVGL.h>
 #include "HomeScreen.h"
 #include "PairingScreen.h"
+#include "Components/PeekView.h"
 
-RCScreen::RCScreen(){
+RCScreen::RCScreen(bool viaPlane) : viaPlane(viaPlane){
 	const Application* app = Application::getApp();
 	accessPoint = app->getPeriphery<WiFiAccessPoint>();
-	feed = newObject<Feed>();
 
 	LVGL* lvgl = app->getService<LVGL>();
 
-	accessPoint->OnConnectionEvent.bind(lvgl, [this](WiFiAccessPoint::EventType type){ onAPConnectionStatus(type); });
+	if(!viaPlane){
+		feed = newObject<Feed>();
+		accessPoint->OnConnectionEvent.bind(lvgl, [this](WiFiAccessPoint::EventType type){ onAPConnectionStatus(type); });
+	}
 
 	lv_obj_set_style_bg_color(*this, lv_color_black(), 0);
 	lv_obj_set_style_bg_opa(*this, LV_OPA_COVER, 0);
@@ -36,6 +39,24 @@ RCScreen::RCScreen(){
 		return;
 	}
 
+	if(viaPlane){
+		// The camera view: the robot sends the Wi-Fi details, the plane the pictures.
+		peek = new PeekView(*this);
+		com->onData.bind(lvgl, [this](BB::State state, BB::Action action, const std::vector<uint8_t>& data){
+			if(state != BB::State::AI || peek == nullptr){
+				return;
+			}
+			if(action.ai == BB::Action::AI::PeekWiFi){
+				peek->onWiFi(data);
+			}else if(action.ai == BB::Action::AI::PeekCaption){
+				peek->onCaption(data);
+			}
+		});
+		ScenarioData open{};
+		open.raw = 1;
+		com->sendScenario(BB::Action::Scenario::AiPeek, open);
+	}
+
 	com->sendDrive(lastData);
 
 	com->onConnStatus.bind(lvgl, [this](Com::ConnStatus status){ onConnectionStatus(status); });
@@ -51,17 +72,29 @@ RCScreen::~RCScreen(){
 
 	if(Com* com = app->getService<Com>()){
 		com->onConnStatus.unbind(lvgl);
+		if(viaPlane){
+			com->onData.unbind(lvgl);
+			ScenarioData close{};
+			close.raw = 0;
+			com->sendScenario(BB::Action::Scenario::AiPeek, close);
+		}
 	}
+	delete peek;
+	peek = nullptr;
 
 	if(ButtonInput* buttonInput = app->getService<ButtonInput>()){
 		buttonInput->OnButtonEvent.unbind(lvgl);
 	}
 
-	accessPoint->OnConnectionEvent.unbind(lvgl);
+	if(!viaPlane){
+		accessPoint->OnConnectionEvent.unbind(lvgl);
+	}
 
 	free(feedBuf);
 
-	delete *feed;
+	if(feed){
+		delete *feed;
+	}
 }
 
 void RCScreen::loop(){
@@ -69,10 +102,14 @@ void RCScreen::loop(){
 		topBar->loop();
 	}
 
-	feed->nextFrame([this](const uint16_t* buf){
-		memcpy(feedBuf, buf, 128*128*2);
-		lv_obj_invalidate(feedImg);
-	});
+	if(peek != nullptr){
+		peek->loop();
+	}else if(feed){
+		feed->nextFrame([this](const uint16_t* buf){
+			memcpy(feedBuf, buf, 128*128*2);
+			lv_obj_invalidate(feedImg);
+		});
+	}
 
 	const Application* app = Object::getApp();
 	Com* com = app->getService<Com>();

@@ -22,6 +22,10 @@ public:
 	bool isConnecting();
 	void connect();
 	void disconnect();
+	/** Give up on a connection attempt that hangs (a failed open or pairing never reports back). */
+	void restart();
+	/** How long the current attempt has been going, in ms (0 when idle or connected). */
+	uint64_t attemptMs() const;
 
 	enum class ConnEvent { Connected, Failed };
 	DECLARE_EVENT(OnConnEvent, GAP, ConnEvent);
@@ -41,15 +45,19 @@ private:
 	void scanResult(const esp_ble_gap_cb_param_t& res);
 	void scanDone();
 
-	struct {
+	struct Found {
 		esp_bd_addr_t addr;
 		esp_ble_addr_type_t type;
 		bool found = false;
-	} result;
+	};
+	Found result;
+	/** The robot's address from the last scan that reported one. */
+	Found last;
 
 	enum {
 		Idle, Scanning, Stopping, Connecting, Connected
 	} state = Idle;
+	uint64_t attemptAt = 0;
 
 	static constexpr const char* Name = "CircuitMess Butter Bot";
 

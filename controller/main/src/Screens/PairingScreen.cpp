@@ -7,6 +7,17 @@
 #include "SettingsScreen.h"
 #include "Services/ThemeService.h"
 #include "Fonts/font.hpp"
+#include <esp_log.h>
+#include <esp_system.h>
+#include <esp_timer.h>
+
+// Whether this boot has had a link to the robot: a remote that lost it and cannot find the robot
+// again recovers by restarting (a fresh Bluetooth stack finds it at once).
+static bool linkedBefore = false;
+
+static uint64_t nowMs(){
+	return esp_timer_get_time() / 1000;
+}
 
 PairingScreen::PairingScreen(){
 	const auto app = Application::getApp();
@@ -41,6 +52,7 @@ PairingScreen::PairingScreen(){
 	com->onConnStatus.bind(app->getService<LVGL>(), [this](const Com::ConnStatus status) {
 		// If connection successful, turn on LED and transition to home screen
 		if(status == Com::ConnStatus::Connected){
+			linkedBefore = true;
 			ledController->wifiLedOn();
 			ledController->bigGreenLedOff();
 			transition([]() {
@@ -53,6 +65,7 @@ PairingScreen::PairingScreen(){
 		handleButtonEvent(static_cast<Button>(static_cast<int>(btn)), action);
 	});
 
+	shownAt = nowMs();
 	if(!gap->isConnected() && !gap->isConnecting()) gap->connect();
 }
 
@@ -67,7 +80,6 @@ PairingScreen::~PairingScreen(){
 void PairingScreen::buildSettingsHint(){
 	// Pairing assets are theme-agnostic, so the hint always uses the default theme
 	const ThemeStyle& style = ThemeService::getThemeStyle(Theme::Main);
-	const ThemeService* theme = Application::getApp()->getService<ThemeService>();
 
 	lv_obj_t* row = lv_obj_create(*this);
 	lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
@@ -87,12 +99,8 @@ void PairingScreen::buildSettingsHint(){
 	lv_obj_set_style_text_font(label, &lv_font_butter, 0);
 	lv_obj_set_style_text_color(label, style.primaryColor, 0);
 	lv_obj_set_style_pad_hor(label, 2, 0);
-	lv_label_set_text_static(label, "Click joystick for");
-
-	// The pairing archive carries the default theme's settings icon
-	lv_obj_t* icon = lv_image_create(row);
-	lv_image_set_src(icon, theme->getAsset(Asset::Settings));
-	lv_obj_set_style_margin_all(icon, 1, 0);
+	// In words: the settings icon is not in the pairing archive.
+	lv_label_set_text_static(label, "Joystick: settings");
 }
 
 void PairingScreen::handleButtonEvent(const Button btn, const ButtonInput::Action action){
@@ -104,5 +112,19 @@ void PairingScreen::handleButtonEvent(const Button btn, const ButtonInput::Actio
 }
 
 void PairingScreen::loop(){
-
+	// The link may go down only after this screen opened (connect() then found the old link
+	// still up and did nothing), and an attempt can hang (a failed open or pairing never reports
+	// back): keep trying.
+	if(gap->isConnected()){
+		return;
+	}
+	if(linkedBefore && nowMs() - shownAt > RelinkRestartMs){
+		ESP_LOGW("Pairing", "the robot is not back after %llu ms: restarting", RelinkRestartMs);
+		esp_restart();
+	}
+	if(!gap->isConnecting()){
+		gap->connect();
+	}else if(gap->attemptMs() > ConnectHangMs){
+		gap->restart();
+	}
 }

@@ -3,6 +3,7 @@
 #include "ConMan.h"
 #include <esp_log.h>
 #include <esp_gatt_common_api.h>
+#include <esp_timer.h>
 
 static const char* TAG = "BLE::GAP";
 
@@ -31,6 +32,7 @@ void BLE::GAP::connect(){
 	if(state != Idle) return;
 
 	state = Scanning;
+	attemptAt = esp_timer_get_time() / 1000;
 	result.found = false;
 
 	esp_ble_scan_params_t ScanParams = {
@@ -89,8 +91,23 @@ void BLE::GAP::scanResult(const esp_ble_gap_cb_param_t& gap_res){
 		ESP_LOGI(TAG, "Scan result, device "ESP_BD_ADDR_STR", name len %u", ESP_BD_ADDR_HEX(res.bda), advLen);
 		ESP_LOG_BUFFER_CHAR(TAG, advName, advLen);
 
-		memcpy(result.addr, res.bda, ESP_BD_ADDR_LEN);
-		result.type = res.ble_addr_type;
+		// After a lost link the stack reports the bonded robot at 00:00:00:00:00:00, and a
+		// connection to that never completes: use the address it had.
+		static constexpr esp_bd_addr_t None = {};
+		if(memcmp(res.bda, None, ESP_BD_ADDR_LEN) == 0){
+			if(!last.found){
+				return;
+			}
+			ESP_LOGI(TAG, "no address in the scan result: using the last one");
+			memcpy(result.addr, last.addr, ESP_BD_ADDR_LEN);
+			result.type = last.type;
+		}else{
+			memcpy(result.addr, res.bda, ESP_BD_ADDR_LEN);
+			result.type = res.ble_addr_type;
+			memcpy(last.addr, res.bda, ESP_BD_ADDR_LEN);
+			last.type = res.ble_addr_type;
+			last.found = true;
+		}
 		result.found = true;
 
 		state = Stopping;
@@ -98,7 +115,32 @@ void BLE::GAP::scanResult(const esp_ble_gap_cb_param_t& gap_res){
 	}
 }
 
+void BLE::GAP::restart(){
+	if(state == Idle || state == Connected){
+		return;
+	}
+	ESP_LOGW(TAG, "connecting hangs (state %d): starting over", (int) state);
+	if(state == Scanning || state == Stopping){
+		esp_ble_gap_stop_scanning();
+	}else if(state == Connecting && result.found){
+		esp_ble_gap_disconnect(result.addr);
+	}
+	state = Idle;
+	onConnEvent.broadcast(ConnEvent::Failed);
+}
+
+uint64_t BLE::GAP::attemptMs() const{
+	if(state == Idle || state == Connected){
+		return 0;
+	}
+	return esp_timer_get_time() / 1000 - attemptAt;
+}
+
 void BLE::GAP::scanDone(){
+	// A scan stopped by restart() reports in after the attempt was dropped.
+	if(state != Scanning && state != Stopping){
+		return;
+	}
 	if(!result.found){
 		onConnEvent.broadcast(ConnEvent::Failed);
 		state = Idle;

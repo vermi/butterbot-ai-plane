@@ -21,6 +21,10 @@ private:
 
 	void loop() override;
 
+	static constexpr uint64_t ConnectHangMs = 25000;
+	static constexpr uint64_t RelinkRestartMs = 30000;
+	uint64_t shownAt = 0;
+
 	void buildSettingsHint();
 
 	void handleButtonEvent(Button btn, ButtonInput::Action action);

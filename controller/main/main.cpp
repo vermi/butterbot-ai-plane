@@ -44,6 +44,7 @@ protected:
 		bootloader_random_disable();
 
 		esp_log_level_set("*", ESP_LOG_WARN);
+		esp_log_level_set("BLE::GAP", ESP_LOG_INFO);
 
 		// Stack overflow otherwise - increase Threaded/AsyncEntity stack size if logging is needed
 		esp_log_level_set("Com", ESP_LOG_NONE);

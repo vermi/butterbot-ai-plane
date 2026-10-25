@@ -369,6 +369,17 @@ void HomeScreen::stepActivity(const int step){
 }
 
 void HomeScreen::startRC(){
+	// AI mode: no access point; the stick goes over Bluetooth, the camera comes from the plane.
+	if(robotState != nullptr && robotState->isAi() && com != nullptr){
+		com->sendRC(RCData{});
+		clearPopup();
+		summonPressTime = 0;
+		transition([]() {
+			return std::make_unique<RCScreen>(true);
+		});
+		return;
+	}
+
 	WiFiAccessPoint* accessPoint = Object::getApp()->getPeriphery<WiFiAccessPoint>();
 	if(accessPoint == nullptr){
 		return;
