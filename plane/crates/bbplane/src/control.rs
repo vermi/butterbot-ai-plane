@@ -1566,6 +1566,7 @@ impl Robot {
                     info: json!({
                         "nudge": "morning",
                         "plans_now": self.intentions.list().len(),
+                        "plans": self.intentions.list().iter().map(|p| format!("{} ({})", p.text, p.when())).collect::<Vec<_>>(),
                         "mood": self.mood.for_agent(),
                     }),
                     image: frame().await,

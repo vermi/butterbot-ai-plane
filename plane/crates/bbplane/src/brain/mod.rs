@@ -824,10 +824,13 @@ pub fn describe(ev: &crate::control::AgentEvent) -> Option<(String, Option<Bytes
                 Some("reflect") => "[That conversation is over: think back on it, the way you would after talking with a friend. Usually something is worth keeping: who it was and what they wanted, how they seemed, something new about them, the home or their plans (remember), or something you said you'd do, want to follow up on or got curious about (intend). Keep one or two such things. Only if it really was nothing (a hello, a misheard word), call stay_quiet. Don't say anything either way.]".to_string(),
                 Some("morning") => format!(
                     "[A new day{}. What would you like to do or find out today? Make one to three plans of your own with intend: things to explore, check on, learn about or bring up with someone (with a time, or for some day). Don't say anything.]",
-                    info["plans_now"]
-                        .as_u64()
-                        .filter(|n| *n > 0)
-                        .map(|n| format!(" (you have {n} plans already: see plans)"))
+                    info["plans"]
+                        .as_array()
+                        .filter(|p| !p.is_empty())
+                        .map(|p| format!(
+                            " (your plans already: {}; don't make the same ones again)",
+                            p.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join("; ")
+                        ))
                         .unwrap_or_default()
                 ),
                 Some("plan") => format!(

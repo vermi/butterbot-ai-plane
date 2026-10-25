@@ -23,6 +23,10 @@ pub struct Memory {
 }
 
 /// A fact without what a model copied from the list it was shown ("12 | 2026-10-24 | ...").
+pub fn clean_text(text: &str) -> &str {
+    clean(text)
+}
+
 fn clean(text: &str) -> &str {
     let mut t = text.trim();
     loop {

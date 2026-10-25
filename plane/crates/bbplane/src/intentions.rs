@@ -102,6 +102,28 @@ impl Intentions {
         Ok(gone)
     }
 
+    /// Replace the plans `ids` (two or more, all still there) with one, `text`: the same plan
+    /// made several times. It keeps the soonest time among them, if any had one.
+    pub fn merge(&self, ids: &[u32], text: &str) -> Result<Option<Intention>> {
+        let text: String = text.trim().chars().take(MAX_TEXT).collect();
+        let mut list = self.list.lock().unwrap();
+        let merged: Vec<&Intention> = list.iter().filter(|i| ids.contains(&i.id)).collect();
+        if text.is_empty() || ids.len() < 2 || merged.len() != ids.len() {
+            return Ok(None);
+        }
+        let i = Intention {
+            id: list.iter().map(|i| i.id).max().unwrap_or(0) + 1,
+            text,
+            due_ms: merged.iter().filter_map(|i| i.due_ms).min(),
+            set_ms: merged.iter().map(|i| i.set_ms).max().unwrap_or_default(),
+        };
+        list.retain(|p| !ids.contains(&p.id));
+        list.push(i.clone());
+        list.sort_by_key(|i| i.due_ms.unwrap_or(i64::MAX));
+        self.save(&list)?;
+        Ok(Some(i))
+    }
+
     /// A timed plan that is due, taken off the list (it can be made again if put off).
     pub fn take_due(&self, now_ms: i64) -> Option<Intention> {
         let mut list = self.list.lock().unwrap();
@@ -141,6 +163,37 @@ impl Intentions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merges_the_same_plan_made_twice() {
+        let dir = std::env::temp_dir().join(format!(
+            "bbplane-plans-merge-{}-{}",
+            std::process::id(),
+            crate::hub::now_ms()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = Intentions::load(&dir);
+        let a = p
+            .add("ask Justin about quantum computing", None, None)
+            .unwrap();
+        let b = p
+            .add("chat with Justin about a quantum idea", Some(60.0), None)
+            .unwrap();
+        let c = p.add("check on Kiwi", None, None).unwrap();
+        assert!(p.merge(&[a.id], "alone").unwrap().is_none());
+        let m = p
+            .merge(&[a.id, b.id], "ask Justin about a quantum computing idea")
+            .unwrap()
+            .unwrap();
+        assert_eq!(m.due_ms, b.due_ms, "keeps the time one of them had");
+        let texts: Vec<String> = Intentions::load(&dir)
+            .list()
+            .into_iter()
+            .map(|i| i.text)
+            .collect();
+        assert_eq!(texts, [m.text, c.text]);
+        std::fs::remove_dir_all(dir).ok();
+    }
 
     #[test]
     fn plans_come_due_and_some_day_ones_wait() {

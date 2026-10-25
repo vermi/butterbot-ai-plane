@@ -12,6 +12,9 @@ use crate::control::Robot;
 /// Most merges, retirements and new memories in one nap.
 const MAX_MERGES: usize = 10;
 const MAX_RETIRED: usize = 5;
+/// Most plans dropped in one nap, and how old a plan must be to be dropped.
+const MAX_DROPPED: usize = 5;
+const PLAN_SETTLE_MS: i64 = 2 * 3600 * 1000;
 const MAX_KEPT: usize = 3;
 
 /// The nap's work; returns what it kept from the day.
@@ -26,6 +29,13 @@ pub async fn upkeep(robot: &Robot) -> Vec<String> {
             0
         }
     };
+    let plans = match tidy_plans(robot).await {
+        Ok(n) => n,
+        Err(e) => {
+            tracing::warn!("sleep: tidying plans: {e:#}");
+            0
+        }
+    };
     let kept = match keep_the_day(robot).await {
         Ok(k) => k,
         Err(e) => {
@@ -34,7 +44,7 @@ pub async fn upkeep(robot: &Robot) -> Vec<String> {
         }
     };
     tracing::info!(
-        "sleep: merged {merged} memories, kept {} from the day",
+        "sleep: merged {merged} memories, {plans} plan changes, kept {} from the day",
         kept.len()
     );
     if (merged > 0 || !kept.is_empty())
@@ -111,6 +121,84 @@ async fn consolidate(robot: &Robot) -> Result<usize> {
         let k = robot.memory.retire(&retire)?;
         tracing::info!("sleep: retired {k} passing memories {retire:?} to the archive");
         n += k;
+    }
+    Ok(n)
+}
+
+/// Merge plans made more than once, and drop the ones that are done or no longer make sense
+/// (what it remembers says so); returns how many changes.
+async fn tidy_plans(robot: &Robot) -> Result<usize> {
+    let plans = robot.intentions.list();
+    if plans.len() < 2 {
+        return Ok(0);
+    }
+    let lines: String = plans
+        .iter()
+        .map(|p| {
+            format!(
+                "{} | made {} | {} | {}",
+                p.id,
+                crate::reminders::local(p.set_ms).format("%Y-%m-%d"),
+                p.when(),
+                p.text
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let answer = ask_json(
+        robot,
+        &format!(
+            "A home robot's own plans, one a line (id | made | when | text):\n{lines}\n\n\
+             Its memories (what it knows and has done):\n{}\n\n\
+             Tidy the plans. Merge plans that mean the same thing into one, worded plainly. Drop \
+             plans its memories show are done, and ones that no longer make sense. Leave the \
+             others alone; when unsure, leave them. Answer in JSON: \
+             {{\"merges\": [{{\"ids\": [1, 2], \"text\": \"...\"}}], \"drop\": [3]}}, with \
+             empty lists if there is nothing to do.",
+            memories(robot)
+        ),
+    )
+    .await?;
+    let mut n = 0;
+    for m in answer["merges"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(MAX_MERGES)
+    {
+        let ids: Vec<u32> = m["ids"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|i| i.as_u64().map(|i| i as u32))
+            .collect();
+        let text = crate::memory::clean_text(m["text"].as_str().unwrap_or_default());
+        if let Some(p) = robot.intentions.merge(&ids, text)? {
+            tracing::info!("sleep: merged plans {ids:?} into \"{}\"", p.text);
+            n += 1;
+        }
+    }
+    // Not one made in the last couple of hours (it may have just meant it).
+    let now = crate::hub::now_ms() as i64;
+    let settled: Vec<u32> = robot
+        .intentions
+        .list()
+        .iter()
+        .filter(|p| now - p.set_ms >= PLAN_SETTLE_MS)
+        .map(|p| p.id)
+        .collect();
+    for id in answer["drop"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|i| i.as_u64().map(|i| i as u32))
+        .filter(|id| settled.contains(id))
+        .take(MAX_DROPPED)
+    {
+        if robot.intentions.done(id)? {
+            tracing::info!("sleep: dropped plan {id}");
+            n += 1;
+        }
     }
     Ok(n)
 }
