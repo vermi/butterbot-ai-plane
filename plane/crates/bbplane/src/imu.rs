@@ -33,9 +33,11 @@ const BUMP_QUIET: Duration = Duration::from_millis(1500);
 const STILL_REARM: Duration = Duration::from_secs(5);
 const ACTIVE_G: f32 = 0.2;
 /// A standing bump waits this long before it is news, and is dropped if the charger came or
-/// went around it (docking and undocking jolt the robot) or the robot is off the floor.
+/// went around it (docking and undocking jolt the robot), the robot is off the floor, or it was
+/// talking: its speaker thumps the body as it starts (one sample of half a g).
 const STILL_CONFIRM: Duration = Duration::from_secs(1);
 const CHARGER_SETTLE: Duration = Duration::from_secs(3);
+const OWN_VOICE_SETTLE: Duration = Duration::from_millis(1500);
 const LIFT_QUIET: Duration = Duration::from_secs(3);
 /// How fast the gravity estimate follows (time constant).
 const GRAVITY_TAU_S: f32 = 0.5;
@@ -145,6 +147,8 @@ pub async fn run(robot: Robot) {
     let mut pending: Option<(Instant, f32, &'static str)> = None;
     let mut plugged = robot.plugged_in().await;
     let mut plug_changed: Option<Instant> = None;
+    // The last time its speaker was playing.
+    let mut talked_at: Option<Instant> = None;
     let mut peak_at = Instant::now();
     loop {
         let chunk = match rx.recv().await {
@@ -160,6 +164,9 @@ pub async fn run(robot: Robot) {
             watch.peak = 0.0;
             peak_at = now;
         }
+        if robot.hub.status.lock().await.speaker_playing {
+            talked_at = Some(now);
+        }
         let p = robot.plugged_in().await;
         if p != plugged {
             if plugged.is_some() {
@@ -171,13 +178,16 @@ pub async fn run(robot: Robot) {
             && now.duration_since(at) >= STILL_CONFIRM
         {
             pending = None;
-            let docking =
-                plug_changed.is_some_and(|c| c.max(at).duration_since(c.min(at)) < CHARGER_SETTLE);
-            if docking || !robot.on_the_floor() {
+            let near = |t: Instant, d: Duration| t.max(at).duration_since(t.min(at)) < d;
+            let docking = plug_changed.is_some_and(|c| near(c, CHARGER_SETTLE));
+            let talking = talked_at.is_some_and(|t| near(t, OWN_VOICE_SETTLE));
+            if docking || talking || !robot.on_the_floor() {
                 tracing::info!(
                     "bump: {g} g from the {side} ignored ({})",
                     if docking {
                         "the charger"
+                    } else if talking {
+                        "its own voice"
                     } else {
                         "off the floor"
                     }
