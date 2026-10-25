@@ -16,6 +16,8 @@ use crate::util::millis;
 
 /// The remote's home screen is refreshed this often (the battery moves on).
 const HOME_REFRESH_MS: u64 = 60_000;
+/// After the remote subscribes, the welcome goes again this much later.
+const REWELCOME_MS: u64 = 2000;
 /// The remote shows "listening" this long after its Listen button, at most.
 const LISTEN_WINDOW_MS: u64 = 12_000;
 
@@ -45,6 +47,9 @@ impl Robot {
             BleEvent::ComSubscribed(true) => {
                 log::info!("remote connected");
                 self.remote_welcome();
+                // The remote is still between its pairing and home screens when it subscribes,
+                // and nothing listens there: say it all again once it has settled.
+                self.rewelcome_at = Some(millis() + REWELCOME_MS);
             }
             BleEvent::ComSubscribed(false) => {
                 log::info!("remote gone");
@@ -264,7 +269,13 @@ impl Robot {
             self.listen_until = None;
             self.remote_send(state::IDLE, idle::NONE, &[]);
         }
+        if self.rewelcome_at.is_some_and(|t| now >= t) {
+            self.rewelcome_at = None;
+            self.remote_welcome();
+        }
         if now - self.home_sent_at >= HOME_REFRESH_MS {
+            // With AI mode's status: the plane sends that only when it changes.
+            self.send_ai_status();
             self.send_home();
         }
     }

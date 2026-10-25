@@ -126,6 +126,13 @@ impl Driver {
                 }
             }
         }
+        // The first frames after init are often dark or partial.
+        for _ in 0..2 {
+            let fb = unsafe { cam::esp_camera_fb_get() };
+            if !fb.is_null() {
+                unsafe { cam::esp_camera_fb_return(fb) };
+            }
+        }
         log::info!(
             "camera: up for {:?} at {xclk} MHz{} in {} ms",
             max,

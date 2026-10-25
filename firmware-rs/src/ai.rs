@@ -176,6 +176,8 @@ pub struct Robot {
     /// Manual Override: the remote's stick drives.
     manual: bool,
     listen_until: Option<u64>,
+    /// The welcome again, a moment after the remote connected (see `handheld`).
+    rewelcome_at: Option<u64>,
     muted: bool,
 }
 
@@ -232,6 +234,7 @@ impl Robot {
             peeking: false,
             manual: false,
             listen_until: None,
+            rewelcome_at: None,
             muted: false,
         }
     }
@@ -278,6 +281,14 @@ impl Robot {
             activity: 2,
             ..Default::default()
         };
+        // A mute from outside AI mode ends here: the plane sets the volume.
+        if self.muted {
+            self.muted = false;
+            if let Some(s) = &self.speaker {
+                s.set_gain(0.8);
+            }
+        }
+        self.send_ai_status();
         self.link.configure(cfg.clone());
         if let Err(e) = self.net.up(&cfg, self.store.channel()) {
             log::error!("wifi: {e}");
@@ -399,9 +410,12 @@ impl Robot {
                 self.status_snapshot();
             }
             Event::Link(LinkEvent::Offline) => {
-                // Never keep driving without the plane; give it a moment to come back.
-                self.stop_motors();
-                self.streams_off();
+                // Never keep driving without the plane; give it a moment to come back. The
+                // streams stay as they were: a plane that never noticed the gap will not ask
+                // again (sending waits while offline).
+                if !self.manual {
+                    self.stop_motors();
+                }
                 if self.ai_on {
                     self.deadline = Some(millis() + LINK_LOSS_GRACE_MS);
                 }
@@ -614,8 +628,13 @@ impl Robot {
                 self.ai_stop();
             }
             // The remote's stick has the motors during Manual Override.
-            ToRobot::Drive { .. } if self.manual => self.stop_driving("manual_override"),
+            ToRobot::Drive { .. } if self.manual => {
+                self.link.send(&FromRobot::DriveStopped {
+                    reason: "manual_override".into(),
+                });
+            }
             ToRobot::Drive { l, r, ms, safe } => self.drive(l, r, ms, safe),
+            ToRobot::Stop if self.manual => {}
             ToRobot::Stop => self.stop_motors(),
             ToRobot::Safety { id, tilt, obstacle } => {
                 self.check_tilt = tilt;
