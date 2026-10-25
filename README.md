@@ -3,9 +3,9 @@
 Let an AI drive, see, hear and talk through a [CircuitMess ButterBot](https://circuitmess.com/),
 the little "you pass butter" robot. This repository holds two things:
 
-- **Modified ButterBot firmware** with an *AI mode*. In AI mode the robot joins your Wi-Fi and
-  streams its camera and microphone to your computer. It takes drive, speech and audio commands
-  in return.
+- **An AI-only firmware** for the robot, written in Rust ([`firmware-rs/`](firmware-rs)). The
+  robot joins your Wi-Fi and streams its camera, microphone and accelerometer to your computer,
+  and takes drive, audio and light commands in return.
 - **`bbplane`**, a small Rust program for your computer. It talks to the robot and exposes it as
   an **MCP server**, so Claude or any other MCP client can control it. It also serves a live view
   in the browser for humans.
@@ -15,11 +15,11 @@ mode. The agent is either its built-in brain on OpenAI's APIs or any MCP agent y
 Codex. You talk to it by name ("Butterbot, what's the weather?"), it answers out loud, and when
 nobody is talking to it, it does things of its own accord. See [Let it run itself](#6-let-it-run-itself-optional).
 
-The firmware is AI-only: the robot starts in AI mode, and goes back to it on its own when it ends
-without being switched off. The handheld controller, RC mode, the phone link and the robot's own
-voice keep working. The stock robot's behaviours of its own are gone; see
-[what was removed](#design-notes). After the first USB flash, new firmware goes over Wi-Fi
-(`bbplane ota`).
+The robot lives in AI mode: it starts in it, and goes back to it on its own when it ends without
+being switched off. The handheld controller (Manual Override included), the phone link, the add-on
+cards and the robot's own voice keep working; the voice is now made on your computer. The stock
+robot's behaviours and routines of its own are gone; see [design notes](#design-notes). New
+firmware goes over Wi-Fi (`bbplane ota`, about 20 s).
 
 ## What an AI can do with it
 
@@ -28,12 +28,12 @@ voice keep working. The stock robot's behaviours of its own are gone; see
 | **Move** | `move`, `turn`, `drive`, `stop`. Each move is timed and stops by itself. |
 | **See** | `look` (live camera frame), `snapshot`, `set_stream` |
 | **Hear** | `hear` waits for the next thing someone says to the robot (transcribed on your computer), or for a nudge to do something. `reply` speaks, then does the same. `listen` returns microphone audio and a transcript. |
-| **Talk** | `say` in the robot's own voice, or in a laptop TTS voice streamed to its speaker. `play_audio`, `set_volume` |
-| **Sense** | `events`: front and bottom IR sensors, motion (shake, pick-up, fall), battery, button |
+| **Talk** | `say` in the robot's own voice (flite's `kal16`, as the stock robot spoke, made on your computer), or another TTS voice. `play_audio`, `set_volume` |
+| **Sense** | `events`: front and bottom IR sensors, motion (shake, pick-up, bump, fall), battery, button, add-on cards |
 | **Recognize** | `remember_face`, `who_is_here`, `forget_face`. Enrolled people are greeted by name and reported as `face` events. Animals coming into view (a cat, a dog, a bird) are noticed too. |
 | **Behave** | `focus` (stay quiet for a while), `end_conversation`, `power_off` |
 | **Phone** | `phone`: the paired phone's notifications, what's playing, and play, pause, next, previous |
-| **Extras** | `led`, `run_scenario` (jokes, facts, time, add-on modules), `ir_list`, `ir_send`, `read_modules` |
+| **Extras** | `led` (the status light, or the LED card), `read_modules` (the add-on card: temperature and humidity, CO2, gas, motion, or a distance sensor on the prototyping card) |
 
 ## How it works
 
@@ -43,31 +43,34 @@ voice keep working. The stock robot's behaviours of its own are gone; see
                                                      ▼
                                        bbplane (your computer)
                                          │  UDP :7531
-                                         │  JPEG video, 16 kHz PCM both ways, JSON control
+                                         │  JPEG video, 16 kHz PCM both ways, accelerometer,
+                                         │  JSON control
                                          ▼
  ButterBot ── AI mode: Wi-Fi + UDP link ─┘
      ▲
-     └── Bluetooth LE: one-time provisioning and "wake into AI mode"
-         (the handheld controller keeps using BLE as before)
+     └── Bluetooth LE: the handheld controller, the phone, one-time provisioning and
+         "wake into AI mode"
 ```
 
 **Entering AI mode.** Short-press the robot's power button, or let `bbplane` wake it over
 Bluetooth; any control tool does this automatically.
-1. The robot says "A I mode on", pauses its own behaviour, joins Wi-Fi and dials `bbplane`.
+1. The robot says "A I mode on", joins Wi-Fi and dials `bbplane`.
 2. When `bbplane` answers, it starts the camera and microphone and the robot says "Connected".
-   This takes a few seconds. Later joins are quicker, because the robot remembers the Wi-Fi
-   channel and its address.
-3. If it gets no answer within 30 s, it says "I can't reach the computer" and goes back to normal.
+   This takes two or three seconds. The robot remembers the Wi-Fi channel, which makes it quicker.
+3. If it gets no answer within 30 s, it says "I can't reach the computer", turns Wi-Fi off and
+   tries again quietly every 30 s.
 
-**Leaving AI mode.** Short-press the power button again, call `exit_ai_mode`, or stop `bbplane`.
-The robot says "A I mode off". Without `bbplane` it gives up after 15 s ("Lost the computer").
-Wi-Fi then turns off again.
+**Leaving AI mode.** Short-press the power button again, or call `exit_ai_mode`. The robot says
+"A I mode off", turns Wi-Fi off and stays out of AI mode until the next short press. If `bbplane`
+goes away it gives up after 15 s ("Lost the computer") and keeps trying quietly. A long press
+(2 s) switches it off.
 
 ## Repository layout
 
 | Path | What |
 |---|---|
-| [`firmware/`](firmware) | ESP-IDF 5.5.3 firmware for the robot (ESP32-S3). It starts from CircuitMess's [open-source firmware](https://github.com/CircuitMess/ButterBot-Firmware-Public) v1.0.5. The [`stock-firmware`](../../tree/stock-firmware) branch holds that release unmodified, so `git diff stock-firmware HEAD -- firmware` shows every change. |
+| [`firmware-rs/`](firmware-rs) | The robot's firmware (ESP32-S3), in Rust on ESP-IDF 5.5.3 (`esp-idf-svc`). See [`firmware-rs/README.md`](firmware-rs/README.md). It replaced a C++ firmware built on CircuitMess's [open-source firmware](https://github.com/CircuitMess/ButterBot-Firmware-Public) v1.0.5 (in the history up to commit `66dd645`; the [`stock-firmware`](../../tree/stock-firmware) branch holds that release unmodified). |
+| [`controller/`](controller) | The handheld controller's firmware (from CircuitMess's ButterBotCtrl-Firmware, MIT), changed for AI mode. |
 | [`plane/`](plane) | `bbplane`: robot link, MCP server, live view, BLE provisioning and a simulated robot (Rust workspace). See [`plane/README.md`](plane/README.md) for all options. |
 
 ## Quick start
@@ -77,7 +80,9 @@ You need:
 - a ButterBot;
 - a computer on the same network, with **2.4 GHz** Wi-Fi reachable by the robot;
 - [Rust](https://rustup.rs) 1.91 or newer;
-- [ESP-IDF 5.5.3](https://docs.espressif.com/projects/esp-idf/en/v5.5.3/esp32s3/get-started/), only for flashing.
+- for building the firmware: the esp Rust toolchain (`cargo install espup ldproxy`, then
+  `espup install --std -t esp32s3`) and [ESP-IDF 5.5.3](https://docs.espressif.com/projects/esp-idf/en/v5.5.3/esp32s3/get-started/)
+  (or let the build download it).
 
 ### 1. Build the plane
 
@@ -87,34 +92,37 @@ cargo build --release          # binary: plane/target/release/bbplane
 cargo test                     # includes end-to-end tests against a simulated robot
 ```
 
-### 2. Flash the robot
+### 2. Install the firmware
 
 ```sh
-cd firmware
-. ~/esp/esp-idf/export.sh
-idf.py build
-python tools/flash.py -p /dev/cu.usbserial-XXXX --all   # first time: everything (~4 min)
-python tools/flash.py -p /dev/cu.usbserial-XXXX         # after that: just the app (~2 min)
+firmware-rs/tools/build.sh      # image: firmware-rs/target/xtensa-esp32s3-espidf/release/butterbot-ai.bin
+```
+
+A robot on this project's firmware updates over Wi-Fi, while it is in AI mode and the plane runs:
+
+```sh
+plane/target/release/bbplane ota firmware-rs/target/xtensa-esp32s3-espidf/release/butterbot-ai.bin   # ~20 s
+```
+
+The robot restarts into an update mode that runs nothing but Wi-Fi and the download, installs
+the image in its spare app slot, and restarts into AI mode on it. It keeps the new firmware only
+once it has reached the plane again; if it cannot within three minutes, or crashes, it goes back
+to the one it had. A long press switches it off during the update. `bbplane restart` restarts a
+robot that seems stuck.
+
+A stock robot needs one USB flash first:
+
+```sh
+. ~/esp/esp-idf/export.sh       # for esptool
+python firmware-rs/tools/flash.py -p /dev/cu.usbserial-XXXX --all
 ```
 
 When it finishes the robot switches itself off. Turn it on as usual by holding the button for a
 second. It starts in AI mode.
 
-After that first flash, update it over Wi-Fi instead, while it is in AI mode and the plane runs:
-
-```sh
-plane/target/release/bbplane ota firmware/build/ButterBot-Firmware.bin   # ~1.5 min
-```
-
-The robot restarts into an update mode that runs nothing but Wi-Fi and the download (AI mode
-leaves too little RAM for it), installs the image in its spare app slot, and restarts into AI mode
-on it. It keeps the new firmware only once it has reached the plane again; otherwise it goes back
-to the one it had. On any failure it restarts into AI mode on its old firmware. A long press
-switches it off during the update. `bbplane restart` restarts a robot that seems stuck.
-
-> **Why not plain `idf.py flash`?** The firmware switches the robot off whenever it boots without
-> the power button held (the stock hold-to-turn-on check). esptool's own reset at the end of a
-> flash also leaves the chip in its bootloader, with the light off and the button ignored.
+> **Why not plain esptool?** The firmware switches the robot off whenever it boots without the
+> power button held (the stock hold-to-turn-on check). esptool's own reset at the end of a flash
+> also leaves the chip in its bootloader, with the light off and the button ignored.
 > `tools/flash.py` flashes without extra resets and ends with a clean one. If the robot ever
 > switches off during flashing, hold its button and run it again.
 
@@ -233,14 +241,15 @@ The handheld controller works in AI mode too:
 
 | Button | In AI mode |
 |---|---|
-| **Manual Override** | Stock RC mode, with video on the remote's screen. RC mode needs the remote's own Wi-Fi, so the robot leaves AI mode for it; when you leave RC mode it restarts itself straight back into AI mode (a few seconds; RC mode leaves too little unfragmented memory to start the home Wi-Fi again without a restart). |
+| **Manual Override** | Held until the bar fills: the stick drives the motors straight over Bluetooth, and the remote's screen shows the camera (the remote joins your Wi-Fi and the computer streams to it, as in the camera view). The robot stays in AI mode; the agent does not drive meanwhile. Press it again to leave. Needs the remote's firmware from [`controller/`](controller), flashed once over USB. |
 | **Shut up** | While it talks, or is about to answer: it stops at once and drops the rest. While it is quiet: focus mode. (In stock mode it still mutes.) |
 | **Poke** | It reacts, then listens for a reply without its name. |
 | **Summon** | A short press: says "Yes?" and takes what you say next as a command, no name needed. Held until the bar fills: comes to you (turns to find a person with the plane's object detection and drives over). |
-| **Joystick menu** | Entries the robot can run in AI mode run as in stock. Those that needed the removed on-robot models (dice, eight ball, "what's this", "who's this", dance, voice moves) and reading notifications go to the agent as requests. |
+| **Joystick menu** | Every entry goes to the agent as a request (a joke, the time, "what's this", the add-on cards...): the robot runs no routines of its own any more. |
 
-In RC mode the joystick mixes forward and turning continuously, so every angle curves by its own
-amount (stock snapped it to eight directions). Entering AI mode with a phone linked, it says so.
+In Manual Override the joystick mixes forward and turning continuously, so every angle curves by
+its own amount (stock snapped it to eight directions). There are no checks, as in the stock RC
+mode: mind the cable. Entering AI mode with a phone linked, it says so.
 
 The remote's firmware is in [`controller/`](controller) (from CircuitMess's
 ButterBotCtrl-Firmware, MIT). Its screen in AI mode:
@@ -346,6 +355,8 @@ It is only visible in a dim room, so it is used as a background hint, never on i
 | Dark, a slow faint pulse every 6 s | Napping on the charger |
 | Two quick ticks every 4 s | No agent running (paused, or not set up) |
 | Three quick blinks, pause | Cannot reach the computer |
+| A short tick every second, dark between | Out of AI mode (switched off with a short press) |
+| Bright, then fast blinking | Updating its firmware |
 
 ## Safety
 
@@ -360,6 +371,9 @@ The safety rules copy what the stock firmware does in the same situation:
   base board does the sensing in its own firmware, which this project cannot change.
 - **Every drive command expires on its own:** within 1 s for the live view, and at the end of the
   move's duration for AI moves.
+- **A bump stops an AI move:** the accelerometer streams to the computer, and a sharp jolt while
+  driving (a collision the front sensor missed) stops the robot and ends the move (`bump`).
+- **Manual Override** drives without checks, like the stock RC mode.
 - **Losing the link** stops the robot immediately. It leaves AI mode after 15 s without
   `bbplane`.
 - **The agent does not drive while the robot is plugged in**: it would roll over the cable or
@@ -393,62 +407,39 @@ The safety rules copy what the stock firmware does in the same situation:
 
 ## Design notes
 
-These are the lessons that shaped the firmware. Most of them came from the hardware.
+The firmware ([`firmware-rs/`](firmware-rs)) is a rewrite in Rust of the C++ firmware this
+project started with, itself built on CircuitMess's. The lessons that shaped both:
 
-- **Internal RAM is the real limit.**
-  - The ESP32-S3 has 8 MB of PSRAM, but Wi-Fi, Bluetooth and DMA need *internal* RAM.
-  - The stock firmware had about 37 KB of it free, and Wi-Fi needs about 32 KB.
-  - The firmware also aborts on any failed allocation, and a reboot means the robot switches
-    itself off.
-  - So, like the stock RC mode, **Wi-Fi only runs in AI mode**, and it is started on the state
-    machine thread exactly as RC mode does it.
-- **The firmware is AI-only.** Stock mode is gone: the robot starts in AI mode, tries it again
-  quietly every minute while the plane is out of reach, and outside AI mode it waits without
-  behaviours of its own (no rambling, wandering, poke or motion reactions). The flash went to two
-  app slots for updates over Wi-Fi; the stock models' partitions (wake words, faces, objects) are
-  gone. Restore the stock firmware below to get all of it back.
-- **Some stock features were removed to make room for Wi-Fi.** They are compiled out, so they
-  are gone outside AI mode too:
-  - on-robot voice commands (a short press of the power button now enters AI mode instead);
-  - face and object detection: "who's this", remember/forget face, "what's this", and the idle
-    "notice a person" and "observe" behaviours;
-  - dice, eight ball, IR learning/forgetting and dance, which needed speech or music input.
-
-  The robot's own speech (flite), scenarios, IR sending, add-on modules and RC mode remain. Free internal RAM went from about 27 KB to about 100 KB. Face
-  recognition is back in AI mode, running on the computer instead (see step 5).
-- **The phone link is back** (it was removed at first too): notifications, music control and
-  clock sync from an iPhone, or an Android phone with the CircuitMess app. In AI mode, with Wi-Fi
-  and a phone connected, about 25 KB of internal RAM stays free (`status` reports `ram_free`).
-  The agent gets notifications as data and sums them up; the stock "read my notifications"
-  routine reads them all without asking whether to go on, since it cannot listen for the answer.
-- **UDP, like the stock video feed.** TCP stalled and died on the robot's busy 2.4 GHz link
-  (Bluetooth shares the radio); UDP just skips lost packets.
-  - **Video** is split into datagrams of at most 1400 bytes and reassembled on the computer;
-    incomplete frames are dropped.
-  - **The robot has only two Wi-Fi TX buffers**, so `sendto()` fails as soon as two datagrams
-    are in flight. The sender waits for a free buffer instead of dropping; dropping lost the
-    tail of nearly every multi-datagram frame and looked like heavy radio loss. Real loss is
-    well under 1%. `status` reports `video_dropped` and `wifi_rssi`.
-  - **Control requests** are retransmitted until acknowledged, and the robot runs each request
-    only once.
-- **The camera streams 640×480 at about 2 fps** (320×240 manages 5–6). At the board's
-  default 27 MHz sensor clock, frames larger than the stock 128×128 lose lines in the camera DMA
-  and come back corrupted. AI mode runs the sensor at 20 MHz, which gives clean frames.
-  Frames are captured as RGB565 and JPEG-encoded on the CPU, the same path stock uses; that
-  encoder limits the frame rate.
-- **Bluetooth slows down during AI mode** (advertising every 211 ms, connection events every
-  60–90 ms), which leaves airtime for Wi-Fi. Stock's own low-power settings (1.3 s and about 1 s)
-  were too slow for a phone to connect: iOS gave up while setting up the notification service.
-  Video loss with a phone connected stays about 1%.
-- **The link protocol** is a single frame format: `magic | type | flags | len | payload`.
-  - Rust side: [`plane/crates/bbproto`](plane/crates/bbproto).
-  - C++ side: [`firmware/main/src/Link/LinkProto.h`](firmware/main/src/Link/LinkProto.h).
+- **Internal RAM is the real limit.** The ESP32-S3 has 8 MB of PSRAM, but Wi-Fi, Bluetooth and
+  DMA need *internal* RAM. The C++ firmware, carrying the stock framework, voice and models, had
+  15 KB of it free in AI mode and ran Wi-Fi on two buffers of each kind. The Rust firmware keeps
+  about 80 KB free with Wi-Fi (full buffers), Bluetooth and the camera running.
+- **AI-only.** The robot lives in AI mode. The stock behaviours (rambling, wandering, reactions),
+  routines (jokes, dice, dance...), on-robot voice commands, face and object detection and the IR
+  card are gone; the agent does those things now, on the computer. The robot's voice is made on
+  the computer too (the same flite voice), so a dozen status phrases are recorded in flash for when
+  the computer is out of reach.
+- **The camera encodes JPEG itself.** The C++ firmware captured RGB565 and encoded on the CPU
+  (about 2 fps at 640×480). The OV3660's own JPEG output runs at about 26 fps at 320×240,
+  640×480 and 800×600, with frames DMA'd through internal buffers (straight into PSRAM, the
+  driver misses most frames' end).
+- **Updates over Wi-Fi with a way back.** An update restarts the robot into an update mode (Wi-Fi
+  and the download only), writes the spare app slot, checks size and SHA-256, and restarts into it.
+  The new firmware must reach the plane within three minutes or it restarts and the bootloader
+  goes back to the old one. A 1.6 MB image installs in about 20 s.
+- **UDP, like the stock video feed.** TCP stalled on the robot's busy 2.4 GHz link (Bluetooth
+  shares the radio); UDP just skips lost packets. Video is split into datagrams of at most 1400
+  bytes and reassembled on the computer; control requests are retransmitted until acknowledged
+  and run once.
+- **Logs come to the computer.** The firmware's messages, and ESP-IDF's warnings and errors, go
+  to the plane's log (`bbplane.log`, target `robot`), so a serial cable is rarely needed.
+- **The link protocol** is one frame format, `magic | type | flags | len | payload`, defined
+  once in [`plane/crates/bbproto`](plane/crates/bbproto); the firmware uses that crate too.
 
 ## Limitations
 
-- **Camera:** about 2 fps live at 640×480 and 5–6 at 320×240. Sizes above 640×480 are
-  experimental and may not fit in memory next to Wi-Fi. The sensor's own JPEG mode
-  (`encoder = "sensor"`) stalls after a frame or two.
+- **Camera:** about 26 fps up to 800×600; larger sizes are for snapshots (up to 2048×1536, about a
+  second). The plane asks for 10 fps at 640×480 by default (`[camera]` in its config).
 - **Network:** 2.4 GHz Wi-Fi only (an ESP32 limitation). Expect some lost audio and video on a
   busy network.
 - **Microphone:** quiet, with no echo cancellation; it is muted while the robot speaks, so you
@@ -460,8 +451,8 @@ These are the lessons that shaped the firmware. Most of them came from the hardw
   `status` lists the sounds it recently heard, with scores.
 - **Object detection** knows COCO's 80 everyday classes: a fireplace comes out as an oven, and a
   dog lying down can come out as a cat. At 320×240 it misses small or still animals entirely.
-- **Removed scenarios:** those that needed the removed features (dice, eight ball, face
-  detection, "what's this", dance) are not available.
+- **No routines on the robot:** the remote's menu entries go to the agent, so they need the
+  computer and an agent running.
 - **Phone:** music controls act on whatever app the phone is playing from (open Spotify once to
   control Spotify); the robot cannot pick the app. It cannot reply to messages: Apple's
   notification service only lets an accessory read and dismiss them.
@@ -478,7 +469,11 @@ esptool -c esp32s3 -b 460800 -p /dev/cu.usbserial-XXXX write-flash 0 ButterBot-v
 
 ## Credits and license
 
-- **Firmware:** based on CircuitMess's ButterBot firmware, Copyright (c) 2026 CircuitMess d.o.o.,
-  MIT License (see [`firmware/LICENSE.md`](firmware/LICENSE.md)). ButterBot is a CircuitMess
-  product; this project is not affiliated with CircuitMess.
+- **Firmware:** written for this project, with parts ported from CircuitMess's ButterBot
+  firmware (the hardware drivers' details and motion detection, and the voice effects the plane
+  applies), Copyright (c)
+  2026 CircuitMess d.o.o., MIT License (see
+  [`firmware-rs/LICENSE-CircuitMess.md`](firmware-rs/LICENSE-CircuitMess.md)). The remote's
+  firmware in [`controller/`](controller) is CircuitMess's, changed for AI mode. ButterBot is a
+  CircuitMess product; this project is not affiliated with CircuitMess.
 - **Everything else** is MIT licensed; see [`LICENSE`](LICENSE).

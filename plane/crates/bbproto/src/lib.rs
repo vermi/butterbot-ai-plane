@@ -1,5 +1,5 @@
-//! Wire protocol between the ButterBot firmware (`firmware/main/src/Link/LinkProto.h`)
-//! and the laptop control plane. Keep both sides in sync.
+//! Wire protocol between the ButterBot firmware (`firmware-rs`, which uses this crate) and the
+//! laptop control plane.
 //!
 //! Transport: UDP, like the stock RC video feed. Every datagram carries one frame:
 //!

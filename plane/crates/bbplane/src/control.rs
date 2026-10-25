@@ -1270,45 +1270,6 @@ goodbye). Say bye and keep listening."
             .await
     }
 
-    pub async fn scenario(&self, name: &str, arg: u8) -> Result<Value> {
-        if bbproto::bb::NEEDS_MODELS.contains(&name) {
-            bail!("'{name}' needs on-robot speech/vision models and is not available in AI mode");
-        }
-        let Some(scenario) = bbproto::bb::scenario_id(name) else {
-            bail!(
-                "unknown scenario '{name}'; known: {}",
-                bbproto::bb::SCENARIOS.join(", ")
-            );
-        };
-        self.ensure_remote().await?;
-        let id = self.hub.next_id();
-        // Scenarios run to completion on the robot before it acks.
-        let r = self
-            .hub
-            .request_timeout(
-                ToRobot::Scenario { id, scenario, arg },
-                Duration::from_secs(90),
-            )
-            .await;
-        if r.is_err() {
-            // Do not leave the robot stuck in a routine nobody is waiting for.
-            self.hub.send(ToRobot::Stop).await.ok();
-        }
-        r
-    }
-
-    pub async fn ir_list(&self) -> Result<Value> {
-        self.ensure_remote().await?;
-        let id = self.hub.next_id();
-        self.hub.request(ToRobot::IrList { id }).await
-    }
-
-    pub async fn ir_send(&self, index: u8) -> Result<Value> {
-        self.ensure_remote().await?;
-        let id = self.hub.next_id();
-        self.hub.request(ToRobot::IrSend { id, index }).await
-    }
-
     /// The phone link: `status` (connection, notification count, what is playing),
     /// `notifications` (all of them), or a music control: `play`, `pause`, `next`, `previous`.
     pub async fn phone(&self, action: &str) -> Result<Value> {

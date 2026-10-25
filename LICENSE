@@ -20,5 +20,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-The firmware in firmware/ is based on CircuitMess's ButterBot firmware,
-Copyright (c) 2026 CircuitMess d.o.o., MIT License (firmware/LICENSE.md).
+Parts of the firmware in firmware-rs/ are ported from CircuitMess's ButterBot
+firmware, and controller/ is CircuitMess's remote firmware, changed; both
+Copyright (c) 2026 CircuitMess d.o.o., MIT License
+(firmware-rs/LICENSE-CircuitMess.md).

@@ -17,7 +17,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::control::Robot;
 
-/// The robot's app slots (firmware/partitions.csv).
+/// The robot's app slots (firmware-rs/partitions.csv).
 const SLOT_SIZE: usize = 8000 * 1024;
 /// ESP-IDF image chip id of the ESP32-S3.
 const CHIP_ESP32S3: u16 = 9;

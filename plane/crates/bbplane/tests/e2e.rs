@@ -160,9 +160,13 @@ async fn plane_with_simulated_robot() {
         "listen",
         "say",
         "events",
-        "run_scenario",
+        "read_modules",
     ] {
         assert!(names.contains(&want), "missing tool {want} in {names:?}");
+    }
+    // The stock routines and the IR card are gone with firmware 0.6.
+    for gone in ["run_scenario", "scenarios", "ir_list", "ir_send"] {
+        assert!(!names.contains(&gone), "tool {gone} is still there");
     }
 
     // A control tool enters AI mode automatically and starts the streams.
@@ -209,24 +213,6 @@ async fn plane_with_simulated_robot() {
     let out: Value = serde_json::from_str(&text_of(&r)).unwrap();
     assert!(out["completed_ms"].as_u64().unwrap() >= 950, "{out}");
 
-    let r = c.tool("run_scenario", json!({"name":"joke"})).await;
-    assert!(text_of(&r).contains("\"done\": true"), "{}", text_of(&r));
-    let r = c
-        .call(
-            "tools/call",
-            json!({"name":"run_scenario","arguments":{"name":"nope"}}),
-        )
-        .await;
-    assert_eq!(r["isError"], true);
-    let r = c
-        .call(
-            "tools/call",
-            json!({"name":"ir_send","arguments":{"index":0}}),
-        )
-        .await;
-    assert_eq!(r["isError"], true);
-    assert!(text_of(&r).contains("IR module"));
-
     let r = c.tool("events", json!({"since":0})).await;
     let ev: Value = serde_json::from_str(&text_of(&r)).unwrap();
     let kinds: Vec<&str> = ev["events"]
@@ -235,7 +221,7 @@ async fn plane_with_simulated_robot() {
         .iter()
         .map(|e| e["kind"].as_str().unwrap())
         .collect();
-    for want in ["link", "hello", "mode", "battery", "speaker", "bb"] {
+    for want in ["link", "hello", "mode", "battery", "speaker"] {
         assert!(kinds.contains(&want), "no {want} event in {kinds:?}");
     }
 

@@ -45,7 +45,7 @@ enum Cmd {
     /// Install new robot firmware over Wi-Fi (the robot must be in AI mode, with a plane running).
     /// It restarts into it, and keeps it once it has reached the plane again.
     Ota {
-        /// The app image, e.g. firmware/build/ButterBot-Firmware.bin.
+        /// The app image, e.g. firmware-rs/target/xtensa-esp32s3-espidf/release/butterbot-ai.bin.
         image: PathBuf,
     },
     /// Restart the robot (it comes back in AI mode), e.g. when it seems stuck.

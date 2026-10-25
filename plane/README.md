@@ -3,8 +3,8 @@
 Runs on a laptop and lets an AI (over MCP) or a person (in the browser) drive a CircuitMess
 ButterBot. It covers movement, live video, live audio, the speaker and text-to-speech, speech
 recognition and face recognition, and can keep an agent attached so the robot runs itself. It
-needs the modified robot firmware in [`../firmware`](../firmware). The handheld controller keeps
-working when AI mode is off.
+needs this project's robot firmware in [`../firmware-rs`](../firmware-rs); the remote's, in
+[`../controller`](../controller), adds its AI-mode screens.
 
 ```
 AI client --MCP (stdio or HTTP /mcp)--+
@@ -18,22 +18,19 @@ cargo build --release        # binary: target/release/bbplane (Rust 1.91 or newe
 cargo test                   # unit tests + end-to-end test against the simulated robot
 ```
 
-## Flash the robot
+## Install the robot's firmware
 
-Build the firmware with ESP-IDF 5.5.3 and flash it with `tools/flash.py` (not `idf.py flash`;
-the [main README](../README.md#2-flash-the-robot) explains why):
+Build the firmware ([`../firmware-rs`](../firmware-rs), Rust on ESP-IDF 5.5.3) and install it
+over Wi-Fi while the robot is in AI mode:
 
 ```sh
-cd ../firmware
-. ~/esp/esp-idf/export.sh
-idf.py build
-python tools/flash.py -p /dev/cu.usbserial-XXXX --all   # first time: everything
-python tools/flash.py -p /dev/cu.usbserial-XXXX         # after that: just the app
+../firmware-rs/tools/build.sh
+target/release/bbplane ota ../firmware-rs/target/xtensa-esp32s3-espidf/release/butterbot-ai.bin
 ```
 
-The robot switches itself off at the end; turn it on as usual. After the first flash, update it
-over Wi-Fi while it is in AI mode: `bbplane ota ../firmware/build/ButterBot-Firmware.bin` (see the
-[main README](../README.md#2-flash-the-robot)).
+A stock robot needs one USB flash first, with `firmware-rs/tools/flash.py --all` (not plain
+esptool; the [main README](../README.md#2-install-the-firmware) explains why). The robot
+switches itself off at the end; turn it on as usual.
 
 To restore the stock firmware, flash `ButterBot-v1.0.5.bin` from the
 [CircuitMess releases](https://github.com/CircuitMess/ButterBot-Firmware-Public/releases) while
@@ -361,7 +358,6 @@ The default `command` presets are `say` on macOS, `espeak-ng` on Linux, and SAPI
 
 ## Protocol
 
-The wire format is defined in `crates/bbproto`, and the firmware mirrors it in
-`firmware/main/src/Link/LinkProto.h`. Every message is one framed UDP datagram: a JSON control
+The wire format is defined in `crates/bbproto`, which the firmware uses too. Every message is one framed UDP datagram: a JSON control
 channel, JPEG video (split into fragments of at most 1400 bytes), and 16 kHz mono PCM audio in both
 directions. Control requests are retransmitted until acknowledged.

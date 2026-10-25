@@ -39,12 +39,34 @@ jobs:
           workspaces: plane
       - run: cargo check --locked --all-targets
 
-  firmware:
+  firmware-rs:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: firmware-rs
     steps:
       - uses: actions/checkout@v4
-      - uses: espressif/esp-idf-ci-action@v1
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          esp_idf_version: v5.5.3
-          target: esp32s3
-          path: firmware
+          components: rustfmt
+      # The esp toolchain, ldproxy, and the ESP-IDF esp-idf-sys downloads (into .embuild).
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.rustup/toolchains/esp
+            firmware-rs/.embuild
+            firmware-rs/target
+          key: firmware-rs-${{ runner.os }}-${{ hashFiles('firmware-rs/Cargo.lock', 'firmware-rs/sdkconfig.defaults', 'firmware-rs/rust-toolchain.toml') }}
+          restore-keys: firmware-rs-${{ runner.os }}-
+      - name: Esp Rust toolchain
+        run: |
+          command -v espup || cargo install espup --locked
+          command -v ldproxy || cargo install ldproxy --locked
+          espup install --std -t esp32s3 -f "$HOME/export-esp.sh"
+      - run: cargo +stable fmt --check
+      - name: Build
+        run: |
+          . "$HOME/export-esp.sh"
+          cargo build --release --locked

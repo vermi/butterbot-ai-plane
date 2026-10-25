@@ -354,21 +354,6 @@ pub struct PhoneArgs {
     pub action: String,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct ScenarioArgs {
-    /// Stock behavior to run, e.g. joke, fact, current_time, pass_the_butter, temp_hum_module,
-    /// led_strobe, phone_whats_playing. See `scenarios`.
-    pub name: String,
-    /// Scenario argument (dice type, face mode, voice-control direction). Default 0.
-    pub arg: Option<u8>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct IrSendArgs {
-    /// Index of a learned IR command (see `ir_list`).
-    pub index: u8,
-}
-
 #[tool_router]
 impl BotServer {
     pub fn new(robot: Robot) -> Self {
@@ -694,7 +679,7 @@ by hand."
     }
 
     #[tool(
-        description = "Robot events since a sequence number: sensors, motion, battery, button, mode, scenario progress. Long-polls with wait_ms."
+        description = "Robot events since a sequence number: sensors, motion (shake, pickup, bump...), battery, button, mode, cards. Long-polls with wait_ms."
     )]
     async fn events(
         &self,
@@ -721,40 +706,9 @@ by hand."
         ))
     }
 
-    #[tool(description = "List the stock behaviors usable with run_scenario in AI mode.")]
-    async fn scenarios(&self) -> Result<CallToolResult, McpError> {
-        ok_json(json!({
-            "available": bbproto::bb::remote_scenarios().collect::<Vec<_>>(),
-            "not_in_ai_mode": bbproto::bb::NEEDS_MODELS,
-        }))
-    }
-
     #[tool(
-        description = "Run one of the robot's stock behaviors (joke, dance, face_detect, ...) and wait for it to finish."
+        description = "Read the add-on card in the slot (temperature/humidity, CO2, gas, motion, LED, or the prototyping card with its distance sensor)."
     )]
-    async fn run_scenario(
-        &self,
-        Parameters(a): Parameters<ScenarioArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        ok_json(tryt!(
-            self.robot.scenario(&a.name, a.arg.unwrap_or(0)).await
-        ))
-    }
-
-    #[tool(description = "List IR remote commands the robot has learned (needs the IR module).")]
-    async fn ir_list(&self) -> Result<CallToolResult, McpError> {
-        ok_json(tryt!(self.robot.ir_list().await))
-    }
-
-    #[tool(description = "Send a learned IR remote command (needs the IR module).")]
-    async fn ir_send(
-        &self,
-        Parameters(a): Parameters<IrSendArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        ok_json(tryt!(self.robot.ir_send(a.index).await))
-    }
-
-    #[tool(description = "Read inserted add-on modules (temperature/humidity, CO2, motion, ...).")]
     async fn read_modules(&self) -> Result<CallToolResult, McpError> {
         ok_json(tryt!(self.robot.modules().await))
     }

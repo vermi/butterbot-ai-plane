@@ -1,12 +1,13 @@
 # ButterBot AI firmware (Rust)
 
 The robot's side of [`bbplane`](../plane): an AI-only firmware for the ButterBot's ESP32-S3,
-written in Rust on ESP-IDF 5.5 (`esp-idf-svc`). It replaces the C++ firmware in
-[`../firmware`](../firmware) and speaks the same link protocol (`plane/crates/bbproto`, used here
-directly), so the plane needs no changes.
+written in Rust on ESP-IDF 5.5 (`esp-idf-svc`). It replaced this project's first firmware, in
+C++ on CircuitMess's code, and speaks the plane's link protocol through the plane's own crate
+(`plane/crates/bbproto`).
 
-It keeps the robot's bootloader and partition table, so it installs over Wi-Fi from the C
-firmware (`bbplane ota`), and either firmware can install the other.
+Compared with the C++ firmware it is a fifth of the size (1.6 MB instead of 7.5), keeps about
+80 KB of internal RAM free instead of 16, streams the camera at about 26 fps instead of 2 (the
+sensor encodes the JPEG), and installs an update in about 20 s instead of 90.
 
 ## Building
 
@@ -17,10 +18,19 @@ You need the esp Rust toolchain (`espup install --std -t esp32s3`), `ldproxy`
 firmware-rs/tools/build.sh
 ```
 
-writes `target/xtensa-esp32s3-espidf/release/butterbot-ai.bin`. Install it with
+writes `target/xtensa-esp32s3-espidf/release/butterbot-ai.bin`. Install it over Wi-Fi, on a
+robot in AI mode with the plane running:
 
 ```bash
 plane/target/release/bbplane ota firmware-rs/target/xtensa-esp32s3-espidf/release/butterbot-ai.bin
+```
+
+A robot on the stock firmware needs one USB flash first, which also writes the bootloader (see
+[`bootloader/`](bootloader)) and the partition table:
+
+```bash
+. ~/esp/esp-idf/export.sh       # for esptool
+python firmware-rs/tools/flash.py -p /dev/cu.usbserial-XXXX --all
 ```
 
 ## Layout
@@ -39,7 +49,10 @@ plane/target/release/bbplane ota firmware-rs/target/xtensa-esp32s3-espidf/releas
 | `src/battery.rs`, `src/motion.rs` | Battery level; accelerometer pose and motion events |
 | `src/power.rs`, `src/rtc.rs` | Power button and latch, crash guard, state kept across restarts |
 | `src/led.rs`, `src/tca.rs`, `src/i2c.rs` | Status LED rhythms, the I/O expander, I2C |
-| `src/store.rs` | Settings in NVS (the C firmware's layout) |
+| `src/store.rs` | Settings in NVS (the stock layout) |
+| `src/ble.rs`, `src/remote.rs`, `src/ai/handheld.rs` | Bluetooth (NimBLE); the remote's protocol and screens |
+| `src/phone.rs`, `src/clock.rs` | The phone link: iPhone notifications, media and time (ANCS, AMS, CTS) and the Android app |
+| `src/cards.rs`, `src/tof.rs` | Add-on cards; the VL53L1X distance sensor on the prototyping card |
 
 ## The robot's voice
 
