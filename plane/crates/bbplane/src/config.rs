@@ -473,7 +473,11 @@ impl Default for MicConfig {
     fn default() -> Self {
         Self {
             gate: true,
-            gain: 1.0,
+            // The microphone is quiet: at 1.0 speech a metre away arrived at about -59 dBFS
+            // (peaks -38), too quiet for the voice activity detector once someone spoke softly
+            // across the room. 8 (the robot's most, +18 dB) still leaves peaks well short of
+            // clipping. The room noise rises with it: gain cannot add signal, only level.
+            gain: 8.0,
             history_secs: 30,
         }
     }

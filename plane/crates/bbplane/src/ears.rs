@@ -596,8 +596,26 @@ pub async fn run(robot: Robot) {
 }
 
 /// Transcribe an utterance and, if it is for the robot, queue it as a command.
+/// Loudness (dBFS): the whole utterance's RMS, its peak, and the RMS of its quietest tenth
+/// (the room between words), for tuning the microphone gain.
+fn levels(pcm: &[i16]) -> (f32, f32, f32) {
+    let db = |v: f64| (20.0 * (v.max(1.0) / 32768.0).log10()) as f32;
+    let rms = |s: &[i16]| {
+        (s.iter().map(|&x| (x as f64) * (x as f64)).sum::<f64>() / s.len().max(1) as f64).sqrt()
+    };
+    let peak = pcm.iter().map(|&x| (x as i32).abs()).max().unwrap_or(0) as f64;
+    let mut windows: Vec<f64> = pcm.chunks(1600).map(rms).collect();
+    windows.sort_by(|a, b| a.total_cmp(b));
+    let floor = windows.get(windows.len() / 10).copied().unwrap_or(0.0);
+    (db(rms(pcm)), db(peak), db(floor))
+}
+
 fn handle_utterance(ears: Arc<Ears>, robot: Robot, utterance: Vec<i16>) {
     let secs = utterance.len() as f32 / RATE;
+    let (rms, peak, floor) = levels(&utterance);
+    tracing::info!(
+        "utterance: {secs:.1} s, {rms:.0} dBFS, peak {peak:.0} dBFS, between words {floor:.0} dBFS"
+    );
     // When the person started talking (the utterance ends about now).
     let spoke_at = Instant::now()
         .checked_sub(Duration::from_secs_f32(secs))
