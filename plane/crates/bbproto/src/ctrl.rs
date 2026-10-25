@@ -3,7 +3,13 @@
 //! Requests that expect an answer carry an `id`; the robot replies with `ack`
 //! (optionally with `data`) or `error` using the same id.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// `f32` fields are read as `f64`: serde's own `f32` path (it keeps the sign of a NaN) trips a bug
+/// in the Xtensa LLVM backend, and the firmware shares these types.
+fn f32_via_f64<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    f64::deserialize(d).map(|v| v as f32)
+}
 
 /// Camera resolutions the firmware maps onto `framesize_t`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -109,7 +115,9 @@ pub struct Rhythm {
     pub off_ms: u16,
     pub count: u8,
     pub period_ms: u16,
+    #[serde(deserialize_with = "f32_via_f64")]
     pub base: f32,
+    #[serde(deserialize_with = "f32_via_f64")]
     pub flash: f32,
 }
 
@@ -178,6 +186,7 @@ pub enum ToRobot {
     SpkAbort,
     /// Speaker gain 0.0..1.0.
     Volume {
+        #[serde(deserialize_with = "f32_via_f64")]
         gain: f32,
     },
     /// Live camera stream settings. `on=false` stops the stream.
@@ -201,12 +210,14 @@ pub enum ToRobot {
         id: u32,
         on: bool,
         gate: bool,
+        #[serde(deserialize_with = "f32_via_f64")]
         gain: f32,
     },
     Led {
         id: u32,
         target: LedTarget,
         mode: LedMode,
+        #[serde(deserialize_with = "f32_via_f64")]
         level: f32,
     },
     /// What the status LED shows in AI mode, unless the robot is talking (bright) or cannot reach
@@ -376,6 +387,7 @@ pub enum FromRobot {
         reason: String,
     },
     Battery {
+        #[serde(deserialize_with = "f32_via_f64")]
         pct: f32,
         level: u8,
         charging: String,

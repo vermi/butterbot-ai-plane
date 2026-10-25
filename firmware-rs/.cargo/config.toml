@@ -1,0 +1,15 @@
+[build]
+target = "xtensa-esp32s3-espidf"
+
+[target.xtensa-esp32s3-espidf]
+linker = "ldproxy"
+rustflags = ["--cfg", "espidf_time64"]
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+MCU = "esp32s3"
+# ESP-IDF itself: an installed one when IDF_PATH is set (tools/build.sh), else esp-idf-sys
+# downloads this version.
+ESP_IDF_VERSION = "v5.5.3"
