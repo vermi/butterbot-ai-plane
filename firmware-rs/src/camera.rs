@@ -12,6 +12,7 @@ use std::time::Duration;
 use bbproto::ctrl::Res;
 use esp_idf_svc::sys::{self, camera as cam};
 
+use crate::audio::{Phrase, Speaker};
 use crate::link::Link;
 use crate::pins;
 use crate::util::{self, millis, Stack};
@@ -190,13 +191,15 @@ impl Driver {
 }
 
 impl Camera {
-    pub fn start(link: Arc<Link>) -> Arc<Camera> {
+    pub fn start(link: Arc<Link>, speaker: Option<Arc<Speaker>>) -> Arc<Camera> {
         let c = Arc::new(Camera {
             want: Mutex::new(Want::default()),
             changed: Condvar::new(),
         });
         let me = c.clone();
-        util::spawn(c"camera", 6144, 6, Stack::Psram, move || me.run(&link));
+        util::spawn(c"camera", 6144, 6, Stack::Psram, move || {
+            me.run(&link, speaker.as_deref())
+        });
         c
     }
 
@@ -242,7 +245,8 @@ impl Camera {
         self.changed.notify_one();
     }
 
-    fn run(&self, link: &Link) {
+    fn run(&self, link: &Link, speaker: Option<&Speaker>) {
+        let mut failure_said = false;
         let mut driver: Option<Driver> = None;
         let mut idle_since = millis();
         let mut next_frame = 0u64;
@@ -288,6 +292,13 @@ impl Camera {
             if driver.is_none() {
                 driver = Driver::start(need, xclk, psram_dma, quality);
                 if driver.is_none() {
+                    // Once: it would keep saying it otherwise.
+                    if !failure_said {
+                        failure_said = true;
+                        if let Some(s) = speaker {
+                            s.say(Phrase::CameraFailure);
+                        }
+                    }
                     if let Some(s) = snapshot {
                         link.error(s.id, "camera init failed");
                     }

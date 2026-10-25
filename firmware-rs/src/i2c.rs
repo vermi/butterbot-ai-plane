@@ -61,6 +61,10 @@ impl Dev {
         })
     }
 
+    pub fn read(&self, out: &mut [u8]) -> Result<(), EspError> {
+        esp!(unsafe { sys::i2c_master_receive(self.0, out.as_mut_ptr(), out.len(), TIMEOUT_MS) })
+    }
+
     /// Register write: `reg` followed by `data` (at most 15 bytes).
     pub fn write_reg(&self, reg: u8, data: &[u8]) -> Result<(), EspError> {
         let mut buf = [0u8; 16];

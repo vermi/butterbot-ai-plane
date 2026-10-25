@@ -7,6 +7,7 @@ mod base;
 mod battery;
 mod ble;
 mod camera;
+mod cards;
 mod clock;
 mod i2c;
 mod led;
@@ -22,6 +23,7 @@ mod remote;
 mod rtc;
 mod store;
 mod tca;
+mod tof;
 mod util;
 
 use std::sync::{mpsc, Arc};
@@ -36,7 +38,9 @@ use crate::power::Boot;
 esp_idf_svc::sys::esp_app_desc! {}
 
 pub const FIRMWARE: &str = "butterbot-ai 0.6";
-const CAPS: &[&str] = &["camera", "mic", "speaker", "drive", "phone", "imu", "ota"];
+const CAPS: &[&str] = &[
+    "camera", "mic", "speaker", "drive", "phone", "imu", "modules", "ota",
+];
 
 fn main() {
     esp_idf_svc::sys::link_patches();
@@ -72,6 +76,15 @@ fn main() {
     clock::init(&bus);
     let led = led::Led::start(tca.clone(), ai::BOOT);
 
+    let (tx, rx) = mpsc::channel::<ai::Event>();
+    let speaker = match audio::Speaker::start(tca.clone(), tx.clone()) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            log::error!("speaker: {e}");
+            None
+        }
+    };
+
     let base = match base::Base::new(&bus) {
         Ok(b) => Arc::new(b),
         Err(e) => {
@@ -81,7 +94,10 @@ fn main() {
                 power::restart();
             }
             log::error!("{e}: switching off");
-            util::sleep_ms(2000);
+            if let Some(s) = &speaker {
+                s.say(audio::Phrase::MotorBoardFailure);
+                s.wait_idle(4000);
+            }
             power::power_off();
         }
     };
@@ -100,14 +116,6 @@ fn main() {
 
     logger::forward_to(link.clone());
 
-    let (tx, rx) = mpsc::channel::<ai::Event>();
-    let speaker = match audio::Speaker::start(tca.clone(), tx.clone()) {
-        Ok(s) => Some(s),
-        Err(e) => {
-            log::error!("speaker: {e}");
-            None
-        }
-    };
     if let Some(s) = speaker.clone() {
         link.set_speaker_sink(Some(Box::new(move |pcm| s.push(pcm))));
     }
@@ -120,7 +128,8 @@ fn main() {
                 None
             }
         });
-    let camera = camera::Camera::start(link.clone());
+    let camera = camera::Camera::start(link.clone(), speaker.clone());
+    let cards = cards::Cards::start(tca.clone(), battery.clone(), link.clone());
     let ble = ble::Ble::start(tx.clone());
     let phone = phone::Phone::start(ble.clone(), tx.clone());
     base.start(tx.clone());
@@ -150,6 +159,7 @@ fn main() {
         speaker,
         ble: Some(ble),
         phone: Some(phone),
+        cards,
         store,
     })
     .run(rx, boot);

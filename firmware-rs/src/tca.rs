@@ -13,15 +13,9 @@ const REG_OUTPUT: u8 = 0x02;
 const REG_POLARITY: u8 = 0x04;
 const REG_DIR: u8 = 0x06;
 
-/// Pins the firmware drives (the rest are inputs).
-const OUTPUTS: [u8; 6] = [
-    exp::LED,
-    exp::CALIB_EN,
-    exp::SPK_EN,
-    exp::CTRL_3,
-    exp::CTRL_5,
-    exp::CTRL_4,
-];
+/// Pins the firmware drives. The rest are inputs, the card slot's control lines too: they carry
+/// a card's sub-address, and only the card's driver makes one an output.
+const OUTPUTS: [u8; 3] = [exp::LED, exp::CALIB_EN, exp::SPK_EN];
 
 struct Regs {
     dir: [u8; 2],
@@ -123,11 +117,5 @@ impl Tca {
         let mut b = [0u8; 2];
         self.dev.read_reg(REG_INPUT, &mut b)?;
         Ok(u16::from_le_bytes(b))
-    }
-
-    pub fn read(&self, pin: u8) -> bool {
-        self.read_all()
-            .map(|v| v & (1 << pin) != 0)
-            .unwrap_or(false)
     }
 }

@@ -18,6 +18,7 @@ use crate::base::{Base, BaseEvent, Charge, Prox};
 use crate::battery::{Battery, BatteryEvent, Reading, LEVEL_CRITICAL};
 use crate::ble::{Ble, BleEvent};
 use crate::camera::Camera;
+use crate::cards::Cards;
 use crate::led::{rhythm, Led};
 use crate::link::{Link, LinkEvent};
 use crate::motion::{Motion, MotionEvent};
@@ -122,6 +123,7 @@ pub struct Parts {
     pub speaker: Option<Arc<Speaker>>,
     pub ble: Option<Arc<Ble>>,
     pub phone: Option<Arc<Phone>>,
+    pub cards: Option<Arc<Cards>>,
     pub store: Store,
 }
 
@@ -137,6 +139,7 @@ pub struct Robot {
     speaker: Option<Arc<Speaker>>,
     ble: Option<Arc<Ble>>,
     phone: Option<Arc<Phone>>,
+    cards: Option<Arc<Cards>>,
     store: Store,
 
     cfg: Option<LinkConfig>,
@@ -195,6 +198,7 @@ impl Robot {
             speaker: p.speaker,
             ble: p.ble,
             phone: p.phone,
+            cards: p.cards,
             store: p.store,
             cfg,
             ai_on: false,
@@ -461,6 +465,12 @@ impl Robot {
         });
         self.send_battery(self.battery.reading());
         self.base.request_proximity();
+        if let Some(k) = self.cards.as_ref().and_then(|c| c.kind()) {
+            self.link.send(&FromRobot::Card {
+                kind: k.name().into(),
+                inserted: true,
+            });
+        }
     }
 
     fn send_battery(&self, r: Reading) {
@@ -648,7 +658,13 @@ impl Robot {
                 }
                 self.link.error(id, "no routine for this scenario");
             }
-            ToRobot::Modules { id } => self.link.ack(id, json!({ "modules": [] })),
+            ToRobot::Modules { id } => {
+                let m = self
+                    .cards
+                    .as_ref()
+                    .map_or(json!({ "modules": [] }), |c| c.read());
+                self.link.ack(id, m);
+            }
             // The robot's voice is the plane's now (it streams it to the speaker).
             ToRobot::Say { id, .. } => self
                 .link
@@ -731,7 +747,11 @@ impl Robot {
 
     fn led_request(&mut self, id: u32, target: LedTarget, mode: LedMode, level: f32) {
         if target == LedTarget::Module {
-            self.link.error(id, "no LED module inserted");
+            if self.cards.as_ref().is_some_and(|c| c.set_led(mode, level)) {
+                self.link.ack(id, Value::Null);
+            } else {
+                self.link.error(id, "no LED module inserted");
+            }
             return;
         }
         // Off, dim or bright; it cannot fade, so "breathe" swaps dim and the level slowly.

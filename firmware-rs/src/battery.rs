@@ -35,6 +35,8 @@ struct Adc {
     unit: sys::adc_oneshot_unit_handle_t,
     chan: sys::adc_channel_t,
     cali: sys::adc_cali_handle_t,
+    /// Other channels on the same unit (the add-on cards'), with their calibration.
+    aux: Vec<(sys::adc_channel_t, sys::adc_cali_handle_t)>,
 }
 
 unsafe impl Send for Adc {}
@@ -63,7 +65,12 @@ impl Adc {
             log::warn!("battery: ADC calibration unavailable");
             cali = core::ptr::null_mut();
         }
-        Ok(Adc { unit, chan, cali })
+        Ok(Adc {
+            unit,
+            chan,
+            cali,
+            aux: Vec::new(),
+        })
     }
 
     /// Millivolts at the divider tap (raw counts if uncalibrated).
@@ -80,6 +87,55 @@ impl Adc {
             return None;
         }
         Some(mv as f32)
+    }
+}
+
+impl Adc {
+    /// Millivolts on another pin of the same unit (0..3.1 V range).
+    fn read_aux(&mut self, gpio: i32) -> Option<f32> {
+        let mut unit_id: sys::adc_unit_t = 0;
+        let mut chan: sys::adc_channel_t = 0;
+        if unsafe { sys::adc_oneshot_io_to_channel(gpio, &mut unit_id, &mut chan) } != sys::ESP_OK
+            || chan == self.chan
+        {
+            return None;
+        }
+        let cali = match self.aux.iter().find(|(c, _)| *c == chan) {
+            Some((_, cali)) => *cali,
+            None => {
+                let cfg = sys::adc_oneshot_chan_cfg_t {
+                    atten: sys::adc_atten_t_ADC_ATTEN_DB_12,
+                    bitwidth: sys::adc_bitwidth_t_ADC_BITWIDTH_12,
+                };
+                if unsafe { sys::adc_oneshot_config_channel(self.unit, chan, &cfg) } != sys::ESP_OK
+                {
+                    return None;
+                }
+                let mut cal: sys::adc_cali_curve_fitting_config_t = unsafe { core::mem::zeroed() };
+                cal.unit_id = unit_id;
+                cal.chan = chan;
+                cal.atten = cfg.atten;
+                cal.bitwidth = cfg.bitwidth;
+                let mut cali = core::ptr::null_mut();
+                if unsafe { sys::adc_cali_create_scheme_curve_fitting(&cal, &mut cali) }
+                    != sys::ESP_OK
+                {
+                    cali = core::ptr::null_mut();
+                }
+                self.aux.push((chan, cali));
+                cali
+            }
+        };
+        let mut raw = 0;
+        if unsafe { sys::adc_oneshot_read(self.unit, chan, &mut raw) } != sys::ESP_OK {
+            return None;
+        }
+        if cali.is_null() {
+            return Some(raw as f32);
+        }
+        let mut mv = 0;
+        (unsafe { sys::adc_cali_raw_to_voltage(cali, raw, &mut mv) } == sys::ESP_OK)
+            .then_some(mv as f32)
     }
 }
 
@@ -207,6 +263,11 @@ impl Battery {
             st.charge = charge;
         }
         self.sample(true).or_else(|| Some(self.reading()))
+    }
+
+    /// Millivolts on another ADC1 pin (an add-on card's analog output).
+    pub fn read_aux_mv(&self, gpio: i32) -> Option<f32> {
+        self.st.lock().unwrap().adc.read_aux(gpio)
     }
 
     pub fn reading(&self) -> Reading {

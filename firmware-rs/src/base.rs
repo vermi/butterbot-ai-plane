@@ -238,11 +238,6 @@ impl Base {
         self.set_motors(0, 0);
     }
 
-    pub fn moving(&self) -> bool {
-        let st = self.st.lock().unwrap();
-        st.left != 0 || st.right != 0
-    }
-
     pub fn set_scanning(&self, on: bool) {
         let mut st = self.st.lock().unwrap();
         if st.scanning == on {

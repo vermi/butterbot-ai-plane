@@ -31,7 +31,7 @@ fn cut(s: &str, max: usize) -> &str {
 impl Robot {
     pub(super) fn ble_event(&mut self, e: BleEvent) {
         match e {
-            BleEvent::Connected(_) => {}
+            BleEvent::Connected(conn) => log::info!("bluetooth: connection {conn}"),
             BleEvent::Disconnected(conn) => {
                 if let Some(p) = &self.phone {
                     p.disconnected(conn);

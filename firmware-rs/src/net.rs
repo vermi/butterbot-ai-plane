@@ -106,10 +106,6 @@ impl Net {
         }
     }
 
-    pub fn is_up(&self) -> bool {
-        self.wanted.load(Ordering::Relaxed)
-    }
-
     pub fn has_ip(&self) -> bool {
         self.got_ip.load(Ordering::Relaxed)
     }
