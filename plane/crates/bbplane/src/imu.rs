@@ -3,7 +3,8 @@
 //!
 //! - A bump: a sharp sideways or front-back jolt. While the robot drives it stops at once (a
 //!   collision the short-sighted front sensor missed) and the drive ends early (`bump`);
-//!   standing still it is news for the agent (someone knocked it).
+//!   standing still it is news for the agent (someone knocked it), but only after a calm
+//!   moment: being lifted, carried or docked jolts it again and again, and that is no bump.
 //! - A lift: upward acceleration held for a moment. It counts together with the floor sensor
 //!   (see `control::on_body`), which alone flickers.
 //!
@@ -27,6 +28,14 @@ const LIFT_G: f32 = 0.08;
 const LIFT_HOLD: Duration = Duration::from_millis(120);
 /// After one, the next of a kind waits this long (a bump rings on for a moment).
 const BUMP_QUIET: Duration = Duration::from_millis(1500);
+/// Standing still, a bump counts only after this long without any jolt of `ACTIVE_G`: someone
+/// handling the robot jolts it continually.
+const STILL_REARM: Duration = Duration::from_secs(5);
+const ACTIVE_G: f32 = 0.2;
+/// A standing bump waits this long before it is news, and is dropped if the charger came or
+/// went around it (docking and undocking jolt the robot) or the robot is off the floor.
+const STILL_CONFIRM: Duration = Duration::from_secs(1);
+const CHARGER_SETTLE: Duration = Duration::from_secs(3);
 const LIFT_QUIET: Duration = Duration::from_secs(3);
 /// How fast the gravity estimate follows (time constant).
 const GRAVITY_TAU_S: f32 = 0.5;
@@ -48,6 +57,10 @@ pub struct Watch {
     up_since: Option<Instant>,
     last_bump: Option<Instant>,
     last_lift: Option<Instant>,
+    /// The last jolt standing still (any of `ACTIVE_G` or more).
+    last_jolt: Option<Instant>,
+    /// The largest sideways jolt since the last look (g), for tuning.
+    pub peak: f32,
 }
 
 impl Watch {
@@ -76,12 +89,19 @@ impl Watch {
             }
 
             let side = (d[1] * d[1] + d[2] * d[2]).sqrt();
+            self.peak = self.peak.max(side);
             let limit = if moving { BUMP_DRIVING_G } else { BUMP_STILL_G };
-            if side >= limit
-                && self
-                    .last_bump
+            let armed = if moving {
+                self.last_bump
                     .is_none_or(|t| at.duration_since(t) >= BUMP_QUIET)
-            {
+            } else {
+                self.last_jolt
+                    .is_none_or(|t| at.duration_since(t) >= STILL_REARM)
+            };
+            if !moving && side >= ACTIVE_G {
+                self.last_jolt = Some(at);
+            }
+            if side >= limit && armed {
                 self.last_bump = Some(at);
                 // Pushed one way means hit from the other.
                 let from = if d[2].abs() >= d[1].abs() {
@@ -120,6 +140,12 @@ impl Watch {
 pub async fn run(robot: Robot) {
     let mut rx = robot.hub.imu.subscribe();
     let mut watch = Watch::default();
+    let mut prev: Vec<[i16; 3]> = Vec::new();
+    // A standing bump waiting to be confirmed: when, how strong, from where.
+    let mut pending: Option<(Instant, f32, &'static str)> = None;
+    let mut plugged = robot.plugged_in().await;
+    let mut plug_changed: Option<Instant> = None;
+    let mut peak_at = Instant::now();
     loop {
         let chunk = match rx.recv().await {
             Ok(c) => c,
@@ -127,12 +153,49 @@ pub async fn run(robot: Robot) {
             Err(RecvError::Closed) => return,
         };
         let moving = robot.is_moving();
-        for felt in watch.push(&chunk.samples, chunk.rate_hz, moving, Instant::now()) {
+        let now = Instant::now();
+        if now.duration_since(peak_at) >= Duration::from_secs(30) {
+            // Standing still it stays under 0.1 g, camera on or off.
+            tracing::debug!("largest sideways jolt in 30 s: {:.2} g", watch.peak);
+            watch.peak = 0.0;
+            peak_at = now;
+        }
+        let p = robot.plugged_in().await;
+        if p != plugged {
+            if plugged.is_some() {
+                plug_changed = Some(now);
+            }
+            plugged = p;
+        }
+        if let Some((at, g, side)) = pending
+            && now.duration_since(at) >= STILL_CONFIRM
+        {
+            pending = None;
+            let docking =
+                plug_changed.is_some_and(|c| c.max(at).duration_since(c.min(at)) < CHARGER_SETTLE);
+            if docking || !robot.on_the_floor() {
+                tracing::info!(
+                    "bump: {g} g from the {side} ignored ({})",
+                    if docking {
+                        "the charger"
+                    } else {
+                        "off the floor"
+                    }
+                );
+            } else {
+                robot
+                    .hub
+                    .push_event("motion", json!({ "kind": "bump", "g": g, "side": side }))
+                    .await;
+            }
+        }
+        for felt in watch.push(&chunk.samples, chunk.rate_hz, moving, now) {
             match felt {
                 Felt::Bump { g, side } => {
                     tracing::info!(
-                        "bump: {g} g from the {side}{}",
-                        if moving { " while driving" } else { "" }
+                        "bump: {g} g from the {side}{} (samples, mg: {prev:?} {:?})",
+                        if moving { " while driving" } else { "" },
+                        chunk.samples
                     );
                     if moving {
                         robot.hub.send(ToRobot::Stop).await.ok();
@@ -140,11 +203,13 @@ pub async fn run(robot: Robot) {
                             .hub
                             .push_event("drive_stopped", json!({ "reason": "bump", "side": side }))
                             .await;
+                        robot
+                            .hub
+                            .push_event("motion", json!({ "kind": "bump", "g": g, "side": side }))
+                            .await;
+                    } else {
+                        pending = Some((now, g, side));
                     }
-                    robot
-                        .hub
-                        .push_event("motion", json!({ "kind": "bump", "g": g, "side": side }))
-                        .await;
                 }
                 Felt::Lift => {
                     robot
@@ -157,6 +222,7 @@ pub async fn run(robot: Robot) {
                 }
             }
         }
+        prev = chunk.samples.clone();
     }
 }
 
@@ -204,6 +270,30 @@ mod tests {
         let felt = w.push(&s, 50, true, t + Duration::from_millis(200));
         assert!(
             matches!(felt[..], [Felt::Bump { side: "left", .. }]),
+            "{felt:?}"
+        );
+    }
+
+    #[test]
+    fn handling_is_one_bump_not_many() {
+        let mut w = Watch::default();
+        let t = Instant::now();
+        w.push(&still(50), 50, false, t);
+        // Jolted every 2 s for 20 s (lifted, carried, docked).
+        let mut felt = Vec::new();
+        for k in 1..=10u64 {
+            let mut s = still(100);
+            s[10] = [1000, 0, 600];
+            felt.extend(w.push(&s, 50, false, t + Duration::from_secs(2 * k)));
+        }
+        assert_eq!(felt.len(), 1, "{felt:?}");
+        // After a calm spell, a knock counts again.
+        w.push(&still(400), 50, false, t + Duration::from_secs(28));
+        let mut s = still(10);
+        s[3] = [1000, 0, -600];
+        let felt = w.push(&s, 50, false, t + Duration::from_millis(28_200));
+        assert!(
+            matches!(felt[..], [Felt::Bump { side: "front", .. }]),
             "{felt:?}"
         );
     }
