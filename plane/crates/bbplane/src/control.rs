@@ -1930,12 +1930,17 @@ async fn remote_button(robot: &Robot, data: &Value) {
     let button = data["button"].as_str().unwrap_or_default();
     tracing::info!("remote: {button}");
     match button {
-        // The robot leaves AI mode for stock RC mode (it says so) and comes back when that ends.
+        // Someone drives with the remote's stick: the robot (firmware 0.5) leaves AI mode for
+        // stock RC mode and comes back when that ends; firmware 0.6 stays and says `on: false`
+        // when it ends.
         "override" => {
+            let on = data["on"] != false;
             robot
                 .manual_override
-                .store(true, std::sync::atomic::Ordering::Relaxed);
-            robot.cancel_summon().await;
+                .store(on, std::sync::atomic::Ordering::Relaxed);
+            if on {
+                robot.cancel_summon().await;
+            }
         }
         // Talking, or about to answer: cut it off. Quiet: focus mode.
         "shut_up" => {
@@ -2054,6 +2059,28 @@ fn menu_request(scenario: &str, arg: u64) -> Option<String> {
         "ai_weather" => "What's the weather like today?".into(),
         "ai_explore" => "Go explore for a bit, then tell me what you found.".into(),
         "ai_story" => "Tell me a very short story.".into(),
+        // Firmware 0.6 runs none of the stock menu routines itself: they come here too.
+        "joke" => "Tell me a joke.".into(),
+        "fact" => "Tell me a fun fact.".into(),
+        "pass_the_butter" | "you_pass_butter" => "What is your purpose?".into(),
+        "profanity" => "Grumble about something, in a family-friendly way.".into(),
+        "current_time" => "What time is it?".into(),
+        "phone_whats_playing" => "What's playing on my phone?".into(),
+        "phone_next_song" => "Next song, please.".into(),
+        "phone_prev_song" => "Play the previous song.".into(),
+        "phone_play_music" => "Play my music.".into(),
+        "phone_stop_music" => "Pause my music.".into(),
+        "temp_hum_module" => "What are the temperature and humidity?".into(),
+        "temp_hum_scale_celsius" => "Give me temperatures in Celsius from now on.".into(),
+        "temp_hum_scale_fahrenheit" => "Give me temperatures in Fahrenheit from now on.".into(),
+        "temp_hum_scale_kelvin" => "Give me temperatures in Kelvin from now on.".into(),
+        "gas_module" => "What does the gas sensor say?".into(),
+        "led_module" | "led_turn_on" => "Turn on the LED card.".into(),
+        "led_turn_off" => "Turn off the LED card.".into(),
+        "led_strobe" | "led_faster" => "Make the LED card blink.".into(),
+        "led_breathe" | "led_slower" => "Make the LED card breathe.".into(),
+        "intruder_detection_on" => "Watch for intruders with the motion card.".into(),
+        "intruder_detection_off" => "Stop watching for intruders.".into(),
         _ => return None,
     })
 }
@@ -2412,10 +2439,9 @@ mod tests {
                 .unwrap()
                 .contains("notifications")
         );
-        assert!(
-            menu_request("joke", 0).is_none(),
-            "the robot tells jokes itself"
-        );
+        // Firmware 0.6 passes every menu pick on (0.5 told jokes itself).
+        assert_eq!(menu_request("joke", 0).unwrap(), "Tell me a joke.");
+        assert!(menu_request("ir_list", 0).is_none(), "no IR card any more");
     }
 
     #[test]

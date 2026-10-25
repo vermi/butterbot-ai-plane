@@ -5,7 +5,9 @@ mod ai;
 mod audio;
 mod base;
 mod battery;
+mod ble;
 mod camera;
+mod clock;
 mod i2c;
 mod led;
 mod link;
@@ -13,8 +15,10 @@ mod logger;
 mod motion;
 mod net;
 mod ota;
+mod phone;
 mod pins;
 mod power;
+mod remote;
 mod rtc;
 mod store;
 mod tca;
@@ -32,7 +36,7 @@ use crate::power::Boot;
 esp_idf_svc::sys::esp_app_desc! {}
 
 pub const FIRMWARE: &str = "butterbot-ai 0.6";
-const CAPS: &[&str] = &["camera", "mic", "speaker", "drive", "ota"];
+const CAPS: &[&str] = &["camera", "mic", "speaker", "drive", "phone", "ota"];
 
 fn main() {
     esp_idf_svc::sys::link_patches();
@@ -65,6 +69,7 @@ fn main() {
 
     let bus = i2c::Bus::new(0, pins::I2C_MAIN_SDA, pins::I2C_MAIN_SCL).expect("i2c");
     let tca = Arc::new(tca::Tca::new(&bus).expect("io expander"));
+    clock::init(&bus);
     let led = led::Led::start(tca.clone(), ai::BOOT);
 
     let base = match base::Base::new(&bus) {
@@ -116,6 +121,8 @@ fn main() {
             }
         });
     let camera = camera::Camera::start(link.clone());
+    let ble = ble::Ble::start(tx.clone());
+    let phone = phone::Phone::start(ble.clone(), tx.clone());
     base.start(tx.clone());
     battery.start(tx.clone());
     if let Some(m) = &motion {
@@ -141,6 +148,8 @@ fn main() {
         camera,
         mic,
         speaker,
+        ble: Some(ble),
+        phone: Some(phone),
         store,
     })
     .run(rx, boot);

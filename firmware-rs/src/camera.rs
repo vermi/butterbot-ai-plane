@@ -131,7 +131,13 @@ impl Driver {
             if psram_dma { ", PSRAM DMA" } else { "" },
             millis() - t
         );
-        Some(Driver { max, xclk, psram_dma, size: max, quality })
+        Some(Driver {
+            max,
+            xclk,
+            psram_dma,
+            size: max,
+            quality,
+        })
     }
 
     fn stop(self) {
@@ -185,7 +191,10 @@ impl Driver {
 
 impl Camera {
     pub fn start(link: Arc<Link>) -> Arc<Camera> {
-        let c = Arc::new(Camera { want: Mutex::new(Want::default()), changed: Condvar::new() });
+        let c = Arc::new(Camera {
+            want: Mutex::new(Want::default()),
+            changed: Condvar::new(),
+        });
         let me = c.clone();
         util::spawn(c"camera", 6144, 6, Stack::Psram, move || me.run(&link));
         c
@@ -205,7 +214,9 @@ impl Camera {
             res,
             fps: fps.clamp(1, 30),
             quality: quality.clamp(4, 63),
-            xclk: xclk.filter(|&x| (8..=40).contains(&x)).unwrap_or(DEFAULT_XCLK_MHZ),
+            xclk: xclk
+                .filter(|&x| (8..=40).contains(&x))
+                .unwrap_or(DEFAULT_XCLK_MHZ),
             psram_dma: psram_dma.unwrap_or(false),
         });
         self.changed.notify_one();
@@ -217,7 +228,11 @@ impl Camera {
         if let Some(old) = w.snapshot.take() {
             link.error(old.id, "superseded by a newer snapshot");
         }
-        w.snapshot = Some(Snapshot { id, res, quality: quality.clamp(4, 63) });
+        w.snapshot = Some(Snapshot {
+            id,
+            res,
+            quality: quality.clamp(4, 63),
+        });
         self.changed.notify_one();
     }
 
@@ -238,7 +253,11 @@ impl Camera {
                 let mut w = self.want.lock().unwrap();
                 if w.stream.is_none() && w.snapshot.is_none() {
                     let wait = if driver.is_some() { 1000 } else { 60_000 };
-                    w = self.changed.wait_timeout(w, Duration::from_millis(wait)).unwrap().0;
+                    w = self
+                        .changed
+                        .wait_timeout(w, Duration::from_millis(wait))
+                        .unwrap()
+                        .0;
                 }
                 (w.stream, w.snapshot.take())
             };

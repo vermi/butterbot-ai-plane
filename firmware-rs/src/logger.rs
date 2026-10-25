@@ -20,7 +20,9 @@ struct Logger {
     console: EspIdfLogger<()>,
 }
 
-static LOGGER: Logger = Logger { console: EspIdfLogger::new(()) };
+static LOGGER: Logger = Logger {
+    console: EspIdfLogger::new(()),
+};
 static LINK: OnceLock<Arc<Link>> = OnceLock::new();
 
 pub fn init() {
@@ -37,7 +39,9 @@ pub fn forward_to(link: Arc<Link>) {
         // Channel 1 stays the UART; channel 2 sees the same characters.
         sys::esp_rom_install_channel_putc(2, Some(rom_putc));
     }
-    util::spawn(c"log_fwd", 4096, 3, Stack::Psram, move || forward(&link, rx));
+    util::spawn(c"log_fwd", 4096, 3, Stack::Psram, move || {
+        forward(&link, rx)
+    });
 }
 
 // ---------------------------------------------------------------- ESP-IDF's own output
@@ -66,7 +70,11 @@ unsafe extern "C" fn vprintf_hook(fmt: *const c_char, ap: sys::va_list) -> c_int
     let len = (n.max(0) as usize).min(buf.len() - 1);
     write(1, buf.as_ptr() as *const c_void, len);
     let line = &buf[..len];
-    if line.starts_with(b"\x1b[0;31mE") || line.starts_with(b"\x1b[0;33mW") || line.starts_with(b"E (") || line.starts_with(b"W (") {
+    if line.starts_with(b"\x1b[0;31mE")
+        || line.starts_with(b"\x1b[0;33mW")
+        || line.starts_with(b"E (")
+        || line.starts_with(b"W (")
+    {
         if let Some(tx) = C_LINES.get() {
             if let Ok(tx) = tx.try_lock() {
                 let _ = tx.try_send(String::from_utf8_lossy(line).into_owned());
@@ -98,7 +106,11 @@ fn forward(link: &Link, rx: Receiver<String>) {
         sleep_ms(100);
         let mut lines: Vec<(&'static str, String)> = Vec::new();
         while let Ok(l) = rx.try_recv() {
-            let level = if l.contains("E (") || l.starts_with("\x1b[0;31m") { "error" } else { "warn" };
+            let level = if l.contains("E (") || l.starts_with("\x1b[0;31m") {
+                "error"
+            } else {
+                "warn"
+            };
             lines.push((level, clean(&l)));
         }
         let wr = RING_WR.load(Ordering::Relaxed);
@@ -122,7 +134,10 @@ fn forward(link: &Link, rx: Receiver<String>) {
             continue;
         }
         for (level, msg) in lines.into_iter().take(20) {
-            link.send(&FromRobot::Log { level: level.into(), msg: format!("idf: {msg}") });
+            link.send(&FromRobot::Log {
+                level: level.into(),
+                msg: format!("idf: {msg}"),
+            });
         }
     }
 }

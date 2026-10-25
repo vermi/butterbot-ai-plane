@@ -11,16 +11,21 @@ use bbproto::ctrl::{LedMode, LedTarget, Rhythm};
 use bbproto::{FromRobot, ToRobot};
 use serde_json::{json, Value};
 
+mod handheld;
+
 use crate::audio::{Mic, Phrase, Speaker, SpeakerEvent};
 use crate::base::{Base, BaseEvent, Charge, Prox};
 use crate::battery::{Battery, BatteryEvent, Reading, LEVEL_CRITICAL};
+use crate::ble::{Ble, BleEvent};
 use crate::camera::Camera;
 use crate::led::{rhythm, Led};
 use crate::link::{Link, LinkEvent};
 use crate::motion::{Motion, MotionEvent};
 use crate::net::Net;
 use crate::ota;
+use crate::phone::{Phone, PhoneEvent};
 use crate::power::{self, Boot, Button};
+use crate::remote::{self, AiStatus, Home};
 use crate::store::{LinkConfig, Store};
 use crate::util::{self, millis, sleep_ms};
 
@@ -31,6 +36,19 @@ pub enum Event {
     Motion(MotionEvent),
     Link(LinkEvent),
     Speaker(SpeakerEvent),
+    Ble(BleEvent),
+    Phone(PhoneEvent),
+}
+
+impl From<BleEvent> for Event {
+    fn from(e: BleEvent) -> Self {
+        Event::Ble(e)
+    }
+}
+impl From<PhoneEvent> for Event {
+    fn from(e: PhoneEvent) -> Self {
+        Event::Phone(e)
+    }
 }
 
 impl From<Button> for Event {
@@ -102,6 +120,8 @@ pub struct Parts {
     pub camera: Arc<Camera>,
     pub mic: Option<Arc<Mic>>,
     pub speaker: Option<Arc<Speaker>>,
+    pub ble: Option<Arc<Ble>>,
+    pub phone: Option<Arc<Phone>>,
     pub store: Store,
 }
 
@@ -115,6 +135,8 @@ pub struct Robot {
     camera: Arc<Camera>,
     mic: Option<Arc<Mic>>,
     speaker: Option<Arc<Speaker>>,
+    ble: Option<Arc<Ble>>,
+    phone: Option<Arc<Phone>>,
     store: Store,
 
     cfg: Option<LinkConfig>,
@@ -141,6 +163,17 @@ pub struct Robot {
     battery_critical: bool,
     next_wifi_report: u64,
     reports: u32,
+
+    // The handheld remote (see `handheld`).
+    ai_status: AiStatus,
+    news: Home,
+    news_at: u64,
+    home_sent_at: u64,
+    peeking: bool,
+    /// Manual Override: the remote's stick drives.
+    manual: bool,
+    listen_until: Option<u64>,
+    muted: bool,
 }
 
 impl Robot {
@@ -160,6 +193,8 @@ impl Robot {
             camera: p.camera,
             mic: p.mic,
             speaker: p.speaker,
+            ble: p.ble,
+            phone: p.phone,
             store: p.store,
             cfg,
             ai_on: false,
@@ -182,6 +217,18 @@ impl Robot {
             battery_critical: false,
             next_wifi_report: 0,
             reports: 0,
+            ai_status: AiStatus {
+                mode: remote::MODE_NO_BRAIN,
+                activity: 2,
+                ..Default::default()
+            },
+            news: Home::default(),
+            news_at: 0,
+            home_sent_at: 0,
+            peeking: false,
+            manual: false,
+            listen_until: None,
+            muted: false,
         }
     }
 
@@ -222,6 +269,11 @@ impl Robot {
         self.deadline = Some(millis() + CONNECT_MS);
         self.retry_at = None;
         self.plane_led = ONLINE;
+        self.ai_status = AiStatus {
+            mode: remote::MODE_NO_BRAIN,
+            activity: 2,
+            ..Default::default()
+        };
         self.link.configure(cfg.clone());
         if let Err(e) = self.net.up(&cfg, self.store.channel()) {
             log::error!("wifi: {e}");
@@ -244,6 +296,10 @@ impl Robot {
         self.net.down();
         self.ai_on = false;
         self.deadline = None;
+        self.peeking = false;
+        // The remote drops AI mode's entries.
+        self.send_ai_status();
+        self.send_home();
     }
 
     fn tick(&mut self) {
@@ -275,6 +331,7 @@ impl Robot {
         if self.driving && now >= self.drive_until {
             self.stop_driving("watchdog");
         }
+        self.handheld_tick();
 
         if self.link.is_online() && now >= self.next_wifi_report {
             self.next_wifi_report = now + WIFI_REPORT_MS;
@@ -321,6 +378,19 @@ impl Robot {
                 self.deadline = None;
                 ota::confirm();
                 power::ai_mode_worked();
+                if !self.connected_once {
+                    let (free, block) = util::internal_ram();
+                    log::info!(
+                        "up: internal RAM free {free} (block {block}), PSRAM free {}, {} Bluetooth connection(s), {} phone",
+                        util::psram_free(),
+                        self.ble.as_ref().map_or(0, |b| b.connections()),
+                        match self.phone.as_ref().and_then(|p| p.kind()) {
+                            Some(crate::phone::Kind::Iphone) => "iPhone",
+                            Some(crate::phone::Kind::Android) => "Android",
+                            None => "no",
+                        }
+                    );
+                }
                 self.connected_once = true;
                 self.status_snapshot();
             }
@@ -344,8 +414,12 @@ impl Robot {
                 });
             }
             Event::Motion(MotionEvent::SetDown) => self.base.rebaseline(),
+            Event::Ble(e) => self.ble_event(e),
+            Event::Phone(e) => self.phone_event(e),
             Event::Speaker(SpeakerEvent::Playing { on, underruns }) => {
                 self.talking = on;
+                // The remote's face moves its mouth.
+                self.send_ai_status();
                 self.link.send(&FromRobot::Speaker {
                     playing: on,
                     buffered_ms: 0,
@@ -406,6 +480,8 @@ impl Robot {
 
     fn battery_changed(&mut self, r: Reading) {
         self.send_battery(r);
+        self.send_remote_battery(r);
+        self.send_home();
         if r.level == LEVEL_CRITICAL && r.charge == Charge::Unplugged {
             log::error!("battery critical while unplugged: switching off");
             self.battery_critical = true;
@@ -457,6 +533,8 @@ impl Robot {
                 if let Some(r) = self.battery.set_charge(c) {
                     log::info!("charger: {}", c.name());
                     self.send_battery(r);
+                    self.send_remote_battery(r);
+                    self.send_home();
                 }
             }
         }
@@ -525,6 +603,8 @@ impl Robot {
                 self.say(Phrase::AiOff, true);
                 self.ai_stop();
             }
+            // The remote's stick has the motors during Manual Override.
+            ToRobot::Drive { .. } if self.manual => self.stop_driving("manual_override"),
             ToRobot::Drive { l, r, ms, safe } => self.drive(l, r, ms, safe),
             ToRobot::Stop => self.stop_motors(),
             ToRobot::Safety { id, tilt, obstacle } => {
@@ -570,7 +650,9 @@ impl Robot {
             }
             ToRobot::Modules { id } => self.link.ack(id, json!({ "modules": [] })),
             // The robot's voice is the plane's now (it streams it to the speaker).
-            ToRobot::Say { id, .. } => self.link.error(id, "no voice on the robot: speak with spk_begin"),
+            ToRobot::Say { id, .. } => self
+                .link
+                .error(id, "no voice on the robot: speak with spk_begin"),
             ToRobot::SpkBegin { id } => match &self.speaker {
                 Some(s) => {
                     s.begin();
@@ -615,13 +697,35 @@ impl Robot {
                 }
                 None => self.link.error(id, "microphone unavailable"),
             },
-            ToRobot::Phone { id, .. } => self.link.error(id, "the phone link is not available"),
+            ToRobot::Phone { id, action, index } => self.phone_request(id, &action, index),
+            ToRobot::AiStatus {
+                mode,
+                activity,
+                focus_minutes,
+                emotion,
+                intensity,
+            } => self.plane_ai_status(AiStatus {
+                mode: mode.min(5),
+                activity: activity.min(3),
+                focus_minutes,
+                speaking: false,
+                emotion: emotion.min(11),
+                intensity: intensity.min(100),
+            }),
+            ToRobot::HomeInfo {
+                clock,
+                next,
+                seen,
+                seen_secs,
+                said,
+                heard,
+                heard_last,
+                doing,
+            } => self.plane_home_info(clock, next, seen, seen_secs, said, heard, heard_last, doing),
+            ToRobot::PeekCaption { text } => self.plane_peek_caption(&text),
             ToRobot::IrList { id } | ToRobot::IrSend { id, .. } => {
                 self.link.error(id, "no IR module inserted")
             }
-            ToRobot::AiStatus { .. }
-            | ToRobot::HomeInfo { .. }
-            | ToRobot::PeekCaption { .. } => {}
         }
     }
 

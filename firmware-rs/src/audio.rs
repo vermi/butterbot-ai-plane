@@ -110,13 +110,16 @@ impl Mic {
         });
         let m = mic.clone();
         let rx = Chan(rx);
-        util::spawn(c"mic", 6144, 9, Stack::Internal, move || m.run(rx, &link, &speaker));
+        util::spawn(c"mic", 6144, 9, Stack::Internal, move || {
+            m.run(rx, &link, &speaker)
+        });
         Ok(mic)
     }
 
     pub fn set(&self, on: bool, gate: bool, gain: f32) {
         self.gate.store(gate, Ordering::Relaxed);
-        self.gain.store(gain.clamp(0.0, 8.0).to_bits(), Ordering::Relaxed);
+        self.gain
+            .store(gain.clamp(0.0, 8.0).to_bits(), Ordering::Relaxed);
         self.on.store(on, Ordering::Relaxed);
         self.changed.1.notify_one();
     }
@@ -146,7 +149,13 @@ impl Mic {
             }
             let mut read = 0usize;
             let err = unsafe {
-                sys::i2s_channel_read(rx, raw.as_mut_ptr() as *mut _, raw.len() * 2, &mut read, 200)
+                sys::i2s_channel_read(
+                    rx,
+                    raw.as_mut_ptr() as *mut _,
+                    raw.len() * 2,
+                    &mut read,
+                    200,
+                )
             };
             if err != sys::ESP_OK || read == 0 {
                 continue;
@@ -165,7 +174,11 @@ impl Mic {
             for i in 0..frames {
                 let x = (raw[2 * i] as f32 + raw[2 * i + 1] as f32) * 0.5;
                 let y = hp.run(x) * gain;
-                out[i] = if muted { 0 } else { y.clamp(-32768.0, 32767.0) as i16 };
+                out[i] = if muted {
+                    0
+                } else {
+                    y.clamp(-32768.0, 32767.0) as i16
+                };
             }
             link.send_mic(&out[..frames]);
         }
@@ -232,7 +245,12 @@ impl Speaker {
         std.gpio_cfg.din = -1;
         esp!(unsafe { sys::i2s_channel_init_std_mode(tx, &std) })?;
         let s = Arc::new(Speaker {
-            q: Mutex::new(Queue { pcm: VecDeque::new(), feed: Feed::Idle, abort: false, last_push: 0 }),
+            q: Mutex::new(Queue {
+                pcm: VecDeque::new(),
+                feed: Feed::Idle,
+                abort: false,
+                last_push: 0,
+            }),
             wake: Condvar::new(),
             playing: AtomicBool::new(false),
             gain: AtomicU32::new(0.8f32.to_bits()),
@@ -240,7 +258,9 @@ impl Speaker {
         });
         let me = s.clone();
         let tx = Chan(tx);
-        util::spawn(c"speaker", 6144, 10, Stack::Internal, move || me.run(tx, &tca, &events));
+        util::spawn(c"speaker", 6144, 10, Stack::Internal, move || {
+            me.run(tx, &tca, &events)
+        });
         Ok(s)
     }
 
@@ -249,7 +269,8 @@ impl Speaker {
     }
 
     pub fn set_gain(&self, g: f32) {
-        self.gain.store(g.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+        self.gain
+            .store(g.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
     }
 
     /// The plane starts a stream (`spk_begin`).
@@ -312,7 +333,11 @@ impl Speaker {
         let deadline = millis() + ms;
         let mut q = self.q.lock().unwrap();
         while (q.feed != Feed::Idle || self.playing()) && millis() < deadline {
-            q = self.wake.wait_timeout(q, Duration::from_millis(20)).unwrap().0;
+            q = self
+                .wake
+                .wait_timeout(q, Duration::from_millis(20))
+                .unwrap()
+                .0;
         }
     }
 
@@ -337,13 +362,23 @@ impl Speaker {
                         q.feed = Feed::Idle; // nothing came
                         self.wake.notify_all();
                     }
-                    q = self.wake.wait_timeout(q, Duration::from_millis(100)).unwrap().0;
+                    q = self
+                        .wake
+                        .wait_timeout(q, Duration::from_millis(100))
+                        .unwrap()
+                        .0;
                 }
             }
             tca.write(exp::SPK_EN, true);
             unsafe { sys::i2s_channel_enable(tx) };
             self.playing.store(true, Ordering::Relaxed);
-            let _ = events.send(SpeakerEvent::Playing { on: true, underruns: 0 }.into());
+            let _ = events.send(
+                SpeakerEvent::Playing {
+                    on: true,
+                    underruns: 0,
+                }
+                .into(),
+            );
             let mut had_data = false;
             loop {
                 let (n, done) = {
@@ -356,7 +391,8 @@ impl Speaker {
                             block[i] = s;
                         }
                         let done = n == 0
-                            && (q.feed != Feed::Streaming || millis() - q.last_push > STREAM_SILENT_MS);
+                            && (q.feed != Feed::Streaming
+                                || millis() - q.last_push > STREAM_SILENT_MS);
                         if done {
                             q.feed = Feed::Idle;
                         }
@@ -383,7 +419,13 @@ impl Speaker {
                 }
                 let mut written = 0usize;
                 unsafe {
-                    sys::i2s_channel_write(tx, block.as_ptr() as *const _, BLOCK * 2, &mut written, 200);
+                    sys::i2s_channel_write(
+                        tx,
+                        block.as_ptr() as *const _,
+                        BLOCK * 2,
+                        &mut written,
+                        200,
+                    );
                 }
             }
             // Let the DMA play out its last buffers (silence after them), then off.
@@ -391,7 +433,13 @@ impl Speaker {
             for _ in 0..6 {
                 let mut written = 0usize;
                 unsafe {
-                    sys::i2s_channel_write(tx, block.as_ptr() as *const _, BLOCK * 2, &mut written, 200);
+                    sys::i2s_channel_write(
+                        tx,
+                        block.as_ptr() as *const _,
+                        BLOCK * 2,
+                        &mut written,
+                        200,
+                    );
                 }
             }
             unsafe { sys::i2s_channel_disable(tx) };
@@ -399,7 +447,13 @@ impl Speaker {
             self.playing.store(false, Ordering::Relaxed);
             self.wake.notify_all();
             let underruns = self.underruns.load(Ordering::Relaxed);
-            let _ = events.send(SpeakerEvent::Playing { on: false, underruns }.into());
+            let _ = events.send(
+                SpeakerEvent::Playing {
+                    on: false,
+                    underruns,
+                }
+                .into(),
+            );
         }
     }
 }
@@ -465,7 +519,12 @@ impl Phrase {
             if code & 1 != 0 {
                 delta += step >> 2;
             }
-            pred = if code & 8 != 0 { pred - delta } else { pred + delta }.clamp(-32768, 32767);
+            pred = if code & 8 != 0 {
+                pred - delta
+            } else {
+                pred + delta
+            }
+            .clamp(-32768, 32767);
             idx = (idx + INDEX[code as usize]).clamp(0, 88);
             out.push(pred as i16);
         }
