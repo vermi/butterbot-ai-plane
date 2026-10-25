@@ -284,6 +284,9 @@ res = "vga"              # r128, qvga, vga, svga, xga, hd, uxga, qxga
 fps = 24                 # the robot reaches about 26 fps up to svga
 quality = 6              # 4..63, lower is better (bigger frames)
 xclk_mhz = 20            # sensor clock; the board default (27) corrupts frames above 128x128
+ae_level = -2            # exposure target, -5..5 (the sensor's own is about -1); lower: less lamp glare
+denoise = 4              # 0 (off) ..8
+night = false            # longer exposures in the dark: brighter, but about 9 fps in room light
 
 [mic]
 gate = true              # mute the mic while the robot speaks (no echo cancellation)

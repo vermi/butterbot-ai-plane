@@ -725,8 +725,7 @@ impl Robot {
                 quality,
                 opts,
             } => {
-                self.camera
-                    .set_stream(on, res, fps, quality, opts.xclk_mhz, opts.psram_dma);
+                self.camera.set_stream(on, res, fps, quality, &opts);
                 self.link.ack(id, Value::Null);
             }
             ToRobot::Snapshot { id, res, quality } => {

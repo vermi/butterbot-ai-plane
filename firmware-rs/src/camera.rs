@@ -9,7 +9,7 @@
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use bbproto::ctrl::Res;
+use bbproto::ctrl::{CamOpts, Res};
 use esp_idf_svc::sys::{self, camera as cam};
 
 use crate::audio::{Phrase, Speaker};
@@ -38,10 +38,20 @@ struct Snapshot {
     quality: u8,
 }
 
+/// Sensor settings beyond the driver's defaults (None: leave as it is).
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+struct Tune {
+    night: Option<bool>,
+    ae_level: Option<i8>,
+    denoise: Option<u8>,
+}
+
 #[derive(Default)]
 struct Want {
     stream: Option<Stream>,
     snapshot: Option<Snapshot>,
+    /// The last asked for; snapshots use it too.
+    tune: Tune,
 }
 
 pub struct Camera {
@@ -62,6 +72,21 @@ fn framesize(r: Res) -> cam::framesize_t {
     }
 }
 
+/// The driver's JPEG buffer is width x height / 5 of the size it starts with: at high quality
+/// (4-6) a detailed frame overflows that (FB-OVF) and comes out cut short. One size up leaves
+/// room (PSRAM; the sensor is switched down to the size asked for).
+fn with_headroom(r: Res) -> Res {
+    match r {
+        Res::R128 => Res::Qvga,
+        Res::Qvga => Res::Vga,
+        Res::Vga => Res::Svga,
+        Res::Svga => Res::Xga,
+        Res::Xga => Res::Hd,
+        Res::Hd => Res::Uxga,
+        Res::Uxga | Res::Qxga => Res::Qxga,
+    }
+}
+
 fn pixels(r: Res) -> u32 {
     let (w, h) = r.size();
     w as u32 * h as u32
@@ -75,6 +100,7 @@ struct Driver {
     psram_dma: bool,
     size: Res,
     quality: u8,
+    tuned: Tune,
 }
 
 impl Driver {
@@ -145,7 +171,43 @@ impl Driver {
             psram_dma,
             size: max,
             quality,
+            tuned: Tune::default(),
         })
+    }
+
+    fn tune(&mut self, t: Tune) {
+        if t == self.tuned {
+            return;
+        }
+        let was = self.tuned;
+        self.tuned = t;
+        unsafe {
+            let s = cam::esp_camera_sensor_get();
+            if s.is_null() {
+                return;
+            }
+            if let (Some(v), true) = (t.night, t.night != was.night) {
+                if let Some(f) = (*s).set_aec2 {
+                    f(s, v as i32);
+                }
+            }
+            if let (Some(v), true) = (t.ae_level, t.ae_level != was.ae_level) {
+                if let Some(f) = (*s).set_ae_level {
+                    f(s, v.clamp(-5, 5) as i32);
+                }
+            }
+            if let (Some(v), true) = (t.denoise, t.denoise != was.denoise) {
+                if let Some(f) = (*s).set_denoise {
+                    f(s, v.min(8) as i32);
+                }
+            }
+        }
+        log::info!(
+            "camera: night mode {:?}, exposure level {:?}, denoise {:?}",
+            t.night,
+            t.ae_level,
+            t.denoise
+        );
     }
 
     fn stop(self) {
@@ -210,16 +272,14 @@ impl Camera {
         c
     }
 
-    pub fn set_stream(
-        &self,
-        on: bool,
-        res: Res,
-        fps: u8,
-        quality: u8,
-        xclk: Option<u8>,
-        psram_dma: Option<bool>,
-    ) {
+    pub fn set_stream(&self, on: bool, res: Res, fps: u8, quality: u8, opts: &CamOpts) {
+        let (xclk, psram_dma) = (opts.xclk_mhz, opts.psram_dma);
         let mut w = self.want.lock().unwrap();
+        w.tune = Tune {
+            night: opts.night,
+            ae_level: opts.ae_level,
+            denoise: opts.denoise,
+        };
         w.stream = on.then(|| Stream {
             res,
             fps: fps.clamp(1, 30),
@@ -260,7 +320,7 @@ impl Camera {
         let mut seq = 0u32;
         let (mut frames, mut bytes, mut stats_at) = (0u32, 0usize, millis());
         loop {
-            let (stream, snapshot) = {
+            let (stream, snapshot, tune) = {
                 let mut w = self.want.lock().unwrap();
                 if w.stream.is_none() && w.snapshot.is_none() {
                     let wait = if driver.is_some() { 1000 } else { 60_000 };
@@ -270,7 +330,7 @@ impl Camera {
                         .unwrap()
                         .0;
                 }
-                (w.stream, w.snapshot.take())
+                (w.stream, w.snapshot.take(), w.tune)
             };
             let now = millis();
             if stream.is_none() && snapshot.is_none() {
@@ -297,7 +357,7 @@ impl Camera {
                 driver.take().map(Driver::stop);
             }
             if driver.is_none() {
-                driver = Driver::start(need, xclk, psram_dma, quality);
+                driver = Driver::start(with_headroom(need), xclk, psram_dma, quality);
                 if driver.is_none() {
                     // Once: it would keep saying it otherwise.
                     if !failure_said {
@@ -314,6 +374,7 @@ impl Camera {
                 }
             }
             let d = driver.as_mut().unwrap();
+            d.tune(tune);
 
             if let Some(s) = snapshot {
                 d.set(s.res, s.quality);

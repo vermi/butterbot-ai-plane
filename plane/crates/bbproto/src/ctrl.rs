@@ -73,6 +73,15 @@ pub struct CamOpts {
     /// esp32-camera PSRAM DMA mode (board default on).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub psram_dma: Option<bool>,
+    /// Night mode: in the dark the sensor exposes over several frames (fewer fps, brighter).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub night: Option<bool>,
+    /// Exposure target, -5..5 (higher is brighter).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ae_level: Option<i8>,
+    /// Noise reduction, 0 (off) ..8.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub denoise: Option<u8>,
 }
 
 impl CamOpts {
@@ -82,6 +91,9 @@ impl CamOpts {
             encoder: self.encoder.or(base.encoder),
             xclk_mhz: self.xclk_mhz.or(base.xclk_mhz),
             psram_dma: self.psram_dma.or(base.psram_dma),
+            night: self.night.or(base.night),
+            ae_level: self.ae_level.or(base.ae_level),
+            denoise: self.denoise.or(base.denoise),
         }
     }
 }
@@ -519,12 +531,18 @@ mod tests {
                 encoder: Some(Encoder::Sensor),
                 xclk_mhz: Some(16),
                 psram_dma: Some(false),
+                night: Some(true),
+                ae_level: Some(-1),
+                denoise: None,
             },
         };
         let v = serde_json::to_value(&m).unwrap();
         assert_eq!(v["encoder"], "sensor");
         assert_eq!(v["xclk_mhz"], 16);
         assert_eq!(v["psram_dma"], false);
+        assert_eq!(v["night"], true);
+        assert_eq!(v["ae_level"], -1);
+        assert!(v.get("denoise").is_none());
         assert_eq!(serde_json::from_value::<ToRobot>(v).unwrap(), m);
         assert_eq!(
             serde_json::to_value(ToRobot::Stop).unwrap(),
