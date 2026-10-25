@@ -439,12 +439,15 @@ impl Default for CameraConfig {
     fn default() -> Self {
         // At the board's default 27 MHz sensor clock, frames larger than the stock 128x128 lose
         // lines in the camera DMA and come back corrupted. 20 MHz gives clean QVGA and VGA with
-        // headroom. The robot's CPU JPEG encoder manages about 2 fps at VGA (5-6 at QVGA), but at
-        // QVGA the object detector misses a dog lying across the room and faces are too small.
+        // headroom. At QVGA the object detector misses a dog lying across the room and faces are
+        // too small. The sensor's own JPEG runs at about 27 fps up to SVGA whatever is asked (the
+        // robot sends every nth frame), so 24 fps costs Wi-Fi time but not picture quality.
+        // Quality 6 (about 43 KB a frame) is the best that still fits Wi-Fi at 24 fps; 12 left
+        // the sensor's JPEG blocky enough to hurt the object detector.
         Self {
             res: Res::Vga,
-            fps: 10,
-            quality: 12,
+            fps: 24,
+            quality: 6,
             opts: bbproto::ctrl::CamOpts {
                 encoder: Some(bbproto::ctrl::Encoder::Sw),
                 xclk_mhz: Some(20),
@@ -528,7 +531,7 @@ mod tests {
         let c: Config = toml::from_str("web_port = 9000\n[camera]\nres = \"vga\"\n").unwrap();
         assert_eq!(c.web_port, 9000);
         assert_eq!(c.camera.res, Res::Vga);
-        assert_eq!(c.camera.fps, 10);
+        assert_eq!(c.camera.fps, 24);
         assert_eq!(c.camera.opts.xclk_mhz, Some(20));
 
         let c: Config = toml::from_str("[camera]\nxclk_mhz = 16\n").unwrap();

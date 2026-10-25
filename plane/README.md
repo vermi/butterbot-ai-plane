@@ -281,8 +281,8 @@ announce_connect = true  # the robot says "Connected." when it links up in AI mo
 
 [camera]
 res = "vga"              # r128, qvga, vga, svga, xga, hd, uxga, qxga
-fps = 10                 # the robot reaches about 2 fps at vga, 5-6 at qvga
-quality = 12             # 4..63, lower is better
+fps = 24                 # the robot reaches about 26 fps up to svga
+quality = 6              # 4..63, lower is better (bigger frames)
 xclk_mhz = 20            # sensor clock; the board default (27) corrupts frames above 128x128
 
 [mic]
