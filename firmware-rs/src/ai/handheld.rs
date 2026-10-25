@@ -47,6 +47,10 @@ impl Robot {
                 }
             }
             BleEvent::Encrypted(conn) => {
+                // Settled: slow it down (the remote speeds up for Manual Override).
+                if let Some(b) = &self.ble {
+                    b.pace(conn, false);
+                }
                 if let Some(p) = &self.phone {
                     p.encrypted(conn);
                 }
@@ -246,27 +250,40 @@ impl Robot {
             }
             Command::EnterRc => {
                 log::info!("manual override");
-                self.manual = true;
+                self.set_manual(true);
                 self.stop_motors();
                 self.remote_button("override", json!({ "on": true }));
                 self.say(Phrase::ManualOverride, false);
             }
             Command::Drive(x, y) => {
                 // The stick drives the motors directly, without checks, like stock RC mode.
-                self.manual = true;
+                self.set_manual(true);
                 self.driving = false;
                 let (l, r) = remote::joystick_motors(x, y);
                 self.base.set_motors(l, r);
             }
             Command::ExitRc => {
                 log::info!("manual override ends");
-                self.manual = false;
+                self.set_manual(false);
                 self.stop_motors();
                 self.remote_button("override", json!({ "on": false }));
                 self.say(Phrase::BackToAi, false);
             }
             Command::RcSound => {}
             Command::Other(c) => self.remote_button("other", json!({ "command": c })),
+        }
+    }
+
+    /// Manual Override on or off; the remote's connection is fast while it drives.
+    fn set_manual(&mut self, on: bool) {
+        if self.manual == on {
+            return;
+        }
+        self.manual = on;
+        if let Some(b) = &self.ble {
+            for conn in b.remote_conns() {
+                b.pace(conn, on);
+            }
         }
     }
 

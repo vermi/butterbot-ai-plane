@@ -68,6 +68,9 @@ fn advertisement() -> Vec<u8> {
     a
 }
 
+/// Advertising interval, in 0.625 ms units.
+const ADV_INTERVAL: u16 = 338;
+
 fn scan_response() -> Vec<u8> {
     let mut r = vec![NAME.len() as u8 + 1, 0x09];
     r.extend_from_slice(NAME.as_bytes());
@@ -184,6 +187,9 @@ impl Ble {
             if let Err(e) = a.set_raw_scan_response_data(&scan_response()) {
                 log::error!("scan response: {e:?}");
             }
+            // Every 211.25 ms (one of Apple's intervals), as the stock firmware in AI mode: the
+            // default 30-60 ms keeps the radio busy enough to streak the camera's picture.
+            a.min_interval(ADV_INTERVAL).max_interval(ADV_INTERVAL);
             if let Err(e) = a.start() {
                 log::error!("advertising: {e:?}");
             }
@@ -222,6 +228,29 @@ impl Ble {
                 Err(e) => log::warn!("advertising: {e:?}"),
             }
         }
+    }
+
+    /// A connection's pace, as the stock firmware set it in AI mode: slow (60-90 ms) leaves the
+    /// radio to Wi-Fi, which keeps the camera's picture free of streaks; fast (30-50 ms) for
+    /// driving with the remote.
+    pub fn pace(&self, conn: u16, fast: bool) {
+        let p = esp_idf_svc::sys::ble_gap_upd_params {
+            itvl_min: if fast { 24 } else { 48 },
+            itvl_max: if fast { 40 } else { 72 },
+            latency: 0,
+            supervision_timeout: if fast { 400 } else { 600 },
+            min_ce_len: 0,
+            max_ce_len: 0,
+        };
+        let rc = unsafe { esp_idf_svc::sys::ble_gap_update_params(conn, &p) };
+        if rc != 0 {
+            log::info!("connection {conn}: pace not changed ({rc})");
+        }
+    }
+
+    /// The remote's connections (Com subscribers).
+    pub fn remote_conns(&self) -> Vec<u16> {
+        self.com_subs.lock().unwrap().iter().copied().collect()
     }
 
     /// The remote (or another Com client) is listening.
