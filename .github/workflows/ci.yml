@@ -12,8 +12,8 @@ jobs:
         working-directory: plane
     steps:
       - uses: actions/checkout@v4
-      # btleplug talks to BlueZ over D-Bus.
-      - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+      # btleplug talks to BlueZ over D-Bus; flite makes the robot's voice (the tests speak).
+      - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config flite
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt

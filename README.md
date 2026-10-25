@@ -80,6 +80,8 @@ You need:
 - a ButterBot;
 - a computer on the same network, with **2.4 GHz** Wi-Fi reachable by the robot;
 - [Rust](https://rustup.rs) 1.91 or newer;
+- [flite](http://www.festvox.org/flite/), for the robot's voice (`brew install flite`, or
+  `apt install flite`);
 - for building the firmware: the esp Rust toolchain (`cargo install espup ldproxy`, then
   `espup install --std -t esp32s3`) and [ESP-IDF 5.5.3](https://docs.espressif.com/projects/esp-idf/en/v5.5.3/esp32s3/get-started/)
   (or let the build download it).
