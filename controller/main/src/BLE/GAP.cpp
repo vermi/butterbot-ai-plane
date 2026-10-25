@@ -90,6 +90,8 @@ void BLE::GAP::scanResult(const esp_ble_gap_cb_param_t& gap_res){
 	if(advName != nullptr && strncmp((char*) advName, Name, (size_t) std::min(advLen, (uint8_t) strlen(Name))) == 0){
 		ESP_LOGI(TAG, "Scan result, device "ESP_BD_ADDR_STR", name len %u", ESP_BD_ADDR_HEX(res.bda), advLen);
 		ESP_LOG_BUFFER_CHAR(TAG, advName, advLen);
+		ESP_LOGI(TAG, "advertisement %u bytes, scan response %u bytes:", res.adv_data_len, res.scan_rsp_len);
+		ESP_LOG_BUFFER_HEX(TAG, res.ble_adv, res.adv_data_len + res.scan_rsp_len);
 
 		// After a lost link the stack reports the bonded robot at 00:00:00:00:00:00, and a
 		// connection to that never completes: use the address it had.
