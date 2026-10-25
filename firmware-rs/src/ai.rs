@@ -11,8 +11,10 @@ use bbproto::ctrl::{LedMode, LedTarget, Rhythm};
 use bbproto::{FromRobot, ToRobot};
 use serde_json::{json, Value};
 
+use crate::audio::{Mic, Phrase, Speaker, SpeakerEvent};
 use crate::base::{Base, BaseEvent, Charge, Prox};
 use crate::battery::{Battery, BatteryEvent, Reading, LEVEL_CRITICAL};
+use crate::camera::Camera;
 use crate::led::{rhythm, Led};
 use crate::link::{Link, LinkEvent};
 use crate::motion::{Motion, MotionEvent};
@@ -28,6 +30,7 @@ pub enum Event {
     Battery(BatteryEvent),
     Motion(MotionEvent),
     Link(LinkEvent),
+    Speaker(SpeakerEvent),
 }
 
 impl From<Button> for Event {
@@ -48,6 +51,11 @@ impl From<BatteryEvent> for Event {
 impl From<MotionEvent> for Event {
     fn from(e: MotionEvent) -> Self {
         Event::Motion(e)
+    }
+}
+impl From<SpeakerEvent> for Event {
+    fn from(e: SpeakerEvent) -> Self {
+        Event::Speaker(e)
     }
 }
 impl From<LinkEvent> for Event {
@@ -83,14 +91,31 @@ const WIFI_REPORT_MS: u64 = 3000;
 const BATTERY_EVERY: u32 = 10;
 const MAX_DRIVE_MS: u64 = 5000;
 
-pub struct Robot {
+/// What the robot is made of.
+pub struct Parts {
     pub link: Arc<Link>,
     pub net: Arc<Net>,
     pub base: Arc<Base>,
     pub battery: Arc<Battery>,
     pub motion: Option<Arc<Motion>>,
     pub led: Arc<Led>,
+    pub camera: Arc<Camera>,
+    pub mic: Option<Arc<Mic>>,
+    pub speaker: Option<Arc<Speaker>>,
     pub store: Store,
+}
+
+pub struct Robot {
+    link: Arc<Link>,
+    net: Arc<Net>,
+    base: Arc<Base>,
+    battery: Arc<Battery>,
+    motion: Option<Arc<Motion>>,
+    led: Arc<Led>,
+    camera: Arc<Camera>,
+    mic: Option<Arc<Mic>>,
+    speaker: Option<Arc<Speaker>>,
+    store: Store,
 
     cfg: Option<LinkConfig>,
     ai_on: bool,
@@ -119,29 +144,23 @@ pub struct Robot {
 }
 
 impl Robot {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        link: Arc<Link>,
-        net: Arc<Net>,
-        base: Arc<Base>,
-        battery: Arc<Battery>,
-        motion: Option<Arc<Motion>>,
-        led: Arc<Led>,
-        store: Store,
-    ) -> Robot {
-        let cfg = store.link_config();
+    pub fn new(p: Parts) -> Robot {
+        let cfg = p.store.link_config();
         match &cfg {
             Some(c) => log::info!("link configured: {c:?}"),
             None => log::warn!("no link configuration stored; provision with bbplane"),
         }
         Robot {
-            link,
-            net,
-            base,
-            battery,
-            motion,
-            led,
-            store,
+            link: p.link,
+            net: p.net,
+            base: p.base,
+            battery: p.battery,
+            motion: p.motion,
+            led: p.led,
+            camera: p.camera,
+            mic: p.mic,
+            speaker: p.speaker,
+            store: p.store,
             cfg,
             ai_on: false,
             ai_auto: true,
@@ -168,6 +187,9 @@ impl Robot {
 
     pub fn run(mut self, rx: Receiver<Event>, boot: Boot) -> ! {
         // Straight into AI mode; after a restart of its own (an update, say) without a word.
+        if boot == Boot::PowerOn {
+            self.say(Phrase::Hello, true);
+        }
         self.ai_start(boot != Boot::PowerOn);
         loop {
             match rx.recv_timeout(Duration::from_millis(20)) {
@@ -184,9 +206,15 @@ impl Robot {
     fn ai_start(&mut self, quiet: bool) {
         let Some(cfg) = self.cfg.clone() else {
             log::warn!("AI mode cannot start: no Wi-Fi settings");
+            if !quiet {
+                self.say(Phrase::NoSettings, false);
+            }
             return;
         };
         log::info!("AI mode on{}", if quiet { " (quietly)" } else { "" });
+        if !quiet {
+            self.say(Phrase::AiOn, false);
+        }
         self.ai_on = true;
         self.quiet = quiet;
         self.connected_once = false;
@@ -204,6 +232,7 @@ impl Robot {
     fn ai_stop(&mut self) {
         log::info!("AI mode off");
         self.stop_motors();
+        self.streams_off();
         self.link.set_wanted(false);
         // Queued replies (an exit_remote ack) go out before Wi-Fi goes down.
         for _ in 0..30 {
@@ -227,15 +256,12 @@ impl Robot {
         if self.ai_on && self.deadline.is_some_and(|d| now > d) {
             if self.quiet && !self.connected_once {
                 log::info!("AI mode retry failed; trying again later");
+            } else if self.connected_once {
+                log::warn!("lost the computer");
+                self.say(Phrase::LostPlane, true);
             } else {
-                log::warn!(
-                    "{}",
-                    if self.connected_once {
-                        "lost the computer"
-                    } else {
-                        "can't reach the computer"
-                    }
-                );
+                log::warn!("can't reach the computer");
+                self.say(Phrase::NoPlane, true);
             }
             self.ai_stop();
             if self.ai_auto {
@@ -301,6 +327,7 @@ impl Robot {
             Event::Link(LinkEvent::Offline) => {
                 // Never keep driving without the plane; give it a moment to come back.
                 self.stop_motors();
+                self.streams_off();
                 if self.ai_on {
                     self.deadline = Some(millis() + LINK_LOSS_GRACE_MS);
                 }
@@ -317,6 +344,38 @@ impl Robot {
                 });
             }
             Event::Motion(MotionEvent::SetDown) => self.base.rebaseline(),
+            Event::Speaker(SpeakerEvent::Playing { on, underruns }) => {
+                self.talking = on;
+                self.link.send(&FromRobot::Speaker {
+                    playing: on,
+                    buffered_ms: 0,
+                    underruns,
+                });
+            }
+        }
+    }
+
+    /// One of the robot's own phrases; `wait` until it has been said.
+    fn say(&mut self, p: Phrase, wait: bool) {
+        if let Some(s) = &self.speaker {
+            s.say(p);
+            if wait {
+                // Light the LED meanwhile: this thread runs it.
+                self.talking = true;
+                self.show_led();
+                s.wait_idle(5000);
+            }
+        }
+    }
+
+    /// The plane is gone or AI mode ends: no streams.
+    fn streams_off(&mut self) {
+        self.camera.stop();
+        if let Some(m) = &self.mic {
+            m.set(false, true, 1.0);
+        }
+        if let Some(s) = &self.speaker {
+            s.abort();
         }
     }
 
@@ -415,6 +474,8 @@ impl Robot {
                 if self.ai_on {
                     // Switched off on purpose: stays off until the next short press.
                     self.ai_auto = false;
+                    self.stop_motors();
+                    self.say(Phrase::AiOff, true);
                     self.ai_stop();
                 } else {
                     self.ai_auto = true;
@@ -430,6 +491,15 @@ impl Robot {
 
     fn shutdown(&mut self) -> ! {
         self.stop_motors();
+        self.streams_off();
+        self.say(
+            if self.battery_critical {
+                Phrase::BatteryCritical
+            } else {
+                Phrase::Goodbye
+            },
+            true,
+        );
         if !self.battery_critical {
             self.led.show(Rhythm::steady(0.0));
         }
@@ -451,6 +521,8 @@ impl Robot {
             ToRobot::ExitRemote { id } => {
                 self.link.ack(id, Value::Null);
                 self.ai_auto = false;
+                self.stop_motors();
+                self.say(Phrase::AiOff, true);
                 self.ai_stop();
             }
             ToRobot::Drive { l, r, ms, safe } => self.drive(l, r, ms, safe),
@@ -497,20 +569,57 @@ impl Robot {
                 self.link.error(id, "no routine for this scenario");
             }
             ToRobot::Modules { id } => self.link.ack(id, json!({ "modules": [] })),
-            ToRobot::Say { id, .. } => self.link.error(id, "speech unavailable"),
-            ToRobot::SpkBegin { id } => self.link.error(id, "audio unavailable"),
-            ToRobot::Camera { id, .. } | ToRobot::Snapshot { id, .. } => {
-                self.link.error(id, "no camera yet")
+            // The robot's voice is the plane's now (it streams it to the speaker).
+            ToRobot::Say { id, .. } => self.link.error(id, "no voice on the robot: speak with spk_begin"),
+            ToRobot::SpkBegin { id } => match &self.speaker {
+                Some(s) => {
+                    s.begin();
+                    self.link.ack(id, Value::Null);
+                }
+                None => self.link.error(id, "audio unavailable"),
+            },
+            ToRobot::SpkEnd => {
+                if let Some(s) = &self.speaker {
+                    s.end();
+                }
             }
-            ToRobot::Mic { id, .. } => self.link.error(id, "no microphone yet"),
+            ToRobot::SpkAbort => {
+                if let Some(s) = &self.speaker {
+                    s.abort();
+                }
+            }
+            ToRobot::Volume { gain } => {
+                if let Some(s) = &self.speaker {
+                    s.set_gain(gain);
+                }
+            }
+            ToRobot::Camera {
+                id,
+                on,
+                res,
+                fps,
+                quality,
+                opts,
+            } => {
+                self.camera
+                    .set_stream(on, res, fps, quality, opts.xclk_mhz, opts.psram_dma);
+                self.link.ack(id, Value::Null);
+            }
+            ToRobot::Snapshot { id, res, quality } => {
+                self.camera.snapshot(&self.link, id, res, quality)
+            }
+            ToRobot::Mic { id, on, gate, gain } => match &self.mic {
+                Some(m) => {
+                    m.set(on, gate, gain);
+                    self.link.ack(id, Value::Null);
+                }
+                None => self.link.error(id, "microphone unavailable"),
+            },
             ToRobot::Phone { id, .. } => self.link.error(id, "the phone link is not available"),
             ToRobot::IrList { id } | ToRobot::IrSend { id, .. } => {
                 self.link.error(id, "no IR module inserted")
             }
-            ToRobot::SpkEnd
-            | ToRobot::SpkAbort
-            | ToRobot::Volume { .. }
-            | ToRobot::AiStatus { .. }
+            ToRobot::AiStatus { .. }
             | ToRobot::HomeInfo { .. }
             | ToRobot::PeekCaption { .. } => {}
         }

@@ -1,0 +1,34 @@
+dependencies:
+  espressif/esp32-camera:
+    component_hash: 44a314ca50a150cffe54cc47390503a5930867409ac05b6e156ca568d7121ddd
+    dependencies:
+    - name: espressif/esp_jpeg
+      registry_url: https://components.espressif.com
+      require: public
+      version: ^1.3.1
+    - name: idf
+      require: private
+      version: '>=5.1'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 2.1.3
+  espressif/esp_jpeg:
+    component_hash: 47d19eac5f76fac06798c04f4d2579c7ab26fd33280ed10f43d8895175376bdf
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.3.2
+  idf:
+    source:
+      type: idf
+    version: 5.5.3
+direct_dependencies:
+- espressif/esp32-camera
+manifest_hash: 102c0ae7d36c031dfdab5ec0b6cad6ee9b6564e97941bef866730dd1eb1294b4
+target: esp32s3
+version: 2.0.0

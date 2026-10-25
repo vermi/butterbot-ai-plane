@@ -108,8 +108,8 @@ pub struct TurnArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SnapshotArgs {
-    /// Default vga (640x480). Up to vga is reliable; larger sizes (svga and up) are experimental
-    /// and may not fit in the robot's memory while Wi-Fi is on.
+    /// Default vga (640x480); up to qxga (2048x1536, about a second). The C firmware (0.5) is
+    /// reliable only up to vga.
     pub resolution: Option<Res>,
     /// JPEG quality 4..63, lower is better (default 10).
     pub quality: Option<u8>,
@@ -119,14 +119,15 @@ pub struct SnapshotArgs {
 pub struct StreamArgs {
     /// Live stream on/off.
     pub on: bool,
-    /// qvga (about 6 fps) or vga (about 2 fps, the default). Larger sizes are experimental.
+    /// qvga, vga (the default) or svga: firmware 0.6 sends up to about 25 fps at any of them
+    /// (the C firmware 0.5: about 6 fps at qvga, 2 at vga).
     pub resolution: Option<Res>,
     /// Frames per second, 1..30.
     pub fps: Option<u8>,
     /// JPEG quality 4..63, lower is better.
     pub quality: Option<u8>,
-    /// Capture options (advanced): encoder "sw" (robot CPU, default) or "sensor", xclk_mhz,
-    /// psram_dma. Also used by later snapshots.
+    /// Capture options (advanced): xclk_mhz, psram_dma; encoder "sw" (robot CPU, default) or
+    /// "sensor" on firmware 0.5 (0.6 always uses the sensor's). Also used by later snapshots.
     #[serde(flatten)]
     pub opts: bbproto::ctrl::CamOpts,
 }
