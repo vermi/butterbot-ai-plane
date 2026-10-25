@@ -642,16 +642,6 @@ $('faceform').onsubmit = async (e) => {
 };
 
 // training a voice: read phrases to him through his own microphone
-const PHRASES = [
-  "Butterbot, what's the weather going to be like this afternoon?",
-  "Could you remind me to call my sister tomorrow at noon?",
-  "Kiwi, come here! Who's a good girl? You are!",
-  "I think quantum computers are going to change everything.",
-  "Let's go and explore the living room together.",
-  "The quick brown fox jumps over the lazy dog.",
-  "Turn on the TV and play something relaxing, please.",
-  "My favourite part of the day is the quiet evening.",
-];
 let trainTimer = null;
 async function trainRefresh() {
   const t = await api('/api/voices/train');
@@ -666,9 +656,15 @@ async function trainRefresh() {
   }
   box.hidden = false;
   $('trainhead').textContent = t.listening ? 'Read this to Butter Bot, from where you usually talk to him:' : 'He is not listening (AI mode and the agent need to be on).';
-  $('phrase').textContent = `“${PHRASES[t.got % PHRASES.length]}”`;
+  $('phrase').textContent = `“${t.phrase}”`;
   $('dots').replaceChildren(...Array.from({ length: t.needed }, (_, i) => el('span', { className: i < t.got ? 'done' : i === t.got ? 'now' : '' })));
-  $('trainheard').textContent = t.last_heard ? (t.last_ok ? `Got it: “${t.last_heard}”` : `Too short, try that one again: “${t.last_heard}”`) : '';
+  const said = `“${t.last_heard}”`;
+  $('trainheard').textContent = {
+    more: `Keep going… so far: ${said}`,
+    done: `Got it: ${said}`,
+    unrelated: `That didn't sound like this sentence, so it doesn't count: ${said}`,
+    failed: `That one didn't take, please read it again: ${said}`,
+  }[t.last] || '';
 }
 $('trainvoice').onclick = async () => {
   const name = $('facename').value.trim();

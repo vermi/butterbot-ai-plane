@@ -50,15 +50,113 @@ struct Profile {
     samples: u32,
 }
 
-/// Training a voice like a voice assistant's setup: the next few utterances, whatever they say,
-/// build `name`'s voiceprint from scratch.
+/// The sentences read to train a voice, one after another (the live view shows the current one).
+pub const PHRASES: [&str; 8] = [
+    "Butterbot, what's the weather going to be like this afternoon?",
+    "Could you remind me to call my sister tomorrow at noon?",
+    "Kiwi, come here! Who's a good girl? You are!",
+    "I think quantum computers are going to change everything.",
+    "Let's go and explore the living room together.",
+    "The quick brown fox jumps over the lazy dog.",
+    "Turn on the TV and play something relaxing, please.",
+    "My favourite part of the day is the quiet evening.",
+];
+
+/// Heard this much of the sentence, in order, it has been read...
+const DONE_AT: f32 = 0.75;
+/// ...or this much, ending with its last word (a misheard word or two in between).
+const ENDED_AT: f32 = 0.5;
+/// A fragment must add this much of the sentence to belong to it.
+const ADDS_AT_LEAST: f32 = 0.1;
+/// A reading this long that still isn't the sentence is given up on (16 kHz samples).
+const MAX_READING: usize = 20 * 16_000;
+
+/// The words of `s`, lowercased, without punctuation.
+fn words(s: &str) -> Vec<String> {
+    s.split(|c: char| !(c.is_alphanumeric() || c == '\''))
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
+/// How much of `target` `heard` covers, in order, by words (0..1).
+fn progress(target: &str, heard: &str) -> f32 {
+    let (t, h) = (words(target), words(heard));
+    if t.is_empty() {
+        return 0.0;
+    }
+    // Longest common subsequence.
+    let mut row = vec![0usize; h.len() + 1];
+    for tw in &t {
+        let mut diag = 0;
+        for (j, hw) in h.iter().enumerate() {
+            let up = row[j + 1];
+            row[j + 1] = if tw == hw { diag + 1 } else { up.max(row[j]) };
+            diag = up;
+        }
+    }
+    row[h.len()] as f32 / t.len() as f32
+}
+
+/// One sentence being read: the speech detector cuts it wherever the reader pauses, so its
+/// pieces are joined until the sentence is all there.
+#[derive(Debug, Default, Clone)]
+struct Reading {
+    pcm: Vec<i16>,
+    heard: String,
+}
+
+#[derive(Debug)]
+enum Fed {
+    /// Part of the sentence: keep listening.
+    More,
+    /// The whole sentence, ready to learn from.
+    Done { pcm: Vec<i16>, heard: String },
+    /// Not this sentence (someone else, or something else said): ignored.
+    Unrelated,
+}
+
+impl Reading {
+    fn feed(&mut self, target: &str, pcm: &[i16], heard: &str) -> Fed {
+        let joined = format!("{} {}", self.heard, heard.trim())
+            .trim()
+            .to_string();
+        let before = progress(target, &self.heard);
+        let now = progress(target, &joined);
+        if now - before < ADDS_AT_LEAST {
+            return Fed::Unrelated;
+        }
+        self.pcm.extend_from_slice(pcm);
+        self.heard = joined;
+        let ended = words(target).last() == words(&self.heard).last();
+        if now >= DONE_AT || (now >= ENDED_AT && ended) {
+            let r = std::mem::take(self);
+            return Fed::Done {
+                pcm: r.pcm,
+                heard: r.heard,
+            };
+        }
+        if self.pcm.len() > MAX_READING {
+            *self = Reading::default();
+            return Fed::Unrelated;
+        }
+        Fed::More
+    }
+}
+
+/// Training a voice like a voice assistant's setup: `name` reads `PHRASES` in turn, and each
+/// one read in full goes into their voiceprint, built from scratch.
 #[derive(Debug, Clone)]
 struct Training {
     name: String,
     needed: u32,
     got: u32,
+    /// The sentence being read (an index into `PHRASES`).
+    phrase: usize,
+    reading: Reading,
     last_heard: String,
-    last_ok: bool,
+    /// "more" (part of the sentence so far), "done", "unrelated" or "failed".
+    last: &'static str,
     started: std::time::Instant,
 }
 
@@ -187,8 +285,10 @@ impl Voices {
             name: name.to_string(),
             needed: needed.clamp(3, 12),
             got: 0,
+            phrase: 0,
+            reading: Reading::default(),
             last_heard: String::new(),
-            last_ok: true,
+            last: "",
             started: std::time::Instant::now(),
         });
         tracing::info!("voice training for {name}");
@@ -214,22 +314,36 @@ impl Voices {
         match self.training.lock().unwrap().as_ref() {
             Some(t) => serde_json::json!({
                 "active": true, "name": t.name, "got": t.got, "needed": t.needed,
-                "last_heard": t.last_heard, "last_ok": t.last_ok,
+                "phrase": PHRASES[t.phrase % PHRASES.len()],
+                "last_heard": t.last_heard, "last": t.last,
             }),
             None => serde_json::json!({ "active": false }),
         }
     }
 
-    /// One training utterance (`heard`: its transcript, for feedback).
+    /// One training utterance (`heard`: its transcript). Pieces of the sentence being read are
+    /// joined until it is all there; then it is learned from, and the next sentence is up.
     pub async fn train(&self, pcm: Vec<i16>, heard: &str) {
-        let Some(name) = self
-            .training
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|t| t.name.clone())
-        else {
-            return;
+        let (name, pcm, heard) = {
+            let mut t = self.training.lock().unwrap();
+            let Some(tr) = t.as_mut() else {
+                return;
+            };
+            let target = PHRASES[tr.phrase % PHRASES.len()];
+            match tr.reading.feed(target, &pcm, heard) {
+                Fed::More => {
+                    tr.last_heard = tr.reading.heard.chars().take(160).collect();
+                    tr.last = "more";
+                    return;
+                }
+                Fed::Unrelated => {
+                    tracing::info!("voice training: not the sentence, ignored");
+                    tr.last_heard = heard.chars().take(160).collect();
+                    tr.last = "unrelated";
+                    return;
+                }
+                Fed::Done { pcm, heard } => (tr.name.clone(), pcm, heard),
+            }
         };
         let emb = match self.engine().await {
             Ok(engine) => tokio::task::spawn_blocking(move || engine.embed(&pcm))
@@ -247,10 +361,11 @@ impl Voices {
         };
         let mut t = self.training.lock().unwrap();
         if let Some(tr) = t.as_mut() {
-            tr.last_heard = heard.chars().take(120).collect();
-            tr.last_ok = ok;
+            tr.last_heard = heard.chars().take(160).collect();
+            tr.last = if ok { "done" } else { "failed" };
             if ok {
                 tr.got += 1;
+                tr.phrase += 1;
             }
             if tr.got >= tr.needed {
                 tracing::info!("voice training for {} done ({} samples)", tr.name, tr.got);
@@ -518,6 +633,70 @@ impl Fft {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const REMIND: &str = "Could you remind me to call my sister tomorrow at noon?";
+
+    #[test]
+    fn progress_counts_the_sentence_read_so_far() {
+        assert!(progress(REMIND, "could you remind me to") < 0.5);
+        assert!(
+            progress(
+                REMIND,
+                "Could you remind me to call my sister tomorrow at noon."
+            ) > 0.99
+        );
+        // One word misheard still reads as the whole sentence.
+        let weather = "Butterbot, what's the weather going to be like this afternoon?";
+        assert!(
+            progress(
+                weather,
+                "Butter pot, what's the weather going to be like this afternoon"
+            ) >= DONE_AT
+        );
+        assert!(progress(REMIND, "Butterbot, what time is it?") < 0.2);
+    }
+
+    #[test]
+    fn fragments_of_one_sentence_count_once() {
+        let mut r = Reading::default();
+        // A pause mid-sentence: the first half is not the sentence yet.
+        assert!(matches!(
+            r.feed(REMIND, &[1; 16_000], "Could you remind me to"),
+            Fed::More
+        ));
+        match r.feed(REMIND, &[2; 16_000], "call my sister tomorrow at noon") {
+            Fed::Done { pcm, heard } => {
+                assert_eq!(pcm.len(), 32_000, "both fragments' audio");
+                assert_eq!(
+                    heard,
+                    "Could you remind me to call my sister tomorrow at noon"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(r.pcm.is_empty(), "ready for the next sentence");
+    }
+
+    #[test]
+    fn other_speech_does_not_count() {
+        let mut r = Reading::default();
+        assert!(matches!(
+            r.feed(REMIND, &[1; 16_000], "Kiwi, no! Leave it."),
+            Fed::Unrelated
+        ));
+        assert!(r.pcm.is_empty(), "nothing kept from it");
+    }
+
+    #[test]
+    fn a_sentence_read_to_its_end_counts_even_with_words_misheard() {
+        let mut r = Reading::default();
+        let fed = r.feed(
+            REMIND,
+            &[1; 48_000],
+            "Could you remand me to cool my sistah tomorrow at noon",
+        );
+        assert!(matches!(fed, Fed::Done { .. }), "{fed:?}");
+    }
 
     #[test]
     fn fft_matches_a_plain_dft() {

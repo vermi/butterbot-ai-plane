@@ -1480,6 +1480,20 @@ impl Robot {
                 self.light.thinking();
                 return Ok(AgentEvent::Command { info, image });
             }
+            // Someone is reading sentences to train a voice: nothing of its own meanwhile (it
+            // would talk over them, and its own voice mutes the mic, cutting a sentence off).
+            if self.voices.training() {
+                let now = Instant::now();
+                if now >= deadline {
+                    return Ok(AgentEvent::TimedOut {
+                        focus_minutes_left: self.life.focused().map(|d| d.as_secs().div_ceil(60)),
+                    });
+                }
+                self.ears
+                    .wait_command((deadline - now).min(Duration::from_secs(1)))
+                    .await;
+                continue;
+            }
             // Reminders come through focus mode too: someone asked for them.
             if let Some(r) = self
                 .reminders
