@@ -92,6 +92,8 @@ pub struct Robot {
     lifted: Arc<std::sync::atomic::AtomicBool>,
     /// The camera's geometry and the driving speed (see `crate::geometry`).
     pub optics: Arc<std::sync::Mutex<crate::geometry::Optics>>,
+    /// One `apply_session_settings` at a time, so the last one (with the latest nap state) wins.
+    settings: Arc<Mutex<()>>,
     /// Camera and mic state last asked for, restored when the link comes back.
     streams: Arc<Mutex<Streams>>,
     /// Set while the plane itself is waking the robot: the caller is about to use it, so
@@ -153,6 +155,7 @@ impl Robot {
             optics: Arc::new(std::sync::Mutex::new(crate::geometry::Optics::load(
                 &hub.config.data_dir(),
             ))),
+            settings: Default::default(),
             hub,
             wake_lock: Default::default(),
             speaker: Default::default(),
@@ -220,12 +223,20 @@ impl Robot {
     /// Start the camera and microphone streams as last asked for (the configured ones unless
     /// changed since) and set the safety checks. Each AI mode session on the robot starts with
     /// all of them off, and a re-link must not undo a "camera off".
+    /// Napping, both are off at the robot (it neither sees nor hears), without forgetting them.
     pub async fn apply_session_settings(&self) -> Result<()> {
+        let _one = self.settings.lock().await;
         let cfg = &self.hub.config;
         let s = *self.streams.lock().await;
-        self.set_camera(s.camera_on, s.res, s.fps, s.quality, s.opts)
-            .await?;
-        self.set_mic(s.mic_on).await?;
+        if self.life.napping() {
+            self.send_camera(false, s.res, s.fps, s.quality, s.opts)
+                .await?;
+            self.send_mic(false).await?;
+        } else {
+            self.set_camera(s.camera_on, s.res, s.fps, s.quality, s.opts)
+                .await?;
+            self.set_mic(s.mic_on).await?;
+        }
         let id = self.hub.next_id();
         let safety = &cfg.safety;
         self.hub
@@ -354,15 +365,30 @@ impl Robot {
         self.mood
             .appraise(crate::mood::Emotion::Sleepy, 0.7, "napping on the charger");
         self.set_doing("napping", Duration::from_secs(24 * 3600));
+        // Eyes and ears shut (see `apply_session_settings`).
+        self.respread_streams();
     }
 
     /// The nap is over (`Life::wake` or unplugged).
     fn woke(&self) {
         self.ears.set_attentive(self.life.focused().is_none());
-        let mut doing = self.doing.lock().unwrap();
-        if doing.as_ref().is_some_and(|(what, _)| what == "napping") {
-            *doing = None;
+        {
+            let mut doing = self.doing.lock().unwrap();
+            if doing.as_ref().is_some_and(|(what, _)| what == "napping") {
+                *doing = None;
+            }
         }
+        self.respread_streams();
+    }
+
+    /// Bring the robot's streams in line with what is wanted, now (napping or not).
+    fn respread_streams(&self) {
+        let robot = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = robot.apply_session_settings().await {
+                tracing::warn!("camera and mic: {e:#}");
+            }
+        });
     }
 
     /// Drive with raw motor speeds for `ms`, refreshing the robot-side watchdog.
@@ -497,6 +523,24 @@ Ask to be unplugged first."
         quality: u8,
         opts: bbproto::ctrl::CamOpts,
     ) -> Result<()> {
+        self.send_camera(on, res, fps, quality, opts).await?;
+        let mut s = self.streams.lock().await;
+        s.camera_on = on;
+        if on {
+            (s.res, s.fps, s.quality, s.opts) = (res, fps, quality, opts);
+        }
+        Ok(())
+    }
+
+    /// Turn the camera stream on or off at the robot, without changing what is wanted.
+    async fn send_camera(
+        &self,
+        on: bool,
+        res: Res,
+        fps: u8,
+        quality: u8,
+        opts: bbproto::ctrl::CamOpts,
+    ) -> Result<()> {
         let id = self.hub.next_id();
         self.hub
             .request(ToRobot::Camera {
@@ -509,11 +553,6 @@ Ask to be unplugged first."
             })
             .await?;
         self.hub.status.lock().await.camera_streaming = on;
-        let mut s = self.streams.lock().await;
-        s.camera_on = on;
-        if on {
-            (s.res, s.fps, s.quality, s.opts) = (res, fps, quality, opts);
-        }
         Ok(())
     }
 
@@ -581,6 +620,13 @@ Ask to be unplugged first."
     }
 
     pub async fn set_mic(&self, on: bool) -> Result<()> {
+        self.send_mic(on).await?;
+        self.streams.lock().await.mic_on = on;
+        Ok(())
+    }
+
+    /// Turn the microphone stream on or off at the robot, without changing what is wanted.
+    async fn send_mic(&self, on: bool) -> Result<()> {
         let id = self.hub.next_id();
         let m = &self.hub.config.mic;
         self.hub
@@ -592,7 +638,6 @@ Ask to be unplugged first."
             })
             .await?;
         self.hub.status.lock().await.mic_streaming = on;
-        self.streams.lock().await.mic_on = on;
         Ok(())
     }
 
@@ -1907,6 +1952,10 @@ async fn remote_button(robot: &Robot, data: &Value) {
         "listen" => {
             if robot.life.focused().is_some() {
                 robot.unfocus();
+            }
+            // Its ears are off in a nap: Summon wakes it.
+            if robot.life.wake().is_some() {
+                robot.woke();
             }
             let robot = robot.clone();
             tokio::spawn(async move {
