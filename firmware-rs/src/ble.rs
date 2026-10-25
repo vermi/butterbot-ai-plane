@@ -56,16 +56,13 @@ pub struct Ble {
     com_subs: Arc<Mutex<HashSet<u16>>>,
 }
 
-/// The stock advertisement, byte for byte: flags, the HID service (so phones list the robot in
-/// their Bluetooth settings), appearance "generic computer", preferred connection interval; the
+/// The stock advertisement as it went on air: flags, the HID service as a 16-bit UUID (iPhones
+/// list the robot in their Bluetooth settings for it; the stock code gave it in 128-bit form,
+/// which Bluedroid shortens), appearance "generic computer", preferred connection interval; the
 /// name in the scan response.
 fn advertisement() -> Vec<u8> {
     let mut a = vec![0x02, 0x01, 0x06];
-    a.extend_from_slice(&[0x11, 0x07]);
-    a.extend_from_slice(&[
-        0xfb, 0x34, 0x9b, 0x5f, 0x80, 0x00, 0x00, 0x80, 0x00, 0x10, 0x00, 0x00, 0x12, 0x18, 0x00,
-        0x00,
-    ]);
+    a.extend_from_slice(&[0x03, 0x03, 0x12, 0x18]);
     a.extend_from_slice(&[0x03, 0x19, 0x80, 0x00]);
     a.extend_from_slice(&[0x05, 0x12, 0x06, 0x00, 0x10, 0x00]);
     a
@@ -81,6 +78,8 @@ impl Ble {
     pub fn start<E: From<BleEvent> + Send + 'static>(events: Sender<E>) -> Arc<Ble> {
         let device = BLEDevice::take();
         let _ = BLEDevice::set_device_name(NAME);
+        // "Generic computer", as in the advertisement.
+        unsafe { esp_idf_svc::sys::ble_svc_gap_device_appearance_set(0x0080) };
         let _ = device.set_preferred_mtu(500);
         // Just Works with bonding, like the stock robot (it has no screen or keys).
         device
@@ -96,7 +95,9 @@ impl Ble {
             if server.connected_count()
                 < esp_idf_svc::sys::CONFIG_BT_NIMBLE_MAX_CONNECTIONS as usize
             {
-                let _ = BLEDevice::take().get_advertising().lock().start();
+                if let Err(e) = BLEDevice::take().get_advertising().lock().start() {
+                    log::warn!("advertising after a connection: {e:?}");
+                }
             }
         });
         let com_subs: Arc<Mutex<HashSet<u16>>> = Arc::default();
@@ -118,7 +119,7 @@ impl Ble {
             if result.is_ok() {
                 let _ = ev.send(BleEvent::Encrypted(desc.conn_handle()).into());
             } else {
-                log::info!("ble: pairing with {} failed", desc.address());
+                log::info!("pairing with {} failed", desc.address());
             }
         });
 
@@ -178,17 +179,17 @@ impl Ble {
         {
             let mut a = adv.lock();
             if let Err(e) = a.set_raw_data(&advertisement()) {
-                log::error!("ble: advertisement: {e:?}");
+                log::error!("advertisement: {e:?}");
             }
             if let Err(e) = a.set_raw_scan_response_data(&scan_response()) {
-                log::error!("ble: scan response: {e:?}");
+                log::error!("scan response: {e:?}");
             }
             if let Err(e) = a.start() {
-                log::error!("ble: advertising: {e:?}");
+                log::error!("advertising: {e:?}");
             }
         }
         gattc::listen();
-        log::info!("ble: advertising as \"{NAME}\"");
+        log::info!("advertising as \"{NAME}\"");
         Arc::new(Ble {
             com_tx,
             nus_tx,
@@ -199,6 +200,28 @@ impl Ble {
     /// Bluetooth connections (remote, phone, plane).
     pub fn connections(&self) -> usize {
         BLEDevice::take().get_server().connected_count()
+    }
+
+    pub fn advertising(&self) -> bool {
+        BLEDevice::take().get_advertising().lock().is_advertising()
+    }
+
+    /// Advertise while a connection is free: a phone finds the robot only then, and the
+    /// remote is usually connected.
+    pub fn keep_advertising(&self) {
+        let device = BLEDevice::take();
+        if device.get_server().connected_count()
+            >= esp_idf_svc::sys::CONFIG_BT_NIMBLE_MAX_CONNECTIONS as usize
+        {
+            return;
+        }
+        let mut adv = device.get_advertising().lock();
+        if !adv.is_advertising() {
+            match adv.start() {
+                Ok(()) => log::warn!("advertising had stopped; started it again"),
+                Err(e) => log::warn!("advertising: {e:?}"),
+            }
+        }
     }
 
     /// The remote (or another Com client) is listening.
@@ -212,10 +235,7 @@ impl Ble {
             return;
         }
         if 12 + data.len() > MAX_PACKET {
-            log::warn!(
-                "ble: message for the remote too large ({} bytes)",
-                data.len()
-            );
+            log::warn!("message for the remote too large ({} bytes)", data.len());
             return;
         }
         let mut p = Vec::with_capacity(12 + data.len());
@@ -300,6 +320,20 @@ pub mod gattc {
             }
         }
         0
+    }
+
+    /// Whether the link is encrypted; None once it is gone.
+    pub fn encrypted(conn: u16) -> Option<bool> {
+        let mut d: sys::ble_gap_conn_desc = unsafe { core::mem::zeroed() };
+        if unsafe { sys::ble_gap_conn_find(conn, &mut d) } != 0 {
+            return None;
+        }
+        Some(d.sec_state.encrypted() != 0)
+    }
+
+    /// Ask the peer to pair, or to encrypt with the keys it already has.
+    pub fn secure(conn: u16) -> i32 {
+        unsafe { sys::ble_gap_security_initiate(conn) }
     }
 
     fn uuid_ptr(u: &sys::ble_uuid_any_t) -> *const sys::ble_uuid_t {

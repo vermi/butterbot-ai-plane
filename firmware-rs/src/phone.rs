@@ -21,6 +21,8 @@ use crate::util::{self, Stack};
 
 const MAX_NOTIFS: usize = 20;
 const ANDROID_PROTOCOL: &str = "1";
+/// How long a new connection may take to encrypt on its own before the robot asks.
+const SECURE_AFTER_MS: u64 = 1000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -93,6 +95,7 @@ struct State {
 }
 
 enum Cmd {
+    Connected(u16),
     Encrypted(u16),
     Disconnected(u16),
     Notify(u16, u16, Vec<u8>),
@@ -157,6 +160,10 @@ impl Phone {
         let _ = self.cmds.lock().unwrap().send(c);
     }
 
+    pub fn connected(&self, conn: u16) {
+        self.post(Cmd::Connected(conn));
+    }
+
     pub fn encrypted(&self, conn: u16) {
         self.post(Cmd::Encrypted(conn));
     }
@@ -216,7 +223,29 @@ impl Phone {
         let mut ds = Vec::<u8>::new();
         let mut uart = Vec::<u8>::new();
         let mut calls: HashSet<u32> = HashSet::new();
+        // New connections to look at once they have had a moment to encrypt (the remote does
+        // that itself, and so does a bonded iPhone): (connection, when).
+        let mut fresh: Vec<(u16, u64)> = Vec::new();
         loop {
+            // An iPhone that connected from its Bluetooth settings waits for the accessory to
+            // ask for security: pairing starts only then.
+            let now = util::millis();
+            fresh.retain(|&(conn, at)| {
+                if now < at {
+                    return true;
+                }
+                if apple.is_none()
+                    && gattc::encrypted(conn) == Some(false)
+                    && gattc::find_service(conn, ANCS).is_some()
+                {
+                    log::info!("phone: an iPhone on an unencrypted link: asking it to pair");
+                    let rc = gattc::secure(conn);
+                    if rc != 0 {
+                        log::warn!("phone: security request failed ({rc})");
+                    }
+                }
+                false
+            });
             // Notification attributes are fetched one at a time between other work.
             let cmd = match rx.recv_timeout(Duration::from_millis(if fetch.is_empty() {
                 1000
@@ -227,6 +256,7 @@ impl Phone {
                 Err(_) => None,
             };
             match cmd {
+                Some(Cmd::Connected(conn)) => fresh.push((conn, util::millis() + SECURE_AFTER_MS)),
                 Some(Cmd::Encrypted(conn)) => {
                     if apple.is_none() {
                         if let Some(a) = discover(conn) {

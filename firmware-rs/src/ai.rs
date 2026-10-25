@@ -172,6 +172,7 @@ pub struct Robot {
     news: Home,
     news_at: u64,
     home_sent_at: u64,
+    adv_checked_at: u64,
     peeking: bool,
     /// Manual Override: the remote's stick drives.
     manual: bool,
@@ -231,6 +232,7 @@ impl Robot {
             news: Home::default(),
             news_at: 0,
             home_sent_at: 0,
+            adv_checked_at: 0,
             peeking: false,
             manual: false,
             listen_until: None,
@@ -396,9 +398,14 @@ impl Robot {
                 if !self.connected_once {
                     let (free, block) = util::internal_ram();
                     log::info!(
-                        "up: internal RAM free {free} (block {block}), PSRAM free {}, {} Bluetooth connection(s), {} phone",
+                        "up: internal RAM free {free} (block {block}), PSRAM free {}, {} Bluetooth connection(s){}, {} phone",
                         util::psram_free(),
                         self.ble.as_ref().map_or(0, |b| b.connections()),
+                        if self.ble.as_ref().is_some_and(|b| b.advertising()) {
+                            ", advertising"
+                        } else {
+                            ", not advertising"
+                        },
                         match self.phone.as_ref().and_then(|p| p.kind()) {
                             Some(crate::phone::Kind::Iphone) => "iPhone",
                             Some(crate::phone::Kind::Android) => "Android",

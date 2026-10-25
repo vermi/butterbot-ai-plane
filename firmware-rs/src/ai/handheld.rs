@@ -18,6 +18,8 @@ use crate::util::millis;
 const HOME_REFRESH_MS: u64 = 60_000;
 /// After the remote subscribes, the welcome goes again this much later.
 const REWELCOME_MS: u64 = 2000;
+/// How often to check that the robot still advertises.
+const ADV_CHECK_MS: u64 = 5000;
 /// The remote shows "listening" this long after its Listen button, at most.
 const LISTEN_WINDOW_MS: u64 = 12_000;
 
@@ -33,7 +35,12 @@ fn cut(s: &str, max: usize) -> &str {
 impl Robot {
     pub(super) fn ble_event(&mut self, e: BleEvent) {
         match e {
-            BleEvent::Connected(conn) => log::info!("bluetooth: connection {conn}"),
+            BleEvent::Connected(conn) => {
+                log::info!("bluetooth: connection {conn}");
+                if let Some(p) = &self.phone {
+                    p.connected(conn);
+                }
+            }
             BleEvent::Disconnected(conn) => {
                 if let Some(p) = &self.phone {
                     p.disconnected(conn);
@@ -265,6 +272,12 @@ impl Robot {
 
     pub(super) fn handheld_tick(&mut self) {
         let now = millis();
+        if now - self.adv_checked_at >= ADV_CHECK_MS {
+            self.adv_checked_at = now;
+            if let Some(b) = &self.ble {
+                b.keep_advertising();
+            }
+        }
         if self.listen_until.is_some_and(|t| now >= t) {
             self.listen_until = None;
             self.remote_send(state::IDLE, idle::NONE, &[]);
