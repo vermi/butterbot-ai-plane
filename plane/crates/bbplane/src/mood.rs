@@ -115,6 +115,10 @@ struct Felt {
     since_ms: i64,
     /// The agent chose it (rather than something that happened).
     by_self: bool,
+    /// Fades out this many minutes after `since_ms`, rather than at its usual pace (sleepiness
+    /// after a nap).
+    #[serde(default)]
+    fades_in_minutes: Option<f64>,
 }
 
 impl Default for Felt {
@@ -125,6 +129,7 @@ impl Default for Felt {
             why: String::new(),
             since_ms: crate::hub::now_ms() as i64,
             by_self: false,
+            fades_in_minutes: None,
         }
     }
 }
@@ -191,6 +196,7 @@ impl Mood {
             why: why.chars().take(120).collect(),
             since_ms: crate::hub::now_ms() as i64,
             by_self,
+            fades_in_minutes: None,
         };
         tracing::info!(
             "mood: {} {:.1} ({}){}",
@@ -198,6 +204,35 @@ impl Mood {
             felt.intensity,
             felt.why,
             if by_self { ", its own" } else { "" }
+        );
+        if let Ok(b) = serde_json::to_vec_pretty(&felt)
+            && let Err(e) = std::fs::write(&self.path, b)
+        {
+            tracing::warn!("saving the mood: {e}");
+        }
+        *self.felt.lock().unwrap() = felt;
+    }
+
+    /// Let `emotion`, if it is what it feels, wear off within `minutes` from now, whatever its
+    /// usual pace.
+    pub fn wear_off(&self, emotion: Emotion, minutes: f64, why: &str) {
+        let now = self.now();
+        if now.emotion != emotion || now.intensity <= FADED {
+            return;
+        }
+        let felt = Felt {
+            emotion,
+            intensity: now.intensity,
+            why: why.chars().take(120).collect(),
+            since_ms: crate::hub::now_ms() as i64,
+            by_self: false,
+            fades_in_minutes: Some(minutes),
+        };
+        tracing::info!(
+            "mood: {} {:.1} ({}), gone in {minutes:.0} minutes",
+            emotion.name(),
+            felt.intensity,
+            felt.why
         );
         if let Ok(b) = serde_json::to_vec_pretty(&felt)
             && let Err(e) = std::fs::write(&self.path, b)
@@ -242,7 +277,12 @@ impl Mood {
 
 fn now_from(felt: &Felt, now_ms: i64, hour: u32) -> Now {
     let minutes = ((now_ms - felt.since_ms).max(0) as f64) / 60_000.0;
-    let intensity = felt.intensity * 0.5f32.powf((minutes / felt.emotion.half_life()) as f32);
+    let half_life = match felt.fades_in_minutes {
+        // At that pace it reaches `FADED` right then.
+        Some(m) if felt.intensity > FADED => m / (felt.intensity / FADED).log2() as f64,
+        _ => felt.emotion.half_life(),
+    };
+    let intensity = felt.intensity * 0.5f32.powf((minutes / half_life) as f32);
     if intensity >= FADED && felt.emotion != Emotion::Content {
         return Now {
             emotion: felt.emotion,
@@ -283,6 +323,7 @@ mod tests {
             why: "picked up".into(),
             since_ms: 0,
             by_self: false,
+            fades_in_minutes: None,
         };
         let half_hour = 30 * 60_000;
         assert_eq!(
@@ -302,7 +343,30 @@ mod tests {
             why: "x".into(),
             since_ms: 1_000_000_000 - minutes_ago * 60_000,
             by_self: true,
+            fades_in_minutes: None,
         }
+    }
+
+    #[test]
+    fn sleepiness_after_a_nap_wears_off_in_minutes() {
+        let now = 1_000_000_000;
+        let woke = Felt {
+            fades_in_minutes: Some(7.0),
+            ..felt(Emotion::Sleepy, 0.7, 0)
+        };
+        let soon = now_from(&woke, now + 3 * 60_000, 12);
+        assert_eq!(soon.emotion, Emotion::Sleepy);
+        assert!(soon.intensity < 0.7 && soon.intensity > FADED);
+        assert_eq!(
+            now_from(&woke, now + 8 * 60_000, 12).emotion,
+            Emotion::Content
+        );
+        // Without it, the same sleepiness lasts well over an hour.
+        let plain = felt(Emotion::Sleepy, 0.7, 0);
+        assert_eq!(
+            now_from(&plain, now + 60 * 60_000, 12).emotion,
+            Emotion::Sleepy
+        );
     }
 
     #[test]

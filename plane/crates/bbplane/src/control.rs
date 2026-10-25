@@ -382,6 +382,13 @@ impl Robot {
     /// The nap is over (`Life::wake` or unplugged).
     fn woke(&self) {
         self.ears.set_attentive(self.life.focused().is_none());
+        // Drowsy for a few minutes, not the hour a feeling usually lasts.
+        let minutes = 5.0 + (uuid::Uuid::new_v4().as_u128() % 301) as f64 / 60.0;
+        self.mood.wear_off(
+            crate::mood::Emotion::Sleepy,
+            minutes,
+            "just woke up from a nap",
+        );
         {
             let mut doing = self.doing.lock().unwrap();
             if doing.as_ref().is_some_and(|(what, _)| what == "napping") {
@@ -1766,13 +1773,23 @@ pub async fn on_body(robot: Robot) {
             cursor = e.seq;
             let how = match e.kind.as_str() {
                 // The accelerometer's pick-up fires on footsteps too: only with the floor gone.
-                "motion" if e.data["kind"] == "pickup" => floor.lift_felt().map(String::from),
+                "motion" if e.data["kind"] == "pickup" => {
+                    floor.lift_felt(std::time::Instant::now()).map(String::from)
+                }
                 "motion" => e.data["kind"].as_str().map(String::from),
-                "proximity" => bottom(&e.data).and_then(|on_floor| {
-                    floor
+                "proximity" => match bottom(&e.data) {
+                    Some(on_floor) => floor
                         .reading(on_floor, std::time::Instant::now(), robot.is_moving())
-                        .map(String::from)
-                }),
+                        .map(String::from),
+                    // No change since the sensor took its baseline (a start, a drive): it
+                    // reports changes only, and it rests where it took it, on the floor.
+                    None => {
+                        if e.data["bottom"] == "unknown" && !robot.is_moving() {
+                            floor.baseline();
+                        }
+                        None
+                    }
+                },
                 "remote" => {
                     remote_button(&robot, &e.data).await;
                     None
@@ -1841,9 +1858,13 @@ struct FloorWatch {
     /// Gone since then, not confirmed yet.
     gone_since: Option<std::time::Instant>,
     lifted: bool,
+    /// The accelerometer felt a lift before the floor went.
+    felt_at: Option<std::time::Instant>,
 }
 
 const LIFT_CONFIRM: Duration = Duration::from_millis(700);
+/// The accelerometer and the floor sensor agree on a lift within this long, in either order.
+const LIFT_FELT_WINDOW: Duration = Duration::from_millis(1500);
 
 impl FloorWatch {
     /// A bottom sensor reading; a put-down, if it was lifted.
@@ -1869,10 +1890,26 @@ impl FloorWatch {
             }
             return std::mem::take(&mut self.lifted).then_some("putdown");
         }
-        if self.seen_floor && !self.lifted && self.gone_since.is_none() {
-            self.gone_since = Some(now);
+        if self.lifted {
+            return None;
         }
+        // The accelerometer felt it a moment ago: a lift, floor seen or not.
+        if self
+            .felt_at
+            .take()
+            .is_some_and(|t| now.duration_since(t) < LIFT_FELT_WINDOW)
+        {
+            self.gone_since = None;
+            self.lifted = true;
+            return Some("pickup");
+        }
+        self.gone_since.get_or_insert(now);
         None
+    }
+
+    /// The sensor reports no change since its baseline: the robot rests on the floor.
+    fn baseline(&mut self) {
+        self.seen_floor = true;
     }
 
     /// A lift, once the floor has stayed away long enough.
@@ -1883,7 +1920,9 @@ impl FloorWatch {
             self.seen_floor = false;
             return None;
         }
-        if now.duration_since(since) < LIFT_CONFIRM {
+        // The floor sensor alone counts only once it has seen the floor (it misreads after a
+        // drive); the accelerometer can still confirm the lift (`lift_felt`).
+        if !self.seen_floor || now.duration_since(since) < LIFT_CONFIRM {
             return None;
         }
         self.gone_since = None;
@@ -1891,17 +1930,21 @@ impl FloorWatch {
         Some("pickup")
     }
 
-    /// The accelerometer felt a lift: it counts at once if the floor is gone too.
-    fn lift_felt(&mut self) -> Option<&'static str> {
+    /// The accelerometer felt a lift: it counts at once if the floor is gone too, or goes soon.
+    fn lift_felt(&mut self, now: std::time::Instant) -> Option<&'static str> {
+        if self.lifted {
+            return None;
+        }
         if self.gone_since.take().is_some() {
             self.lifted = true;
             return Some("pickup");
         }
+        self.felt_at = Some(now);
         None
     }
 
     fn waiting(&self) -> bool {
-        self.gone_since.is_some()
+        self.gone_since.is_some() && self.seen_floor
     }
 }
 
@@ -2445,11 +2488,30 @@ mod tests {
         assert_eq!(f.reading(false, at(10000), true), None);
         assert_eq!(f.reading(false, at(11000), false), None);
         assert_eq!(f.tick(at(13000), false), None);
-        // The accelerometer agrees with the floor: at once. Alone: nothing.
+        // The accelerometer agrees with the floor: at once, in either order. Alone: nothing.
         assert_eq!(f.reading(true, at(14000), false), None);
-        assert_eq!(f.lift_felt(), None);
-        assert_eq!(f.reading(false, at(15000), false), None);
-        assert_eq!(f.lift_felt(), Some("pickup"));
+        assert_eq!(f.lift_felt(at(14000)), None);
+        assert_eq!(f.reading(false, at(15000), false), Some("pickup"));
+        assert_eq!(f.reading(true, at(16000), false), Some("putdown"));
+        assert_eq!(f.reading(false, at(17000), false), None);
+        assert_eq!(f.lift_felt(at(17100)), Some("pickup"));
+    }
+
+    #[test]
+    fn lifts_count_after_a_start_or_a_drive() {
+        let t0 = std::time::Instant::now();
+        let at = |ms| t0 + Duration::from_millis(ms);
+        // After a start the sensor reports "unknown" (its baseline): that is the floor.
+        let mut f = FloorWatch::default();
+        f.baseline();
+        assert_eq!(f.reading(false, at(1000), false), None);
+        assert_eq!(f.tick(at(1800), false), Some("pickup"));
+        assert_eq!(f.reading(true, at(3000), false), Some("putdown"));
+        // After a drive the floor alone is not enough, but with the accelerometer it is.
+        assert_eq!(f.reading(true, at(4000), true), None);
+        assert_eq!(f.reading(false, at(6000), false), None);
+        assert_eq!(f.tick(at(8000), false), None);
+        assert_eq!(f.lift_felt(at(8100)), Some("pickup"));
     }
 
     #[test]
