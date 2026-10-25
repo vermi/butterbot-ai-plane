@@ -429,8 +429,18 @@ const avatarUrl = (() => { const c = document.createElement('canvas'); c.width =
 
 // ---------------------------------------------------------------- status and mood
 let since = 0, frames = 0, lastFrames = 0, agent = {};
+// The plane serving this page: a new page version reloads it (after an update).
+let servedUi = null, planeStarted = null;
 async function refresh() {
-  const s = await api('/api/status');
+  let s;
+  try { s = await api('/api/status'); } catch {
+    $('dot').className = 'dot'; $('link').textContent = 'Plane offline'; $('mode').textContent = '…';
+    return;
+  }
+  if (s.plane) {
+    if (servedUi && s.plane.ui !== servedUi) { location.reload(); return; }
+    servedUi = s.plane.ui;
+  }
   const rb = s.robot || {};
   $('dot').className = 'dot' + (rb.connected ? ' on' : '');
   $('link').textContent = rb.connected ? 'Connected' : 'Offline';
@@ -480,6 +490,12 @@ const happened = (text) => tlAdd(el('div', { className: 'happen', textContent: t
   for (;;) {
     try {
       const j = await api(`/api/events?since=${since}&wait_ms=20000`);
+      // The plane restarted (its events start over): follow the new ones.
+      const started = j.plane && j.plane.started;
+      if ((planeStarted && started && started !== planeStarted) || (j.last !== undefined && since > j.last)) {
+        planeStarted = started; since = 0; continue;
+      }
+      planeStarted = started || planeStarted;
       for (const e of j.events || []) {
         since = e.seq;
         log(`${new Date(e.ts).toLocaleTimeString()} ${e.kind} ${JSON.stringify(e.data)}`);
@@ -786,6 +802,8 @@ function ensureAudio() {
   if (!ws || ws.readyState > 1) {
     ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/audio`);
     ws.binaryType = 'arraybuffer';
+    // A plane restart drops it: come back while listening or talking.
+    ws.onclose = () => { if (listening || micStream) setTimeout(ensureAudio, 1500); };
     ws.onmessage = (m) => {
       if (!(m.data instanceof ArrayBuffer)) return;
       const pcm = new Int16Array(m.data);

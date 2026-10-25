@@ -24,9 +24,26 @@ use crate::control::Robot;
 use crate::mcp::BotServer;
 
 const INDEX: &str = include_str!("web/index.html");
+
+/// When this plane started (Unix ms) and which page it serves: an open live view starts its event
+/// cursor over when the first changes, and reloads itself when the second does.
+static STARTED: std::sync::LazyLock<u64> = std::sync::LazyLock::new(crate::hub::now_ms);
+static UI: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    use sha2::Digest;
+    sha2::Sha256::digest(INDEX.as_bytes())
+        .iter()
+        .take(6)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+});
+
+fn plane_json() -> Value {
+    json!({ "started": *STARTED, "ui": *UI })
+}
 const BOUNDARY: &str = "bbframe";
 
 pub fn router(robot: Robot) -> Router {
+    std::sync::LazyLock::force(&STARTED);
     let mcp_robot = robot.clone();
     let allowed: Arc<[String]> = robot.hub.config.allowed_hosts.clone().into();
     let mcp: StreamableHttpService<BotServer, LocalSessionManager> = StreamableHttpService::new(
@@ -146,7 +163,9 @@ fn err(e: anyhow::Error) -> Response {
 }
 
 async fn status(State(r): State<Robot>) -> Json<Value> {
-    Json(r.status_json().await)
+    let mut v = r.status_json().await;
+    v["plane"] = plane_json();
+    Json(v)
 }
 
 #[derive(Deserialize)]
@@ -156,14 +175,16 @@ struct EventsQuery {
 }
 
 async fn events(State(r): State<Robot>, Query(q): Query<EventsQuery>) -> Json<Value> {
-    let evs = r
-        .hub
-        .events_since(
-            q.since.unwrap_or(0),
-            Duration::from_millis(q.wait_ms.unwrap_or(0).min(25_000)),
-        )
-        .await;
-    Json(json!({ "events": evs }))
+    let since = q.since.unwrap_or(0);
+    let last = r.hub.last_event_seq().await;
+    // A cursor from before a restart: nothing to wait for; the page starts over from `last`.
+    let wait = if since > last {
+        Duration::ZERO
+    } else {
+        Duration::from_millis(q.wait_ms.unwrap_or(0).min(25_000))
+    };
+    let evs = r.hub.events_since(since, wait).await;
+    Json(json!({ "events": evs, "last": last, "plane": plane_json() }))
 }
 
 #[derive(Deserialize)]
