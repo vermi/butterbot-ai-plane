@@ -163,6 +163,8 @@ pub struct Robot {
 
     plane_led: Rhythm,
     talking: bool,
+    /// Wi-Fi without modem sleep (see `keep_radio`).
+    radio_awake: bool,
     battery_critical: bool,
     next_wifi_report: u64,
     reports: u32,
@@ -221,6 +223,7 @@ impl Robot {
             bottom: Prox::Unknown,
             plane_led: ONLINE,
             talking: false,
+            radio_awake: true,
             battery_critical: false,
             next_wifi_report: 0,
             reports: 0,
@@ -292,6 +295,8 @@ impl Robot {
         }
         self.send_ai_status();
         self.link.configure(cfg.clone());
+        // Joining switches modem sleep off (see `keep_radio`).
+        self.radio_awake = true;
         if let Err(e) = self.net.up(&cfg, self.store.channel()) {
             log::error!("wifi: {e}");
         }
@@ -344,6 +349,8 @@ impl Robot {
         if !self.ai_on && self.ai_auto && self.retry_at.is_some_and(|t| now >= t) {
             self.ai_start(true);
         }
+
+        self.keep_radio();
 
         if self.driving && now >= self.drive_until {
             self.stop_driving("watchdog");
@@ -787,6 +794,22 @@ impl Robot {
             LedMode::On => Rhythm::steady(level),
         };
         self.link.ack(id, Value::Null);
+    }
+
+    /// The radio stays awake while the robot talks or drives (sound and drive commands come
+    /// without delay); otherwise it dozes between beacons, as the stock firmware's did. The
+    /// camera and microphone streams go out either way.
+    fn keep_radio(&mut self) {
+        if !self.ai_on || !self.link.is_online() {
+            return;
+        }
+        let busy =
+            self.driving || self.manual || self.speaker.as_ref().is_some_and(|s| s.playing());
+        if busy != self.radio_awake {
+            self.radio_awake = busy;
+            self.net.set_power_save(!busy);
+            log::debug!("wifi: modem sleep {}", if busy { "off" } else { "on" });
+        }
     }
 
     // ---------------------------------------------------------------- driving

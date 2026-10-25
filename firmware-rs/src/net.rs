@@ -95,6 +95,17 @@ impl Net {
         Ok(())
     }
 
+    /// Modem sleep between the access point's beacons (much less power; what reaches the robot
+    /// waits up to a beacon interval, about 100 ms), or the radio always on (lowest latency).
+    pub fn set_power_save(&self, on: bool) {
+        let mode = if on {
+            sys::wifi_ps_type_t_WIFI_PS_MIN_MODEM
+        } else {
+            sys::wifi_ps_type_t_WIFI_PS_NONE
+        };
+        unsafe { sys::esp_wifi_set_ps(mode) };
+    }
+
     pub fn down(&self) {
         self.wanted.store(false, Ordering::Relaxed);
         self.got_ip.store(false, Ordering::Relaxed);
