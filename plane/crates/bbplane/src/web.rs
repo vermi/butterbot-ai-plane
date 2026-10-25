@@ -673,12 +673,33 @@ async fn diary_day(
     Json(json!({ "day": day, "entry": r.diary.read(d) })).into_response()
 }
 
-async fn frame(State(r): State<Robot>) -> Response {
+#[derive(Deserialize)]
+struct FrameQuery {
+    /// Long poll: the frame after this one (by `x-frame-seq`), waiting up to `FRAME_WAIT` for it.
+    after: Option<u32>,
+}
+
+/// How long `/frame.jpg?after=` waits for a newer frame before answering with the same one.
+const FRAME_WAIT: Duration = Duration::from_secs(1);
+
+async fn frame(State(r): State<Robot>, Query(q): Query<FrameQuery>) -> Response {
     if r.watchers.polled() {
         tracing::info!("live view open: camera at full rate");
         r.refresh_streams();
     }
-    match r.hub.latest_frame().await {
+    // Subscribed before looking, so a frame arriving in between is not missed.
+    let mut rx = r.hub.video.subscribe();
+    let mut latest = r.hub.latest_frame().await;
+    if let Some(after) = q.after
+        && latest.as_ref().is_some_and(|f| f.header.seq == after)
+    {
+        match tokio::time::timeout(FRAME_WAIT, rx.recv()).await {
+            Ok(Ok(f)) => latest = Some(f),
+            Ok(Err(_)) => latest = r.hub.latest_frame().await,
+            Err(_) => {}
+        }
+    }
+    match latest {
         Some(f) => (
             [
                 (header::CONTENT_TYPE, "image/jpeg".to_string()),

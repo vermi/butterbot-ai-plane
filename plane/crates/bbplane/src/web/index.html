@@ -747,8 +747,11 @@ const img = $('video');
     try {
       if (document.hidden) wait = 500;
       else {
-        const r = await fetch('/frame.jpg', { cache: 'no-store' });
+        // Long poll: the plane answers as soon as there is a frame newer than `seq`, so every
+        // frame the robot sends is shown.
+        const r = await fetch(seq ? `/frame.jpg?after=${seq}` : '/frame.jpg', { cache: 'no-store' });
         if (r.ok) {
+          wait = 0;
           const s = r.headers.get('x-frame-seq');
           if (s !== seq) { seq = s; const next = URL.createObjectURL(await r.blob()); img.src = next; if (url) URL.revokeObjectURL(url); url = next; img.hidden = false; $('novideo').style.display = 'none'; }
         } else wait = 1000;
