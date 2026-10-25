@@ -3,7 +3,9 @@
 //! hysteresis. The charger state comes from the base board.
 //!
 //! Same numbers as the stock firmware: the readings are not true millivolts, the limits are what
-//! makes 0-100 % come out right.
+//! makes 0-100 % come out right. The smoothing is slower than stock: with the camera and Wi-Fi
+//! busy the voltage sags and recovers many times a second, and the stock smoothing (about half
+//! a second) let the level swing between 85 and 98 %.
 
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -19,7 +21,10 @@ const VOLT_EMPTY: f32 = 3550.0;
 const VOLT_FULL: f32 = 4100.0;
 const FACTOR: f32 = 4.0;
 const OFFSET: f32 = 50.0;
-const EMA: f32 = 0.2;
+/// Per sample (every `SAMPLE_MS`): about 5 s to settle.
+const EMA: f32 = 0.02;
+/// ADC reads averaged into one sample.
+const OVERSAMPLE: i32 = 8;
 const CAL_READS: usize = 10;
 const CAL_EXPECTED: f32 = 2500.0;
 const SAMPLE_MS: u64 = 100;
@@ -75,10 +80,15 @@ impl Adc {
 
     /// Millivolts at the divider tap (raw counts if uncalibrated).
     fn read(&self) -> Option<f32> {
-        let mut raw = 0;
-        if unsafe { sys::adc_oneshot_read(self.unit, self.chan, &mut raw) } != sys::ESP_OK {
-            return None;
+        let mut total = 0;
+        for _ in 0..OVERSAMPLE {
+            let mut one = 0;
+            if unsafe { sys::adc_oneshot_read(self.unit, self.chan, &mut one) } != sys::ESP_OK {
+                return None;
+            }
+            total += one;
         }
+        let raw = total / OVERSAMPLE;
         if self.cali.is_null() {
             return Some(raw as f32);
         }
