@@ -1101,6 +1101,12 @@ goodbye). Say bye and keep listening."
         }
         let engine = engine.unwrap_or(&self.hub.config.tts.engine).to_string();
         match engine.as_str() {
+            "robot" if !self.hub.status.lock().await.caps.iter().any(|c| c == "tts") => {
+                // Firmware without a voice of its own: its voice is made here.
+                let pcm = tts::robot_voice(text).await?;
+                self.play_pcm(pcm, wait).await?;
+                Ok("robot".into())
+            }
             "robot" => {
                 let id = self.hub.next_id();
                 let since = self.hub.last_event_seq().await;
