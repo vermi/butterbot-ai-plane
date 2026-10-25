@@ -61,6 +61,27 @@ pub enum Encoder {
     Sensor,
 }
 
+/// White balance: automatic, or one of the sensor's fixed presets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum WbMode {
+    Auto,
+    Sunny,
+    Cloudy,
+    /// Fluorescent.
+    Office,
+    /// Incandescent (warm room lights).
+    Home,
+}
+
+impl WbMode {
+    /// esp32-camera's `wb_mode` number.
+    pub fn index(self) -> u8 {
+        self as u8
+    }
+}
+
 /// Camera capture options; unset fields use the robot's defaults.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -82,6 +103,13 @@ pub struct CamOpts {
     /// Noise reduction, 0 (off) ..8.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub denoise: Option<u8>,
+    /// White balance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wb: Option<WbMode>,
+    /// The most gain (ISO) auto exposure may use, 1..63 times (the sensor's own limit is about
+    /// 15); lower is less noise but darker in dim light.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gain_max: Option<u8>,
 }
 
 impl CamOpts {
@@ -94,6 +122,8 @@ impl CamOpts {
             night: self.night.or(base.night),
             ae_level: self.ae_level.or(base.ae_level),
             denoise: self.denoise.or(base.denoise),
+            wb: self.wb.or(base.wb),
+            gain_max: self.gain_max.or(base.gain_max),
         }
     }
 }
@@ -534,6 +564,8 @@ mod tests {
                 night: Some(true),
                 ae_level: Some(-1),
                 denoise: None,
+                wb: Some(WbMode::Home),
+                gain_max: Some(8),
             },
         };
         let v = serde_json::to_value(&m).unwrap();
@@ -543,6 +575,8 @@ mod tests {
         assert_eq!(v["night"], true);
         assert_eq!(v["ae_level"], -1);
         assert!(v.get("denoise").is_none());
+        assert_eq!(v["wb"], "home");
+        assert_eq!(v["gain_max"], 8);
         assert_eq!(serde_json::from_value::<ToRobot>(v).unwrap(), m);
         assert_eq!(
             serde_json::to_value(ToRobot::Stop).unwrap(),

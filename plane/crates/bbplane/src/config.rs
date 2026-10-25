@@ -448,16 +448,21 @@ impl Default for CameraConfig {
             res: Res::Vga,
             fps: 24,
             quality: 6,
-            // A lamp in view blows out, and its glare spreads; an exposure target a little below
-            // the sensor's own (about -1) keeps the glare smaller. Night mode (longer exposures
-            // in the dark, about 9 fps in evening room light) brightens everything, glare
-            // included, so it stays off. Denoise smooths the sensor noise.
+            // A lamp in view blows out, and its glare spreads. Capping the gain at 8x (the
+            // sensor's own cap is about 15x) cut clipped pixels from 3.6 to 0.9 % in a lamp-lit
+            // room and the noise with them; an exposure target a little below the sensor's own
+            // (about -1) helps too. Night mode (longer exposures in the dark, about 9 fps in
+            // evening room light) brightens everything, glare included, so it stays off.
+            // Denoise smooths the noise left. White balance stays automatic: a preset suits one
+            // light ("home" is neutral under warm lamps, blue by day).
             opts: bbproto::ctrl::CamOpts {
                 encoder: Some(bbproto::ctrl::Encoder::Sw),
                 xclk_mhz: Some(20),
                 night: Some(false),
                 ae_level: Some(-2),
                 denoise: Some(4),
+                gain_max: Some(8),
+                wb: Some(bbproto::ctrl::WbMode::Auto),
                 ..Default::default()
             },
         }

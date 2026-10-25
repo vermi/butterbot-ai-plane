@@ -44,6 +44,8 @@ struct Tune {
     night: Option<bool>,
     ae_level: Option<i8>,
     denoise: Option<u8>,
+    wb: Option<u8>,
+    gain_max: Option<u8>,
 }
 
 #[derive(Default)]
@@ -201,12 +203,25 @@ impl Driver {
                     f(s, v.min(8) as i32);
                 }
             }
+            if let (Some(v), true) = (t.wb, t.wb != was.wb) {
+                if let Some(f) = (*s).set_wb_mode {
+                    f(s, v.min(4) as i32);
+                }
+            }
+            // The OV3660 takes the ceiling as a raw gain: 16 is 1x.
+            if let (Some(v), true) = (t.gain_max, t.gain_max != was.gain_max) {
+                if let Some(f) = (*s).set_gainceiling {
+                    f(s, (v.clamp(1, 63) as u32 * 16 - 1) as cam::gainceiling_t);
+                }
+            }
         }
         log::info!(
-            "camera: night mode {:?}, exposure level {:?}, denoise {:?}",
+            "camera: night mode {:?}, exposure level {:?}, denoise {:?}, white balance {:?}, gain max {:?}",
             t.night,
             t.ae_level,
-            t.denoise
+            t.denoise,
+            t.wb,
+            t.gain_max
         );
     }
 
@@ -279,6 +294,8 @@ impl Camera {
             night: opts.night,
             ae_level: opts.ae_level,
             denoise: opts.denoise,
+            wb: opts.wb.map(|m| m.index()),
+            gain_max: opts.gain_max,
         };
         w.stream = on.then(|| Stream {
             res,

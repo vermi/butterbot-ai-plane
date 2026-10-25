@@ -285,7 +285,9 @@ fps = 24                 # the robot reaches about 26 fps up to svga
 quality = 6              # 4..63, lower is better (bigger frames)
 xclk_mhz = 20            # sensor clock; the board default (27) corrupts frames above 128x128
 ae_level = -2            # exposure target, -5..5 (the sensor's own is about -1); lower: less lamp glare
+gain_max = 8             # most gain (ISO) auto exposure may use, 1..63x (sensor: ~15); less noise and glare
 denoise = 4              # 0 (off) ..8
+# wb = "auto"            # white balance: auto, sunny, cloudy, office (fluorescent), home (incandescent)
 night = false            # longer exposures in the dark: brighter, but about 9 fps in room light
 
 [mic]
