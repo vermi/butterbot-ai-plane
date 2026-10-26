@@ -249,13 +249,7 @@ impl Robot {
                 .await?;
             self.send_mic(false).await?;
         } else {
-            // Full rate only while someone watches; the wanted rate is kept.
-            let fps = if self.watchers.watching() {
-                s.fps
-            } else {
-                s.fps.min(UNWATCHED_FPS)
-            };
-            self.send_camera(s.camera_on, s.res, fps, s.quality, s.opts)
+            self.send_camera(s.camera_on, s.res, self.sent_fps(s.fps), s.quality, s.opts)
                 .await?;
             self.set_mic(s.mic_on).await?;
         }
@@ -545,6 +539,16 @@ Ask to be unplugged first."
         self.drive_for(l, r, ms).await
     }
 
+    /// The rate to ask the robot for: the wanted one while someone watches the live view,
+    /// at most `UNWATCHED_FPS` otherwise (the wanted rate is kept for when someone does).
+    fn sent_fps(&self, wanted: u8) -> u8 {
+        if self.watchers.watching() {
+            wanted
+        } else {
+            wanted.min(UNWATCHED_FPS)
+        }
+    }
+
     pub async fn set_camera(
         &self,
         on: bool,
@@ -553,7 +557,8 @@ Ask to be unplugged first."
         quality: u8,
         opts: bbproto::ctrl::CamOpts,
     ) -> Result<()> {
-        self.send_camera(on, res, fps, quality, opts).await?;
+        self.send_camera(on, res, self.sent_fps(fps), quality, opts)
+            .await?;
         let mut s = self.streams.lock().await;
         s.camera_on = on;
         if on {
