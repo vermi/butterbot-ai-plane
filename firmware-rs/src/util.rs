@@ -86,3 +86,55 @@ pub fn mac() -> String {
         .collect::<Vec<_>>()
         .join(":")
 }
+
+/// Dynamic frequency scaling: the CPU at 240 MHz while something holds a `FullSpeed` (or a
+/// driver its own lock, as Wi-Fi does while busy), 80 MHz otherwise. Not lower: the peripheral
+/// clock stays at 80 MHz from 80 up, so the camera, audio and I2C keep their timing.
+pub fn power_management() {
+    let cfg = sys::esp_pm_config_t {
+        max_freq_mhz: 240,
+        min_freq_mhz: 80,
+        light_sleep_enable: false,
+    };
+    let err = unsafe { sys::esp_pm_configure(&cfg as *const _ as *const core::ffi::c_void) };
+    if err != sys::ESP_OK {
+        log::warn!("power management: error {err:#x}");
+    }
+}
+
+/// The CPU at full speed while set (see `power_management`).
+pub struct FullSpeed {
+    lock: sys::esp_pm_lock_handle_t,
+    held: bool,
+}
+
+unsafe impl Send for FullSpeed {}
+
+impl FullSpeed {
+    pub fn new() -> FullSpeed {
+        let mut lock = core::ptr::null_mut();
+        unsafe {
+            sys::esp_pm_lock_create(
+                sys::esp_pm_lock_type_t_ESP_PM_CPU_FREQ_MAX,
+                0,
+                c"full_speed".as_ptr(),
+                &mut lock,
+            )
+        };
+        FullSpeed { lock, held: false }
+    }
+
+    pub fn set(&mut self, on: bool) {
+        if self.lock.is_null() || on == self.held {
+            return;
+        }
+        self.held = on;
+        unsafe {
+            if on {
+                sys::esp_pm_lock_acquire(self.lock);
+            } else {
+                sys::esp_pm_lock_release(self.lock);
+            }
+        }
+    }
+}

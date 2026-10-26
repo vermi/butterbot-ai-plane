@@ -165,6 +165,8 @@ pub struct Robot {
     talking: bool,
     /// Wi-Fi without modem sleep (see `keep_radio`).
     radio_awake: bool,
+    /// The CPU at 240 MHz while the radio is awake (see `keep_radio`), 80 otherwise.
+    full_speed: util::FullSpeed,
     battery_critical: bool,
     next_wifi_report: u64,
     reports: u32,
@@ -224,6 +226,7 @@ impl Robot {
             plane_led: ONLINE,
             talking: false,
             radio_awake: true,
+            full_speed: util::FullSpeed::new(),
             battery_critical: false,
             next_wifi_report: 0,
             reports: 0,
@@ -800,7 +803,7 @@ impl Robot {
     /// without delay) or streams video fast (someone watches the live view; dozing cut 24 fps
     /// to about 21); otherwise it dozes between beacons, as the stock firmware's did.
     fn keep_radio(&mut self) {
-        // The plane streams 8 fps unwatched, its configured rate (24) for the live view.
+        // The plane streams 4 fps unwatched, its configured rate (24) for the live view.
         const FAST_VIDEO_FPS: u8 = 10;
         if !self.ai_on || !self.link.is_online() {
             return;
@@ -812,6 +815,7 @@ impl Robot {
         if busy != self.radio_awake {
             self.radio_awake = busy;
             self.net.set_power_save(!busy);
+            self.full_speed.set(busy);
             log::debug!("wifi: modem sleep {}", if busy { "off" } else { "on" });
         }
     }

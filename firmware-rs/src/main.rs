@@ -45,6 +45,7 @@ const CAPS: &[&str] = &[
 fn main() {
     esp_idf_svc::sys::link_patches();
     logger::init();
+    util::power_management();
 
     rtc::check_layout();
     let boot = power::boot_kind();
