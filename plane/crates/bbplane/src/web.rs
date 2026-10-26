@@ -65,6 +65,7 @@ pub fn router(robot: Robot) -> Router {
         .route("/api/say", post(say))
         .route("/api/camera", post(camera))
         .route("/api/mic", post(mic))
+        .route("/api/proximity", post(proximity))
         .route("/api/agent", get(agent_status).post(agent_control))
         .route("/api/faces", get(faces))
         .route("/api/faces/remember", post(remember_face))
@@ -294,6 +295,30 @@ async fn mic(State(r): State<Robot>, Json(b): Json<MicBody>) -> Response {
     }
     match r.set_mic(b.on).await {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct ProximityBody {
+    scanning: bool,
+}
+
+/// The base board's proximity scanning on or off (on from the robot's start).
+async fn proximity(State(r): State<Robot>, Json(b): Json<ProximityBody>) -> Response {
+    if let Err(e) = r.ensure_remote().await {
+        return err(e);
+    }
+    let id = r.hub.next_id();
+    match r
+        .hub
+        .request(ToRobot::Proximity {
+            id,
+            scanning: b.scanning,
+        })
+        .await
+    {
+        Ok(_) => Json(json!({ "ok": true })).into_response(),
         Err(e) => err(e),
     }
 }

@@ -307,7 +307,9 @@ async fn handle(s: &mut Sim, f: Frame, tx: &mpsc::Sender<Frame>) -> Result<()> {
             ))
             .await?
         }
-        ToRobot::Safety { id, .. } => tx.send(ack(id, Value::Null)).await?,
+        ToRobot::Safety { id, .. } | ToRobot::Proximity { id, .. } => {
+            tx.send(ack(id, Value::Null)).await?
+        }
         ToRobot::Restart { id } => tx.send(ack(id, Value::Null)).await?,
         ToRobot::Ota { id, .. } => {
             tx.send(ctrl(

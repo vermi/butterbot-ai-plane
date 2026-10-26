@@ -653,6 +653,11 @@ impl Robot {
             ToRobot::Drive { l, r, ms, safe } => self.drive(l, r, ms, safe),
             ToRobot::Stop if self.manual => {}
             ToRobot::Stop => self.stop_motors(),
+            ToRobot::Proximity { id, scanning } => {
+                log::info!("proximity scanning {}", if scanning { "on" } else { "off" });
+                self.base.set_scanning(scanning);
+                self.link.ack(id, Value::Null);
+            }
             ToRobot::Safety { id, tilt, obstacle } => {
                 self.check_tilt = tilt;
                 self.check_obstacle = obstacle;

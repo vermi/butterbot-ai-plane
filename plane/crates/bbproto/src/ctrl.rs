@@ -328,6 +328,12 @@ pub enum ToRobot {
         tilt: bool,
         obstacle: bool,
     },
+    /// The base board's proximity scanning (its infrared emitters) on or off. Off, the robot
+    /// notices neither obstacles nor being lifted by its floor sensor; it is on from start.
+    Proximity {
+        id: u32,
+        scanning: bool,
+    },
     /// Install new firmware: the robot downloads `url` (HTTP) into its spare app slot, checks the
     /// size and SHA-256 (hex), reports `ota` progress and restarts into it. Acknowledged when the
     /// download starts.
@@ -362,6 +368,7 @@ impl ToRobot {
             | Modules { id }
             | Phone { id, .. }
             | Safety { id, .. }
+            | Proximity { id, .. }
             | Ota { id, .. }
             | Restart { id } => Some(*id),
             Hello
