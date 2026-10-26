@@ -309,6 +309,11 @@ impl Camera {
         self.changed.notify_one();
     }
 
+    /// The stream's frame rate (0 when off).
+    pub fn stream_fps(&self) -> u8 {
+        self.want.lock().unwrap().stream.map_or(0, |s| s.fps)
+    }
+
     /// Answered with an ack and the frame (or an error) by the camera thread.
     pub fn snapshot(&self, link: &Link, id: u32, res: Res, quality: u8) {
         let mut w = self.want.lock().unwrap();

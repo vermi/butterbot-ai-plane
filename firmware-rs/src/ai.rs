@@ -797,14 +797,18 @@ impl Robot {
     }
 
     /// The radio stays awake while the robot talks or drives (sound and drive commands come
-    /// without delay); otherwise it dozes between beacons, as the stock firmware's did. The
-    /// camera and microphone streams go out either way.
+    /// without delay) or streams video fast (someone watches the live view; dozing cut 24 fps
+    /// to about 21); otherwise it dozes between beacons, as the stock firmware's did.
     fn keep_radio(&mut self) {
+        // The plane streams 8 fps unwatched, its configured rate (24) for the live view.
+        const FAST_VIDEO_FPS: u8 = 10;
         if !self.ai_on || !self.link.is_online() {
             return;
         }
-        let busy =
-            self.driving || self.manual || self.speaker.as_ref().is_some_and(|s| s.playing());
+        let busy = self.driving
+            || self.manual
+            || self.speaker.as_ref().is_some_and(|s| s.playing())
+            || self.camera.stream_fps() > FAST_VIDEO_FPS;
         if busy != self.radio_awake {
             self.radio_awake = busy;
             self.net.set_power_save(!busy);
