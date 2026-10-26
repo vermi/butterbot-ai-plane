@@ -64,6 +64,7 @@ pub fn router(robot: Robot) -> Router {
         .route("/api/stop", post(stop))
         .route("/api/say", post(say))
         .route("/api/camera", post(camera))
+        .route("/api/mic", post(mic))
         .route("/api/agent", get(agent_status).post(agent_control))
         .route("/api/faces", get(faces))
         .route("/api/faces/remember", post(remember_face))
@@ -276,6 +277,22 @@ async fn camera(State(r): State<Robot>, Json(b): Json<CameraBody>) -> Response {
         )
         .await
     {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => err(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct MicBody {
+    on: bool,
+}
+
+/// The microphone stream on or off (it stays as set across re-links).
+async fn mic(State(r): State<Robot>, Json(b): Json<MicBody>) -> Response {
+    if let Err(e) = r.ensure_remote().await {
+        return err(e);
+    }
+    match r.set_mic(b.on).await {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(e) => err(e),
     }
