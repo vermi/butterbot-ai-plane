@@ -25,9 +25,9 @@ const DRIVE_REFRESH: Duration = Duration::from_millis(250);
 const COMPANY: Duration = Duration::from_secs(180);
 /// Hard cap for one drive/turn tool call.
 pub const MAX_DRIVE_MS: u64 = 10_000;
-/// Camera rate while nobody watches the live view: plenty for the detectors (a few frames a
-/// second at most), a third of the Wi-Fi time (and battery) of 24 fps.
-const UNWATCHED_FPS: u8 = 8;
+/// Camera rate while nobody watches the live view: enough for the detectors (faces about 3
+/// frames a second, objects 1), a sixth of the Wi-Fi time (and battery) of 24 fps.
+const UNWATCHED_FPS: u8 = 4;
 /// After a conversation of at least this many things said to it, and this long without another,
 /// it gets a moment to keep what matters (`remember`, `intend`).
 const REFLECT_AFTER_TURNS: u32 = 2;

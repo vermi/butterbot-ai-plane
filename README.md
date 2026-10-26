@@ -441,7 +441,7 @@ project started with, itself built on CircuitMess's. The lessons that shaped bot
 ## Limitations
 
 - **Camera:** about 26 fps up to 800×600; larger sizes are for snapshots (up to 2048×1536, about a
-  second). The plane asks for 24 fps at 640×480 while the live view is open and 8 fps otherwise
+  second). The plane asks for 24 fps at 640×480 while the live view is open and 4 fps otherwise
   (`[camera]` in its config).
 - **Network:** 2.4 GHz Wi-Fi only (an ESP32 limitation). Expect some lost audio and video on a
   busy network.
