@@ -400,8 +400,9 @@ impl Hub {
                 pct,
                 level,
                 charging,
+                mv,
             } => {
-                let v = json!({ "pct": pct, "level": level, "charging": charging });
+                let v = json!({ "pct": pct, "level": level, "charging": charging, "mv": mv });
                 self.status.lock().await.battery = Some(v.clone());
                 self.push_event("battery", v).await;
             }

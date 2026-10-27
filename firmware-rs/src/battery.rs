@@ -154,12 +154,15 @@ pub struct Reading {
     pub pct: f32,
     pub level: u8,
     pub charge: Charge,
+    /// Smoothed battery voltage on the stock scale (see the top of this file).
+    pub mv: u16,
 }
 
 struct State {
     adc: Adc,
     ema: Option<f32>,
     offset: f32,
+    mv: f32,
     pct: f32,
     level: usize,
     charge: Charge,
@@ -215,6 +218,7 @@ impl Battery {
                 adc,
                 ema: None,
                 offset,
+                mv: 0.0,
                 pct: 0.0,
                 level: 0,
                 charge,
@@ -235,19 +239,21 @@ impl Battery {
     }
 
     /// One reading; returns it when the level changed (or `fresh`: restart the smoothing).
-    /// While charging the voltage says little; the level stays where it was.
+    /// While charging the voltage says little about the charge: only `mv` moves, the level
+    /// stays where it was.
     fn sample(&self, fresh: bool) -> Option<Reading> {
         let mut st = self.st.lock().unwrap();
-        if st.charge != Charge::Unplugged && !fresh {
-            return None;
-        }
         let mv = st.adc.read()?;
         let ema = match st.ema {
             Some(e) if !fresh => EMA * mv + (1.0 - EMA) * e,
             _ => mv,
         };
         st.ema = Some(ema);
-        let volts = (ema * FACTOR + st.offset).clamp(VOLT_EMPTY, VOLT_FULL);
+        st.mv = ema * FACTOR + st.offset;
+        if st.charge != Charge::Unplugged && !fresh {
+            return None;
+        }
+        let volts = st.mv.clamp(VOLT_EMPTY, VOLT_FULL);
         st.pct = (volts - VOLT_EMPTY) / (VOLT_FULL - VOLT_EMPTY) * 100.0;
         let old = st.level.min(LEVELS - 1);
         st.level = if fresh {
@@ -260,6 +266,7 @@ impl Battery {
             pct: st.pct,
             level: level as u8,
             charge: st.charge,
+            mv: st.mv.round() as u16,
         })
     }
 
@@ -286,6 +293,7 @@ impl Battery {
             pct: st.pct,
             level: st.level.min(LEVELS - 1) as u8,
             charge: st.charge,
+            mv: st.mv.round() as u16,
         }
     }
 }

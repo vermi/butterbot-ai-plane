@@ -445,7 +445,11 @@ async function refresh() {
   $('dot').className = 'dot' + (rb.connected ? ' on' : '');
   $('link').textContent = rb.connected ? 'Connected' : 'Offline';
   $('mode').textContent = rb.mode === 'remote' ? 'AI mode' : rb.mode ? `${rb.mode} mode` : '…';
-  $('batt').textContent = rb.battery ? `${rb.battery.charging !== 'unplugged' ? '⚡' : '🔋'} ${Math.round(rb.battery.pct)}%` : '';
+  // While charging the percentage holds still, so show the voltage climbing instead.
+  const b = rb.battery;
+  $('batt').textContent = !b ? ''
+    : b.charging === 'charging' && b.mv ? `⚡ ${(b.mv / 1000).toFixed(2)} V`
+    : `${b.charging !== 'unplugged' ? '⚡' : '🔋'} ${Math.round(b.pct)}%`;
   $('enter').hidden = rb.mode === 'remote' || !rb.connected;
   $('exit').hidden = rb.mode !== 'remote';
   frames = rb.video_frames || 0;

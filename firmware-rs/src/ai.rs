@@ -509,6 +509,7 @@ impl Robot {
             pct: r.pct,
             level: r.level,
             charging: r.charge.name().into(),
+            mv: Some(r.mv),
         });
     }
 

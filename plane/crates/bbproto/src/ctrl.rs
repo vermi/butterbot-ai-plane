@@ -440,6 +440,10 @@ pub enum FromRobot {
         pct: f32,
         level: u8,
         charging: String,
+        /// Battery millivolts, on the same rough scale as `pct`. Keeps updating while charging,
+        /// when `pct` holds still (the charger lifts the voltage).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mv: Option<u16>,
     },
     Speaker {
         playing: bool,
