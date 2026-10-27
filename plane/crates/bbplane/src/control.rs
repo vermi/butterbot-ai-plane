@@ -25,6 +25,11 @@ const DRIVE_REFRESH: Duration = Duration::from_millis(250);
 const COMPANY: Duration = Duration::from_secs(180);
 /// Hard cap for one drive/turn tool call.
 pub const MAX_DRIVE_MS: u64 = 10_000;
+/// A wander's hop forward, picked at random in this range of centimetres. The tracks cover only
+/// about 3 cm a second, so a hop of a second or so (as stock) barely moves it.
+const WANDER_MIN_CM: u64 = 10;
+const WANDER_MAX_CM: u64 = 25;
+const WANDER_SPEED: u8 = 100;
 /// Camera rate while nobody watches the live view: enough for the detectors (faces about 3
 /// frames a second, objects 1), a sixth of the Wi-Fi time (and battery) of 24 fps.
 const UNWATCHED_FPS: u8 = 4;
@@ -93,6 +98,8 @@ pub struct Robot {
     /// The robot is driving (or just stopped) until then: the jolts are its own, not someone
     /// handling it.
     moving_until: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
+    /// When the last drive or turn started (its motors jolt the robot as they start).
+    motors_started: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
     /// Picked up (a confirmed lift, see `FloorWatch`) and not put down since.
     lifted: Arc<std::sync::atomic::AtomicBool>,
     /// The camera's geometry and the driving speed (see `crate::geometry`).
@@ -167,6 +174,7 @@ impl Robot {
             speaker: Default::default(),
             drive: Default::default(),
             moving_until: Default::default(),
+            motors_started: Default::default(),
             lifted: Default::default(),
 
             hushes: Default::default(),
@@ -448,6 +456,7 @@ Ask to be unplugged first."
         let start = tokio::time::Instant::now();
         let deadline = start + Duration::from_millis(ms);
         self.moving_for(Duration::from_millis(ms));
+        *self.motors_started.lock().unwrap() = Some(std::time::Instant::now());
         let mut stopped_early = None;
         loop {
             let now = tokio::time::Instant::now();
@@ -515,6 +524,10 @@ Ask to be unplugged first."
             _ => {}
         }
         self.life.handled(how);
+    }
+
+    pub fn motors_started(&self) -> Option<std::time::Instant> {
+        *self.motors_started.lock().unwrap()
     }
 
     pub fn is_moving(&self) -> bool {
@@ -789,7 +802,6 @@ Ask to be unplugged first."
         }
     }
 
-    /// Wander a little of its own accord: turn somewhere at random and drive a short hop.
     /// Everything the detectors see now, with where it is and how to get there (see
     /// `crate::geometry`): no new picture, so no wait.
     pub fn locate_all(&self) -> Vec<Value> {
@@ -1078,6 +1090,7 @@ Ask to be unplugged first."
         Ok(json!({ "used": s.class, "before_cm": before, "after_cm": after, "optics": *o }))
     }
 
+    /// Wander a little of its own accord: turn somewhere at random and drive 10-25 cm.
     pub async fn wander(&self) -> Result<String> {
         let mut rng = crate::hub::now_ms() | 1;
         let mut next = || {
@@ -1087,16 +1100,23 @@ Ask to be unplugged first."
             rng
         };
         let degrees = (30 + next() % 120) as f64 * if next() % 2 == 0 { 1.0 } else { -1.0 };
-        self.set_doing("wandering", Duration::from_secs(4));
-        self.turn(degrees, 55).await?;
-        let ms = 500 + next() % 600;
-        let out = self.drive_for(50, 50, ms).await?;
+        let cm = (WANDER_MIN_CM + next() % (WANDER_MAX_CM - WANDER_MIN_CM + 1)) as f64;
+        let cm_per_s = self.optics.lock().unwrap().cm_per_s(WANDER_SPEED);
+        let secs = cm / cm_per_s;
+        self.set_doing("wandering", Duration::from_secs_f64(secs + 4.0));
+        if let Some(why) = self.turn(degrees, 55).await?.stopped_early {
+            return Ok(format!(
+                "Started turning {degrees:.0} degrees, then stopped ({why})."
+            ));
+        }
+        let s = WANDER_SPEED as i8;
+        let out = self.drive_for(s, s, (secs * 1000.0) as u64).await?;
         Ok(match out.stopped_early {
-            Some(why) => format!("Turned {degrees:.0} degrees, then stopped ({why})."),
-            None => format!(
-                "Turned {degrees:.0} degrees and drove forward for {:.1} s.",
-                ms as f64 / 1000.0
+            Some(why) => format!(
+                "Turned {degrees:.0} degrees, then stopped after about {:.0} cm ({why}).",
+                out.completed_ms as f64 / 1000.0 * cm_per_s
             ),
+            None => format!("Turned {degrees:.0} degrees and drove about {cm:.0} cm forward."),
         })
     }
 

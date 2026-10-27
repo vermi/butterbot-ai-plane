@@ -925,7 +925,7 @@ sad, grumpy, surprised or worried",
     }
 
     #[tool(
-        description = "Wander a little: turn somewhere at random and drive a short hop. Then `look`."
+        description = "Wander a little: turn somewhere at random and drive 10-25 cm (up to about 12 s). Then `look`."
     )]
     async fn wander(&self) -> Result<CallToolResult, McpError> {
         ok_text(tryt!(self.robot.wander().await))

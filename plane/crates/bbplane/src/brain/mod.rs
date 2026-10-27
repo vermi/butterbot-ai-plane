@@ -134,7 +134,7 @@ pub fn tools() -> Vec<Value> {
         ),
         f(
             "wander",
-            "Wander a little: turn somewhere at random and drive a short hop. You get a picture of where you ended up.",
+            "Wander a little: turn somewhere at random and drive 10-25 cm. You get a picture of where you ended up.",
             json!({}),
             &[],
         ),

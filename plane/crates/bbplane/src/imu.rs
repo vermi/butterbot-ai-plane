@@ -19,10 +19,13 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::control::Robot;
 
-/// Horizontal jolt (g) that counts as a bump, standing and driving. Driving jolts the robot a
-/// little itself; a collision at its few cm/s still stops it within a sample or two.
+/// Horizontal jolt (g) that counts as a bump, standing and driving. Driving shakes the robot by
+/// itself, up to about 0.32 g at full speed (at 0.3 nearly every drive stopped after a moment);
+/// the front sensor catches most of what it would drive into.
 const BUMP_STILL_G: f32 = 0.4;
-const BUMP_DRIVING_G: f32 = 0.3;
+const BUMP_DRIVING_G: f32 = 0.45;
+/// The motors starting jolt it about half a g: no bump this soon after a drive or turn starts.
+const MOTOR_START: Duration = Duration::from_millis(500);
 /// Upward acceleration (g), held for `LIFT_HOLD`, that feels like a lift.
 const LIFT_G: f32 = 0.08;
 const LIFT_HOLD: Duration = Duration::from_millis(120);
@@ -61,6 +64,8 @@ pub struct Watch {
     last_lift: Option<Instant>,
     /// The last jolt standing still (any of `ACTIVE_G` or more).
     last_jolt: Option<Instant>,
+    /// When the motors last started (a drive or a turn).
+    pub started: Option<Instant>,
     /// The largest sideways jolt since the last look (g), for tuning.
     pub peak: f32,
 }
@@ -100,10 +105,11 @@ impl Watch {
                 self.last_jolt
                     .is_none_or(|t| at.duration_since(t) >= STILL_REARM)
             };
+            let starting = moving && self.started.is_some_and(|t| at < t + MOTOR_START);
             if !moving && side >= ACTIVE_G {
                 self.last_jolt = Some(at);
             }
-            if side >= limit && armed {
+            if side >= limit && armed && !starting {
                 self.last_bump = Some(at);
                 // Pushed one way means hit from the other.
                 let from = if d[2].abs() >= d[1].abs() {
@@ -157,6 +163,7 @@ pub async fn run(robot: Robot) {
             Err(RecvError::Closed) => return,
         };
         let moving = robot.is_moving();
+        watch.started = robot.motors_started();
         let now = Instant::now();
         if now.duration_since(peak_at) >= Duration::from_secs(30) {
             // Standing still it stays under 0.1 g, camera on or off.
@@ -265,22 +272,33 @@ mod tests {
     }
 
     #[test]
-    fn small_jolts_count_only_while_driving() {
+    fn driving_shakes_it_without_bumps() {
         let t = Instant::now();
-        let mut s = still(10);
-        s[5] = [1000, 350, 0];
-        let mut w = Watch::default();
-        w.push(&still(50), 50, false, t);
-        assert!(
-            w.push(&s, 50, false, t + Duration::from_millis(200))
-                .is_empty()
-        );
+        let jolt = |mg| {
+            let mut s = still(10);
+            s[5] = [1000, mg, 0];
+            s
+        };
+        // Its own shaking at full speed.
         let mut w = Watch::default();
         w.push(&still(50), 50, true, t);
-        let felt = w.push(&s, 50, true, t + Duration::from_millis(200));
+        assert!(
+            w.push(&jolt(350), 50, true, t + Duration::from_secs(2))
+                .is_empty()
+        );
+        // A collision.
+        let felt = w.push(&jolt(600), 50, true, t + Duration::from_secs(4));
         assert!(
             matches!(felt[..], [Felt::Bump { side: "left", .. }]),
             "{felt:?}"
+        );
+        // The same jolt just as the motors start.
+        let mut w = Watch::default();
+        w.push(&still(50), 50, true, t);
+        w.started = Some(t + Duration::from_secs(2));
+        assert!(
+            w.push(&jolt(600), 50, true, t + Duration::from_millis(2200))
+                .is_empty()
         );
     }
 
